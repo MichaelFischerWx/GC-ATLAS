@@ -55,6 +55,18 @@ class GlobeApp {
         this.controls.maxDistance = 8;
         this.controls.enablePan = false;
 
+        // Fade the on-canvas hint on first interaction (drag or scroll).
+        const hint = document.querySelector('.globe-hint');
+        if (hint) {
+            const fade = () => {
+                hint.classList.add('hidden');
+                this.controls.removeEventListener('start', fade);
+            };
+            this.controls.addEventListener('start', fade);
+            // Also auto-fade after 8 s if the user never touches it.
+            setTimeout(fade, 8000);
+        }
+
         window.addEventListener('resize', () => this.onResize());
     }
 

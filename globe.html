@@ -273,8 +273,10 @@
             letter-spacing: 0.08em;
             z-index: 1;
             pointer-events: none;
-            opacity: 0.6;
+            opacity: 0.55;
+            transition: opacity 0.6s ease;
         }
+        .globe-hint.hidden { opacity: 0; }
 
         /* ── Responsive ─────────────────────────────────────── */
         @media (max-width: 820px) {
