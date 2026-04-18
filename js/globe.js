@@ -420,8 +420,10 @@ class GlobeApp {
     }
 
     applyMapCenterLon() {
-        const u = -(this.state.mapCenterLon / 360);  // [-0.5, 0.5]
-        // Shaded plane texture — wraps via RepeatWrapping by default.
+        // Canvas maps uv.x=0 → lon=-180, uv.x=1 → +180. To show lon=centerLon
+        // at plane-centre (uv.x=0.5), the texture sample needs offset
+        // +centerLon/360 so that 0.5 + offset = (centerLon+180)/360.
+        const u = this.state.mapCenterLon / 360;   // [-0.5, 0.5]
         if (this.mapTexture) {
             this.mapTexture.wrapS = THREE.RepeatWrapping;
             this.mapTexture.offset.x = u;
