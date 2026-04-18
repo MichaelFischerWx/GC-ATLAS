@@ -12,7 +12,8 @@ import { ContourField } from './contours.js';
 import { ContourLabels } from './contour_labels.js';
 import { SunLight } from './sun.js';
 import { OrbitScene, ORBIT_RADIUS } from './orbit.js';
-import { computeZonalMean, renderCrossSection } from './cross_section.js';
+import { computeZonalMean, computeArcCrossSection, renderCrossSection } from './cross_section.js';
+import { greatCircleArc, latLonToVec3, gcDistanceKm } from './arc.js';
 import { loadManifest, onFieldLoaded, isReady as era5Ready, prefetchField, cachedMonth } from './era5.js';
 import { decompose, annualMeanFrom } from './decompose.js';
 
@@ -80,6 +81,7 @@ class GlobeApp {
             decompose: 'total',      // 'total' | 'zonal' | 'eddy' | 'anomaly'
             mapCenterLon: 0,         // central meridian for the flat map (-180..180)
             showXSection: false,
+            xsArc: null,             // { start:{lat,lon}, end:{lat,lon} } or null for zonal-mean
         };
         this.windCache = { u: null, v: null, nlat: 0, nlon: 0, stale: true };
 
@@ -311,6 +313,17 @@ class GlobeApp {
         this.contourLabels = new ContourLabels((lat, lon, r) => this.project(lat, lon, r));
         this.globeGroup.add(this.contourLabels.group);
         this.contourLabels.setVisible(this.state.showContours);
+
+        // Arc line for the cross-section feature (shift-drag to draw).
+        // Single line object, re-parented to the current view's group in
+        // setViewMode so it inherits tilt/projection correctly.
+        const arcMat = new THREE.LineBasicMaterial({
+            color: 0x2DBDA0, transparent: true, opacity: 0.95, depthTest: false,
+        });
+        this.arcLine = new THREE.Line(new THREE.BufferGeometry(), arcMat);
+        this.arcLine.renderOrder = 7;
+        this.arcLine.visible = false;
+        this.currentGroup().add(this.arcLine);
 
         // Sun marker + day/night terminator. Both live in the scene (not the
         // globeGroup) so their geometry is in world coords — the shadow
@@ -592,6 +605,11 @@ class GlobeApp {
             this.contourLabels.setProjection((lat, lon, r) => this.project(lat, lon, r));
             this.updateField();  // regenerate labels for new projection
         }
+        if (this.arcLine) {
+            this.arcLine.parent?.remove(this.arcLine);
+            overlayParent.add(this.arcLine);
+            this.updateArcLine();
+        }
         this.applySunVisibility();
 
         this.configureCamera();
@@ -682,13 +700,43 @@ class GlobeApp {
     updateXSection() {
         const canvas = document.getElementById('xs-canvas');
         if (!canvas) return;
-        const zm = computeZonalMean(this.state.field, this.state.month);
-        renderCrossSection(canvas, zm, this.state.cmap);
+        const { field, month, xsArc, cmap } = this.state;
+        let zm;
+        if (xsArc) {
+            const arc = greatCircleArc(
+                xsArc.start.lat, xsArc.start.lon,
+                xsArc.end.lat,   xsArc.end.lon,
+                192,
+            );
+            zm = computeArcCrossSection(field, month, arc);
+            if (!zm) { zm = computeZonalMean(field, month); }
+        } else {
+            zm = computeZonalMean(field, month);
+        }
+        renderCrossSection(canvas, zm, cmap);
         const title = document.getElementById('xs-title');
         if (title) {
-            const suffix = zm.type === 'pl' ? '' : `  (${zm.units})`;
-            title.textContent = `Zonal mean · ${zm.name}${suffix}`;
+            if (zm.kind === 'arc') {
+                const km = Math.round(zm.distanceKm).toLocaleString();
+                const suffix = zm.type === 'pl' ? '' : `  (${zm.units})`;
+                title.textContent = `Arc · ${zm.name} · ${km} km${suffix}`;
+            } else {
+                const suffix = zm.type === 'pl' ? '' : `  (${zm.units})`;
+                title.textContent = `Zonal mean · ${zm.name}${suffix}`;
+            }
         }
+        this.updateArcLine();
+    }
+
+    updateArcLine() {
+        if (!this.arcLine) return;
+        const a = this.state.xsArc;
+        if (!a) { this.arcLine.visible = false; return; }
+        const arc = greatCircleArc(a.start.lat, a.start.lon, a.end.lat, a.end.lon, 96);
+        const pts = arc.map(({ lat, lon }) => this.project(lat, lon, 1.008));
+        this.arcLine.geometry.dispose();
+        this.arcLine.geometry = new THREE.BufferGeometry().setFromPoints(pts);
+        this.arcLine.visible = this.state.showXSection && this.state.viewMode !== 'orbit';
     }
 
     updateField() {

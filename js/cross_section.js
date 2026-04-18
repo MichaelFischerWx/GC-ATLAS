@@ -13,10 +13,8 @@ const LAT_TICKS = [-90, -60, -30, 0, 30, 60, 90];
 const P_TICKS   = [1000, 500, 200, 100, 50, 10];
 
 /**
- * Compute the zonal-mean field.
- * Returns:
- *   pl fields → { type:'pl', values: Float32Array(nlev*nlat), levels, vmin, vmax, name, units }
- *   sl fields → { type:'sl', values: Float32Array(nlat),       vmin, vmax, name, units }
+ * Zonal mean — NaN-aware average at each latitude.
+ * Returns { kind:'zonal', type, values, vmin, vmax, ... }.
  */
 export function computeZonalMean(fieldName, month) {
     const meta = FIELDS[fieldName];
@@ -27,14 +25,21 @@ export function computeZonalMean(fieldName, month) {
         const zm = new Float32Array(nlat);
         let vmin = Infinity, vmax = -Infinity;
         for (let i = 0; i < nlat; i++) {
-            let s = 0;
-            for (let j = 0; j < nlon; j++) s += f.values[i * nlon + j];
-            const m = s / nlon;
+            let s = 0, n = 0;
+            for (let j = 0; j < nlon; j++) {
+                const v = f.values[i * nlon + j];
+                if (Number.isFinite(v)) { s += v; n += 1; }
+            }
+            const m = n > 0 ? s / n : NaN;
             zm[i] = m;
-            if (m < vmin) vmin = m;
-            if (m > vmax) vmax = m;
+            if (Number.isFinite(m)) {
+                if (m < vmin) vmin = m;
+                if (m > vmax) vmax = m;
+            }
         }
-        return { type: 'sl', values: zm, vmin, vmax, name: meta.name, units: meta.units };
+        if (!Number.isFinite(vmin)) { vmin = 0; vmax = 1; }
+        return { kind: 'zonal', type: 'sl', values: zm, vmin, vmax,
+                 name: meta.name, units: meta.units };
     }
 
     const nlev = LEVELS.length;
@@ -43,15 +48,101 @@ export function computeZonalMean(fieldName, month) {
     for (let k = 0; k < nlev; k++) {
         const f = getField(fieldName, { month, level: LEVELS[k] });
         for (let i = 0; i < nlat; i++) {
-            let s = 0;
-            for (let j = 0; j < nlon; j++) s += f.values[i * nlon + j];
-            const m = s / nlon;
+            let s = 0, n = 0;
+            for (let j = 0; j < nlon; j++) {
+                const v = f.values[i * nlon + j];
+                if (Number.isFinite(v)) { s += v; n += 1; }
+            }
+            const m = n > 0 ? s / n : NaN;
             zm[k * nlat + i] = m;
-            if (m < vmin) vmin = m;
-            if (m > vmax) vmax = m;
+            if (Number.isFinite(m)) {
+                if (m < vmin) vmin = m;
+                if (m > vmax) vmax = m;
+            }
         }
     }
-    return { type: 'pl', values: zm, vmin, vmax, levels: LEVELS.slice(),
+    if (!Number.isFinite(vmin)) { vmin = 0; vmax = 1; }
+    return { kind: 'zonal', type: 'pl', values: zm, vmin, vmax,
+             levels: LEVELS.slice(), name: meta.name, units: meta.units };
+}
+
+/** Bilinear sample of a (nlat × nlon) field at arbitrary (lat, lon). NaN-safe. */
+function bilinearSample(values, lat, lon) {
+    const { nlat, nlon } = GRID;
+    const rLat = 90 - lat;
+    const rLon = ((lon + 180) % 360 + 360) % 360;
+    if (rLat < 0 || rLat > nlat - 1) return NaN;
+    const i0 = Math.max(0, Math.min(nlat - 1, Math.floor(rLat)));
+    const i1 = Math.max(0, Math.min(nlat - 1, i0 + 1));
+    const j0 = Math.floor(rLon) % nlon;
+    const j1 = (j0 + 1) % nlon;
+    const fi = rLat - i0;
+    const fj = rLon - Math.floor(rLon);
+    const v00 = values[i0 * nlon + j0];
+    const v01 = values[i0 * nlon + j1];
+    const v10 = values[i1 * nlon + j0];
+    const v11 = values[i1 * nlon + j1];
+    // If any corner is NaN, fall back to mean of finite corners.
+    const anyNaN = !Number.isFinite(v00) || !Number.isFinite(v01)
+                || !Number.isFinite(v10) || !Number.isFinite(v11);
+    if (anyNaN) {
+        let s = 0, n = 0;
+        for (const v of [v00, v01, v10, v11]) if (Number.isFinite(v)) { s += v; n += 1; }
+        return n > 0 ? s / n : NaN;
+    }
+    const vT = v00 * (1 - fj) + v01 * fj;
+    const vB = v10 * (1 - fj) + v11 * fj;
+    return vT * (1 - fi) + vB * fi;
+}
+
+/**
+ * Cross-section along an arc (array of { lat, lon } points).
+ * Returns { kind:'arc', type, values, vmin, vmax, nSamples, arc, distanceKm, ... }.
+ * For pressure-level fields, values is Float32Array(nlev × nSamples).
+ * For single-level fields, values is Float32Array(nSamples).
+ */
+export function computeArcCrossSection(fieldName, month, arc) {
+    const meta = FIELDS[fieldName];
+    const nSamples = arc.length;
+    if (nSamples < 2) return null;
+    const distanceKm = gcDistanceKm(
+        arc[0].lat, arc[0].lon, arc[arc.length - 1].lat, arc[arc.length - 1].lon,
+    );
+
+    if (meta.type === 'sl') {
+        const f = getField(fieldName, { month });
+        const values = new Float32Array(nSamples);
+        let vmin = Infinity, vmax = -Infinity;
+        for (let j = 0; j < nSamples; j++) {
+            const v = bilinearSample(f.values, arc[j].lat, arc[j].lon);
+            values[j] = v;
+            if (Number.isFinite(v)) {
+                if (v < vmin) vmin = v;
+                if (v > vmax) vmax = v;
+            }
+        }
+        if (!Number.isFinite(vmin)) { vmin = 0; vmax = 1; }
+        return { kind: 'arc', type: 'sl', values, vmin, vmax,
+                 nSamples, arc, distanceKm, name: meta.name, units: meta.units };
+    }
+
+    const nlev = LEVELS.length;
+    const values = new Float32Array(nlev * nSamples);
+    let vmin = Infinity, vmax = -Infinity;
+    for (let k = 0; k < nlev; k++) {
+        const f = getField(fieldName, { month, level: LEVELS[k] });
+        for (let j = 0; j < nSamples; j++) {
+            const v = bilinearSample(f.values, arc[j].lat, arc[j].lon);
+            values[k * nSamples + j] = v;
+            if (Number.isFinite(v)) {
+                if (v < vmin) vmin = v;
+                if (v > vmax) vmax = v;
+            }
+        }
+    }
+    if (!Number.isFinite(vmin)) { vmin = 0; vmax = 1; }
+    return { kind: 'arc', type: 'pl', values, vmin, vmax,
+             nSamples, arc, distanceKm, levels: LEVELS.slice(),
              name: meta.name, units: meta.units };
 }
 
@@ -64,12 +155,143 @@ export function renderCrossSection(canvas, zm, cmap) {
     const plotW = W - padL - padR;
     const plotH = H - padT - padB;
 
-    if (zm.type === 'pl') {
-        drawHeatmap(ctx, padL, padT, plotW, plotH, zm, cmap);
+    if (zm.kind === 'arc') {
+        if (zm.type === 'pl') drawArcHeatmap(ctx, padL, padT, plotW, plotH, zm, cmap);
+        else                  drawArcLine   (ctx, padL, padT, plotW, plotH, zm);
+        drawArcAxes(ctx, padL, padT, plotW, plotH, zm);
     } else {
-        drawLine(ctx, padL, padT, plotW, plotH, zm);
+        if (zm.type === 'pl') drawHeatmap(ctx, padL, padT, plotW, plotH, zm, cmap);
+        else                  drawLine   (ctx, padL, padT, plotW, plotH, zm);
+        drawAxes(ctx, padL, padT, plotW, plotH, zm);
     }
-    drawAxes(ctx, padL, padT, plotW, plotH, zm);
+}
+
+function drawArcHeatmap(ctx, x0, y0, w, h, zm, cmap) {
+    const { values, vmin, vmax, levels, nSamples } = zm;
+    const nlev = levels.length;
+    const pMax = levels[nlev - 1];
+    const pMin = levels[0];
+    const logSpan = Math.log(pMax / pMin);
+    const span = (vmax - vmin) || 1;
+
+    const iw = Math.floor(w), ih = Math.floor(h);
+    const img = ctx.createImageData(iw, ih);
+    const data = img.data;
+
+    for (let py = 0; py < ih; py++) {
+        const p = pMin * Math.exp((py / (ih - 1)) * logSpan);
+        let k0 = 0;
+        while (k0 < nlev - 1 && levels[k0 + 1] < p) k0++;
+        const k1 = Math.min(nlev - 1, k0 + 1);
+        const fLev = (k0 === k1) ? 0
+            : Math.log(p / levels[k0]) / Math.log(levels[k1] / levels[k0]);
+        for (let px = 0; px < iw; px++) {
+            const sIdx = (px / (iw - 1)) * (nSamples - 1);
+            const j0 = Math.floor(sIdx);
+            const j1 = Math.min(nSamples - 1, j0 + 1);
+            const fS = sIdx - j0;
+            const v00 = values[k0 * nSamples + j0], v01 = values[k0 * nSamples + j1];
+            const v10 = values[k1 * nSamples + j0], v11 = values[k1 * nSamples + j1];
+            const vT = v00 * (1 - fS) + v01 * fS;
+            const vB = v10 * (1 - fS) + v11 * fS;
+            const v  = vT * (1 - fLev) + vB * fLev;
+            const k = (py * iw + px) * 4;
+            if (!Number.isFinite(v)) {
+                data[k] = 18; data[k+1] = 26; data[k+2] = 22; data[k+3] = 255;
+                continue;
+            }
+            const t = (v - vmin) / span;
+            const [r, g, b] = sample(cmap, t);
+            data[k]     = r * 255;
+            data[k + 1] = g * 255;
+            data[k + 2] = b * 255;
+            data[k + 3] = 255;
+        }
+    }
+    ctx.putImageData(img, x0, y0);
+    ctx.strokeStyle = 'rgba(255,255,255,0.22)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(x0 + 0.5, y0 + 0.5, w, h);
+}
+
+function drawArcLine(ctx, x0, y0, w, h, zm) {
+    const { values, vmin, vmax, nSamples } = zm;
+    const span = (vmax - vmin) || 1;
+    ctx.strokeStyle = 'rgba(255,255,255,0.18)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(x0 + 0.5, y0 + 0.5, w, h);
+
+    ctx.strokeStyle = '#2DBDA0';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    let started = false;
+    for (let j = 0; j < nSamples; j++) {
+        const v = values[j];
+        if (!Number.isFinite(v)) { started = false; continue; }
+        const x = x0 + (j / (nSamples - 1)) * w;
+        const y = y0 + h - ((v - vmin) / span) * h;
+        if (!started) { ctx.moveTo(x, y); started = true; }
+        else          ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+}
+
+function drawArcAxes(ctx, x0, y0, w, h, zm) {
+    ctx.font = "10px 'JetBrains Mono', monospace";
+    ctx.fillStyle = '#AEC3B6';
+    ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+    ctx.lineWidth = 1;
+
+    // Endpoint labels on the x-axis: start / middle / end (lat, lon).
+    const fmtPt = (p) => `${p.lat.toFixed(0)}°${p.lat >= 0 ? 'N' : 'S'} ${p.lon.toFixed(0)}°`;
+    const ticks = [
+        { t: 0.0, label: fmtPt(zm.arc[0]) },
+        { t: 0.5, label: fmtPt(zm.arc[Math.floor(zm.arc.length / 2)]) },
+        { t: 1.0, label: fmtPt(zm.arc[zm.arc.length - 1]) },
+    ];
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    for (const { t, label } of ticks) {
+        const x = x0 + t * w;
+        ctx.beginPath();
+        ctx.moveTo(x, y0 + h);
+        ctx.lineTo(x, y0 + h + 3);
+        ctx.stroke();
+        ctx.fillText(label, x, y0 + h + 5);
+    }
+    // Distance caption under the middle tick.
+    const distTxt = `${Math.round(zm.distanceKm).toLocaleString()} km`;
+    ctx.textBaseline = 'bottom';
+    ctx.fillStyle = 'rgba(174,195,182,0.7)';
+    ctx.fillText(distTxt, x0 + w / 2, y0 + h + 22);
+
+    // Pressure ticks on the y-axis (pl fields only).
+    ctx.textAlign = 'right';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#AEC3B6';
+    if (zm.type === 'pl') {
+        const pMax = zm.levels[zm.levels.length - 1];
+        const pMin = zm.levels[0];
+        const logSpan = Math.log(pMax / pMin);
+        for (const p of P_TICKS) {
+            if (p < pMin || p > pMax) continue;
+            const y = y0 + h * (Math.log(p / pMin) / logSpan);
+            ctx.beginPath();
+            ctx.moveTo(x0 - 3, y);
+            ctx.lineTo(x0, y);
+            ctx.stroke();
+            ctx.fillText(`${p}`, x0 - 5, y);
+        }
+        ctx.save();
+        ctx.translate(x0 - 30, y0 + h / 2);
+        ctx.rotate(-Math.PI / 2);
+        ctx.textAlign = 'center';
+        ctx.fillText('hPa', 0, 0);
+        ctx.restore();
+    } else {
+        ctx.fillText(zm.vmax.toFixed(0), x0 - 5, y0 + 4);
+        ctx.fillText(zm.vmin.toFixed(0), x0 - 5, y0 + h - 4);
+    }
 }
 
 function drawHeatmap(ctx, x0, y0, w, h, zm, cmap) {

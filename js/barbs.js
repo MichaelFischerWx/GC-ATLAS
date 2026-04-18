@@ -150,9 +150,11 @@ export class BarbField {
         const nFull = Math.floor(kt / KT_FULL);     kt -= nFull * KT_FULL;
         const nHalf = kt >= KT_HALF - 0.5 ? 1 : 0;
 
-        // Feathers are placed on the "left" of the shaft (viewed from the
-        // station looking toward the tail). `left = normal × shaft`.
-        const left = normal.clone().cross(shaft).normalize();
+        // Feathers are placed on the LEFT of the shaft (viewed from the
+        // station looking toward the tail, i.e. upwind) — standard NH WMO
+        // convention. With our coord system that's `shaft × normal`; the
+        // opposite handedness (`normal × shaft`) puts them on the wrong side.
+        const left = shaft.clone().cross(normal).normalize();
         // Step back toward the station after each glyph.
         const backStep = shaft.clone().negate();  // unit vector
         let pos = tail.clone();
