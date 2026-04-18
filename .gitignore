@@ -4,6 +4,7 @@ data/
 *.nc4
 *.grib
 *.zarr/
+*.log
 
 # Python
 __pycache__/

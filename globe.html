@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="GC-ATLAS globe — interactive ERA5 climatology of the atmospheric general circulation.">
+    <meta name="author" content="Dr. Michael Fischer, University of Miami">
+    <title>GC-ATLAS · Globe</title>
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+    <style>
+        :root {
+            --deep:           #061612;
+            --thalo-dark:     #0C2420;
+            --thalo:          #123524;
+            --thalo-raised:   #184536;
+            --thalo-line:     #215946;
+            --emerald:        #0E8C6E;
+            --emerald-bright: #2DBDA0;
+            --emerald-glow:   rgba(45, 189, 160, 0.22);
+            --sage:           #8BB0A1;
+            --paper:          #E6EFE9;
+            --paper-dim:      #AEC3B6;
+            --ochre:          #D4A84B;
+            --amber:          #E8C26A;
+            --border:         rgba(255,255,255,0.07);
+            --border-light:   rgba(255,255,255,0.12);
+            --radius:         8px;
+            --radius-lg:      14px;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        html, body { height: 100%; overflow: hidden; }
+        body {
+            font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            color: var(--paper);
+            background: var(--deep);
+            line-height: 1.5;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* ── Topbar ─────────────────────────────────────────── */
+        .topbar {
+            background: rgba(12, 36, 32, 0.85);
+            border-bottom: 1px solid var(--border);
+            backdrop-filter: blur(14px);
+            -webkit-backdrop-filter: blur(14px);
+            z-index: 100;
+            flex: 0 0 auto;
+        }
+        .topbar-inner {
+            max-width: 1600px;
+            margin: 0 auto;
+            padding: 0 18px;
+            height: 56px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        .topbar-brand { display: flex; align-items: center; gap: 12px; }
+        .topbar-mark {
+            width: 28px; height: 28px;
+            display: grid; place-items: center;
+            border-radius: 6px;
+            background: radial-gradient(circle at 35% 30%, var(--emerald-bright), var(--emerald) 55%, #062f25 100%);
+            box-shadow: 0 0 18px var(--emerald-glow), inset 0 0 6px rgba(255,255,255,0.15);
+        }
+        .topbar-mark svg { width: 18px; height: 18px; color: var(--paper); opacity: 0.9; }
+        .topbar-logo { font-size: 1.2rem; font-weight: 700; letter-spacing: 0.02em; color: var(--paper); }
+        .topbar-logo .accent {
+            background: linear-gradient(135deg, var(--emerald-bright) 0%, var(--amber) 90%);
+            -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
+        }
+        .topbar-nav { display: flex; gap: 4px; list-style: none; align-items: center; }
+        .topbar-nav a {
+            color: var(--sage);
+            text-decoration: none;
+            font-weight: 500;
+            font-size: 0.82rem;
+            padding: 6px 12px;
+            border-radius: 6px;
+            transition: all 0.2s;
+        }
+        .topbar-nav a:hover { color: var(--paper); background: rgba(255,255,255,0.05); }
+        .topbar-nav a.active { color: var(--paper); background: rgba(14, 140, 110, 0.18); }
+
+        /* ── App layout ─────────────────────────────────────── */
+        .app {
+            flex: 1;
+            display: flex;
+            min-height: 0;
+        }
+
+        .sidebar {
+            width: 288px;
+            flex-shrink: 0;
+            background: var(--thalo-dark);
+            border-right: 1px solid var(--border);
+            overflow-y: auto;
+            padding: 1.25rem 1.25rem 2rem;
+        }
+        .sidebar-heading {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.7rem;
+            letter-spacing: 0.18em;
+            text-transform: uppercase;
+            color: var(--emerald-bright);
+            margin-bottom: 1.2rem;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .sidebar-heading::before {
+            content: '';
+            width: 22px; height: 1px; background: var(--emerald-bright);
+        }
+
+        .control-group {
+            margin-bottom: 1.25rem;
+            padding-bottom: 1.25rem;
+            border-bottom: 1px solid var(--border);
+        }
+        .control-group:last-child { border-bottom: none; }
+        .control-group.is-disabled { opacity: 0.4; pointer-events: none; }
+        .control-group label.field-label,
+        .control-group h4 {
+            display: block;
+            font-size: 0.72rem;
+            text-transform: uppercase;
+            letter-spacing: 0.12em;
+            color: var(--sage);
+            font-weight: 600;
+            margin-bottom: 0.6rem;
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        select {
+            width: 100%;
+            padding: 9px 12px;
+            font-family: inherit;
+            font-size: 0.92rem;
+            color: var(--paper);
+            background: var(--thalo-raised);
+            border: 1px solid var(--thalo-line);
+            border-radius: var(--radius);
+            cursor: pointer;
+            appearance: none;
+            background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%238BB0A1' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'><path d='M6 9l6 6 6-6'/></svg>");
+            background-repeat: no-repeat;
+            background-position: right 12px center;
+            padding-right: 32px;
+            transition: border-color 0.15s, box-shadow 0.15s;
+        }
+        select:hover  { border-color: var(--emerald); }
+        select:focus  { outline: none; border-color: var(--emerald-bright); box-shadow: 0 0 0 3px var(--emerald-glow); }
+        select:disabled { cursor: not-allowed; }
+
+        .check {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 0.9rem;
+            color: var(--paper);
+            padding: 6px 0;
+            cursor: pointer;
+            user-select: none;
+        }
+        .check input[type="checkbox"] {
+            appearance: none;
+            width: 16px; height: 16px;
+            border: 1px solid var(--thalo-line);
+            border-radius: 4px;
+            background: var(--thalo-raised);
+            cursor: pointer;
+            display: grid; place-items: center;
+            transition: all 0.15s;
+        }
+        .check input[type="checkbox"]:hover { border-color: var(--emerald); }
+        .check input[type="checkbox"]:checked {
+            background: var(--emerald);
+            border-color: var(--emerald-bright);
+        }
+        .check input[type="checkbox"]:checked::after {
+            content: '';
+            width: 4px; height: 8px;
+            border: solid var(--deep);
+            border-width: 0 2px 2px 0;
+            transform: rotate(45deg) translate(-1px, -1px);
+        }
+
+        .sidebar-footer {
+            margin-top: 0.5rem;
+            padding: 0.9rem 0.95rem;
+            background: rgba(14, 140, 110, 0.08);
+            border: 1px solid rgba(14, 140, 110, 0.25);
+            border-radius: var(--radius);
+            font-size: 0.78rem;
+            color: var(--paper-dim);
+            line-height: 1.55;
+        }
+        .sidebar-footer strong { color: var(--amber); display: block; margin-bottom: 4px; font-size: 0.72rem; letter-spacing: 0.1em; text-transform: uppercase; font-family: 'JetBrains Mono', monospace; }
+
+        /* ── Canvas area ────────────────────────────────────── */
+        .canvas-area {
+            flex: 1;
+            position: relative;
+            background:
+                radial-gradient(ellipse at 50% 55%, rgba(14,140,110,0.10) 0%, transparent 55%),
+                var(--deep);
+            min-width: 0;
+        }
+        #globe-mount {
+            position: absolute;
+            inset: 0;
+        }
+        #globe-mount canvas {
+            display: block;
+            width: 100% !important;
+            height: 100% !important;
+            cursor: grab;
+        }
+        #globe-mount canvas:active { cursor: grabbing; }
+
+        /* ── Colorbar (floating bottom-left) ────────────────── */
+        .colorbar {
+            position: absolute;
+            left: 24px; bottom: 24px;
+            background: rgba(12, 36, 32, 0.85);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg);
+            padding: 14px 16px 12px;
+            min-width: 260px;
+            max-width: 320px;
+            z-index: 50;
+        }
+        .cb-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: baseline;
+            margin-bottom: 8px;
+            font-size: 0.85rem;
+        }
+        .cb-header #cb-title { font-weight: 600; color: var(--paper); }
+        .cb-header #cb-units { font-family: 'JetBrains Mono', monospace; font-size: 0.75rem; color: var(--sage); }
+        #colorbar-canvas {
+            display: block;
+            width: 100%;
+            height: 12px;
+            border-radius: 4px;
+        }
+        .cb-ticks {
+            display: flex;
+            justify-content: space-between;
+            margin-top: 4px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.72rem;
+            color: var(--paper-dim);
+        }
+
+        /* ── Loading hint (only before scene is ready) ──────── */
+        .globe-hint {
+            position: absolute;
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            color: var(--sage);
+            font-size: 0.9rem;
+            font-family: 'JetBrains Mono', monospace;
+            letter-spacing: 0.08em;
+            z-index: 1;
+            pointer-events: none;
+            opacity: 0.6;
+        }
+
+        /* ── Responsive ─────────────────────────────────────── */
+        @media (max-width: 820px) {
+            .app { flex-direction: column; }
+            .sidebar { width: 100%; max-height: 45vh; border-right: none; border-bottom: 1px solid var(--border); }
+            .colorbar { left: 12px; bottom: 12px; min-width: 220px; }
+        }
+    </style>
+</head>
+<body>
+
+<header class="topbar">
+    <div class="topbar-inner">
+        <a href="index.html" style="text-decoration:none">
+            <div class="topbar-brand">
+                <div class="topbar-mark">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+                        <circle cx="12" cy="12" r="9"/>
+                        <path d="M3 12h18"/>
+                        <path d="M12 3c3 3 3 15 0 18"/>
+                        <path d="M12 3c-3 3 -3 15 0 18"/>
+                    </svg>
+                </div>
+                <div class="topbar-logo">GC<span class="accent">-</span>ATLAS</div>
+            </div>
+        </a>
+        <nav>
+            <ul class="topbar-nav">
+                <li><a href="index.html">Home</a></li>
+                <li><a href="globe.html" class="active">Globe</a></li>
+                <li><a href="index.html#about">About</a></li>
+                <li><a href="https://michaelfischerwx.github.io/TC-ATLAS/" target="_blank" rel="noopener">TC-ATLAS</a></li>
+            </ul>
+        </nav>
+    </div>
+</header>
+
+<main class="app">
+
+    <aside class="sidebar">
+        <div class="sidebar-heading">Controls</div>
+
+        <section class="control-group">
+            <label class="field-label" for="field-select">Field</label>
+            <select id="field-select"></select>
+        </section>
+
+        <section class="control-group">
+            <label class="field-label" for="level-select">Pressure level</label>
+            <select id="level-select"></select>
+        </section>
+
+        <section class="control-group">
+            <label class="field-label" for="month-select">Month</label>
+            <select id="month-select"></select>
+        </section>
+
+        <section class="control-group">
+            <label class="field-label" for="cmap-select">Colormap</label>
+            <select id="cmap-select"></select>
+        </section>
+
+        <section class="control-group">
+            <h4>Overlays</h4>
+            <label class="check"><input type="checkbox" id="toggle-coastlines" checked> Coastlines</label>
+            <label class="check"><input type="checkbox" id="toggle-graticule" checked> Graticule</label>
+        </section>
+
+        <div class="sidebar-footer">
+            <strong>Synthetic data</strong>
+            The globe is showing procedural fields shaped to look like ERA5 — a placeholder until the real climatology finishes staging. Everything you see will be replaced with observed 1991–2020 means.
+        </div>
+    </aside>
+
+    <section class="canvas-area">
+        <div id="globe-mount"></div>
+        <div class="globe-hint">drag to rotate · scroll to zoom</div>
+
+        <div class="colorbar" aria-hidden="true">
+            <div class="cb-header">
+                <span id="cb-title">—</span>
+                <span id="cb-units">—</span>
+            </div>
+            <canvas id="colorbar-canvas" width="280" height="12"></canvas>
+            <div class="cb-ticks">
+                <span id="cb-min">—</span>
+                <span id="cb-max">—</span>
+            </div>
+        </div>
+    </section>
+
+</main>
+
+<script type="importmap">
+{
+    "imports": {
+        "three": "https://unpkg.com/three@0.163.0/build/three.module.js",
+        "three/addons/": "https://unpkg.com/three@0.163.0/examples/jsm/"
+    }
+}
+</script>
+<script type="module" src="js/globe.js"></script>
+
+</body>
+</html>
