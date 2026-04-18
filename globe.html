@@ -510,6 +510,29 @@
         }
         .tips-dismiss:hover { color: var(--paper); background: rgba(255,255,255,0.06); }
 
+        /* ── Hover readout tooltip ───────────────────────────── */
+        .hover-tooltip {
+            position: fixed;
+            pointer-events: none;
+            z-index: 70;
+            background: rgba(12, 28, 24, 0.92);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 5px 10px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.75rem;
+            color: var(--paper);
+            white-space: nowrap;
+            transition: opacity 0.08s ease-out;
+        }
+        .hover-tooltip.hidden { opacity: 0; }
+        .hover-tooltip .hv-sep   { color: var(--sage); padding: 0 4px; }
+        .hover-tooltip .hv-value { color: var(--emerald-bright); font-weight: 600; }
+        .hover-tooltip .hv-unit  { color: var(--sage); margin-left: 2px; }
+        .hover-tooltip .hv-mode  { color: var(--amber); margin-left: 6px; }
+
         /* ── Mobile drawer (hidden on desktop) ──────────────────── */
         .hamburger {
             display: none;
@@ -679,6 +702,8 @@
 
     <section class="canvas-area">
         <div id="globe-mount"></div>
+        <div class="hover-tooltip hidden" id="hover-tooltip"></div>
+
         <aside class="tips-panel" id="tips-panel">
             <button class="tips-dismiss" id="tips-dismiss" aria-label="Dismiss tips">&times;</button>
             <div class="tips-title" id="tips-title">Controls</div>

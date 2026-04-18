@@ -19,6 +19,7 @@ import { computeZonalMean, computeArcCrossSection, renderCrossSection } from './
 import { greatCircleArc, latLonToVec3, gcDistanceKm } from './arc.js';
 import { loadManifest, onFieldLoaded, isReady as era5Ready, prefetchField, cachedMonth } from './era5.js';
 import { decompose, annualMeanFrom } from './decompose.js';
+import { HoverProbe } from './hover.js';
 
 const PLAY_INTERVAL_MS = 900;
 
@@ -458,6 +459,22 @@ class GlobeApp {
         this.orbit.group.visible = true;   // group already parented; outer group handles visibility
         this.orbit.update(this.state.month, 0, this.camera);
         this.spinAngle = 0;                 // cumulative diurnal rotation (rad)
+
+        // Hover readout — shows (lat, lon, value) at the cursor. Reads the
+        // last-rendered (decomposed) field, not the raw tile, so it matches
+        // what the user sees on the globe / map.
+        this.hover = new HoverProbe({
+            canvas:          this.renderer.domElement,
+            camera:          this.camera,
+            getViewMode:     () => this.state.viewMode,
+            getGlobeMesh:    () => this.globe,
+            getMapMesh:      () => this.mapMesh,
+            getMapW:         () => MAP_W,
+            getMapH:         () => MAP_H,
+            getMapCenterLon: () => this.state.mapCenterLon,
+            sampleDisplayed: (lat, lon) => this.sampleDisplayed(lat, lon),
+            formatLabel:     (lat, lon, v) => this.formatHoverLabel(lat, lon, v),
+        });
     }
 
     currentGroup() { return this.state.viewMode === 'globe' ? this.globeGroup : this.mapGroup; }
@@ -626,6 +643,49 @@ class GlobeApp {
         if (!this.sun) return;
         // Sun / terminator are globe-mode concepts; hide in flat-map mode.
         this.sun.setVisible(this.state.showSun && this.state.viewMode === 'globe');
+    }
+
+    // NaN-safe bilinear sample of the currently-displayed field (after
+    // decomposition). Returns a number or null when outside the grid.
+    sampleDisplayed(lat, lon) {
+        const vals = this._displayedValues;
+        if (!vals) return null;
+        const { nlat, nlon } = GRID;
+        const rLat = 90 - lat;
+        const rLon = ((lon + 180) % 360 + 360) % 360;
+        if (rLat < 0 || rLat > nlat - 1) return null;
+        const i0 = Math.floor(rLat);
+        const i1 = Math.min(nlat - 1, i0 + 1);
+        const j0 = Math.floor(rLon) % nlon;
+        const j1 = (j0 + 1) % nlon;
+        const fi = rLat - i0;
+        const fj = rLon - Math.floor(rLon);
+        const v00 = vals[i0 * nlon + j0], v01 = vals[i0 * nlon + j1];
+        const v10 = vals[i1 * nlon + j0], v11 = vals[i1 * nlon + j1];
+        const corners = [v00, v01, v10, v11];
+        if (!corners.every(Number.isFinite)) {
+            let s = 0, n = 0;
+            for (const v of corners) if (Number.isFinite(v)) { s += v; n += 1; }
+            return n > 0 ? s / n : null;
+        }
+        const vT = v00 * (1 - fj) + v01 * fj;
+        const vB = v10 * (1 - fj) + v11 * fj;
+        return vT * (1 - fi) + vB * fi;
+    }
+
+    formatHoverLabel(lat, lon, v) {
+        const meta = FIELDS[this.state.field] || {};
+        const latS = `${Math.abs(lat).toFixed(1)}°${lat >= 0 ? 'N' : 'S'}`;
+        const lonS = `${Math.abs(lon).toFixed(1)}°${lon >= 0 ? 'E' : 'W'}`;
+        const mode = this.state.decompose;
+        const modeTag = (mode && mode !== 'total')
+            ? `<span class="hv-mode">${mode}</span>` : '';
+        return (
+            `${latS}<span class="hv-sep">·</span>${lonS}` +
+            `<span class="hv-sep">·</span>` +
+            `<span class="hv-value">${fmtValue(v)}</span>` +
+            `<span class="hv-unit">${meta.units || ''}</span>${modeTag}`
+        );
     }
 
     applyParticleContrast() {
@@ -881,6 +941,8 @@ class GlobeApp {
         // Apply decomposition mode (total / zonal / eddy / anomaly).
         const decomp = this.applyDecomposition(f, mode);
         const effCmap = decomp.symmetric ? 'RdBu_r' : cmap;
+        // Stash what's currently painted on the globe for hover sampling.
+        this._displayedValues = decomp.values;
 
         fillRGBA(this.imageData.data, decomp.values, {
             vmin: decomp.vmin, vmax: decomp.vmax, cmap: effCmap,
