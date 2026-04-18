@@ -90,6 +90,7 @@ async function fetchTile(name, group, meta, month, level) {
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         const buf = await resp.arrayBuffer();
         const values = new Float32Array(buf);
+        applyUnitConversions(name, values);
         // Per-tile range so each (field, month, level) uses the full colormap.
         let vmin = Infinity, vmax = -Infinity;
         for (let i = 0; i < values.length; i++) {
@@ -106,3 +107,20 @@ async function fetchTile(name, group, meta, month, level) {
 }
 
 export function onFieldLoaded(fn) { subscribers.add(fn); return () => subscribers.delete(fn); }
+
+// ── per-variable unit normalisations ─────────────────────────────────────
+// Applied once at tile load, before caching, so all downstream code sees
+// values in the units advertised in data.js FIELDS metadata.
+const G = 9.80665;
+function applyUnitConversions(name, values) {
+    if (name === 'z') {
+        // ERA5 geopotential (m² s⁻²) → geopotential height (m)
+        for (let i = 0; i < values.length; i++) values[i] /= G;
+    } else if (name === 'msl' || name === 'sp') {
+        // ERA5 pressure in Pa → hPa
+        for (let i = 0; i < values.length; i++) values[i] /= 100;
+    } else if (name === 'tp') {
+        // Monthly total precip in m → mm/day (approx ÷30 days)
+        for (let i = 0; i < values.length; i++) values[i] *= 1000 / 30;
+    }
+}

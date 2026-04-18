@@ -16,12 +16,13 @@ export const LEVELS = [10, 50, 100, 150, 200, 250, 300, 500, 700, 850, 925, 1000
 export const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 
 export const FIELDS = {
-    t:   { type: 'pl', name: 'Temperature',            units: 'K',     cmap: 'turbo',   defaultLevel: 500 },
-    u:   { type: 'pl', name: 'Zonal wind (u)',         units: 'm s⁻¹', cmap: 'RdBu_r',  defaultLevel: 200 },
-    v:   { type: 'pl', name: 'Meridional wind (v)',    units: 'm s⁻¹', cmap: 'RdBu_r',  defaultLevel: 200 },
-    z:   { type: 'pl', name: 'Geopotential height',    units: 'm',     cmap: 'viridis', defaultLevel: 500 },
-    msl: { type: 'sl', name: 'Mean sea-level pressure', units: 'hPa',  cmap: 'plasma' },
-    t2m: { type: 'sl', name: '2-m temperature',        units: 'K',     cmap: 'turbo' },
+    t:   { type: 'pl', name: 'Temperature',             units: 'K',       cmap: 'turbo',   defaultLevel: 500 },
+    u:   { type: 'pl', name: 'Zonal wind (u)',          units: 'm s⁻¹',   cmap: 'RdBu_r',  defaultLevel: 200 },
+    v:   { type: 'pl', name: 'Meridional wind (v)',     units: 'm s⁻¹',   cmap: 'RdBu_r',  defaultLevel: 200 },
+    w:   { type: 'pl', name: 'Vertical velocity (ω)',   units: 'Pa s⁻¹',  cmap: 'RdBu_r',  defaultLevel: 500 },
+    z:   { type: 'pl', name: 'Geopotential height',     units: 'm',       cmap: 'viridis', defaultLevel: 500 },
+    msl: { type: 'sl', name: 'Mean sea-level pressure', units: 'hPa',     cmap: 'plasma' },
+    t2m: { type: 'sl', name: '2-m temperature',         units: 'K',       cmap: 'turbo' },
 };
 
 // ── lat/lon axes ─────────────────────────────────────────────────────────
@@ -181,11 +182,29 @@ function syntheticField(name, month, level) {
         case 't':   return fieldT(month, level);
         case 'u':   return fieldU(month, level);
         case 'v':   return fieldV(month, level);
+        case 'w':   return fieldW(month, level);
         case 'z':   return fieldZ(month, level);
         case 'msl': return fieldMSL(month);
         case 't2m': return fieldT2M(month);
         default:    throw new Error(`no generator for ${name}`);
     }
+}
+
+function fieldW(month, level) {
+    // Rough Hadley-cell signature: rising equator (w < 0), sinking subtropics (w > 0)
+    const z = zFromPressure(level);
+    const amp = Math.exp(-(((z - 5000) / 4000) ** 2));  // peak in mid-troposphere
+    const s = seasonalPhase(month);
+    const values = new Float32Array(GRID.nlat * GRID.nlon);
+    for (let i = 0; i < GRID.nlat; i++) {
+        const latR = LATS[i] * D2R;
+        // Positive ω = descending (textbook convention for pressure vertical velocity).
+        const base = amp * 0.05 * Math.sin(3 * latR) + amp * 0.015 * s * Math.sin(latR);
+        for (let j = 0; j < GRID.nlon; j++) {
+            values[i * GRID.nlon + j] = base;
+        }
+    }
+    return { values, vmin: -0.1, vmax: 0.1 };
 }
 
 /**
