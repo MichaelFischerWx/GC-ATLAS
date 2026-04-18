@@ -8,17 +8,20 @@
 //
 // Composition:
 //   orbitGroup
-//     sunMesh            (sphere at origin)
-//     sunGlow            (larger transparent sphere, additive)
-//     eclipticLine       (dashed circle in the XZ plane)
-//     orbitArrow         (small cone pointing along the orbital direction)
+//     sunGlow            (wide additive halo sprite)
+//     sunDisk            (bright limb-darkened disk sprite)
+//     eclipticLine       (dashed ring in the XZ plane)
+//     orbitArrow         (emerald cone tangent to the ring)
+//     solsticeDots/labels (at Dec/Mar/Jun/Sep orbital positions)
+//     monthTicks         (stubs at the 8 non-solstice months)
+//     subsolarMarker     (tiny warm sprite pinned to Earth's sun-facing side)
 //     earthPivot         (translated each frame to the orbital position)
-//       earthTiltGroup   (fixed 23.4° tilt about +Z, same as globeGroup)
+//       earthTiltGroup   (fixed 23.4° tilt about +Z)
+//         axisLine       (amber stick through the poles)
+//         latCircleLines (equator + tropics + polar circles)
 //         earthSpinGroup (diurnal rotation about local +Y)
 //           earthMesh    (sphere with the shaded canvas texture)
 //           terminator   (slightly larger sphere with day/night shader)
-//         axisLine       (line through N and S poles — outside spin so the
-//                         axis stays visually fixed even as Earth rotates)
 
 import * as THREE from 'three';
 
@@ -52,6 +55,46 @@ function makeSunTexture(size = 256) {
     const tex = new THREE.CanvasTexture(canvas);
     tex.colorSpace = THREE.SRGBColorSpace;
     return tex;
+}
+
+function makeTextSprite(text, { color = '#F4FAF7', fontSize = 26 } = {}) {
+    const W = 256, H = 72;
+    const canvas = document.createElement('canvas');
+    canvas.width = W; canvas.height = H;
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, W, H);
+    ctx.font = `600 ${fontSize}px "DM Sans", "Inter", system-ui, sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.lineWidth = 4;
+    ctx.strokeStyle = 'rgba(6, 14, 11, 0.92)';
+    ctx.strokeText(text, W / 2, H / 2);
+    ctx.fillStyle = color;
+    ctx.fillText(text, W / 2, H / 2);
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.minFilter = THREE.LinearFilter;
+    tex.magFilter = THREE.LinearFilter;
+    tex.colorSpace = THREE.SRGBColorSpace;
+    return new THREE.Sprite(new THREE.SpriteMaterial({
+        map: tex, transparent: true, depthTest: false, depthWrite: false,
+    }));
+}
+
+// Thin latitude circle in the mini-Earth's local frame; used for tropics,
+// polar circles, and the equator.
+function latCircleLine(lat, { color, opacity, radiusMul = 1.002 }) {
+    const phi = lat * Math.PI / 180;
+    const R   = EARTH_R * radiusMul;
+    const y   = R * Math.sin(phi);
+    const r   = R * Math.cos(phi);
+    const pts = [];
+    for (let i = 0; i <= 128; i++) {
+        const th = (i / 128) * Math.PI * 2;
+        pts.push(new THREE.Vector3(Math.cos(th) * r, y, Math.sin(th) * r));
+    }
+    const geom = new THREE.BufferGeometry().setFromPoints(pts);
+    const mat = new THREE.LineBasicMaterial({ color, transparent: true, opacity });
+    return new THREE.Line(geom, mat);
 }
 
 function makeGlowTexture(size = 512) {
@@ -153,19 +196,51 @@ export class OrbitScene {
         this.ring.computeLineDistances();  // required for dashed rendering
         this.group.add(this.ring);
 
-        // ── Orbital direction arrow — a small cone tangent to the ring ─
-        const arrowGeom = new THREE.ConeGeometry(0.05, 0.16, 12);
-        arrowGeom.translate(0, 0.08, 0);
-        const arrowMat = new THREE.MeshBasicMaterial({ color: 0x8BB0A1 });
+        // ── Orbital direction arrow — cone tangent to the ring at m=9 (Sep),
+        // pointing along −X (tangent direction at that orbital position).
+        const arrowGeom = new THREE.ConeGeometry(0.10, 0.34, 14);
+        arrowGeom.translate(0, 0.17, 0);
+        const arrowMat = new THREE.MeshBasicMaterial({ color: 0x2DBDA0 });
         this.orbitArrow = new THREE.Mesh(arrowGeom, arrowMat);
-        // Anchor at the point on the ring at θ=90° (pointing from Dec toward
-        // the direction of increasing month, consistent with our convention).
         this.orbitArrow.position.set(0, 0, ORBIT_RADIUS);
-        // Lay the cone flat on the XZ plane and point it along +X (direction
-        // of increasing theta at this anchor — tangent vector = (-sin, 0, cos),
-        // at θ=90° that's (-1, 0, 0), i.e. -X).
         this.orbitArrow.rotation.set(0, 0, Math.PI / 2);
         this.group.add(this.orbitArrow);
+
+        // ── Solstice / equinox markers on the ring ─────────────────────
+        const markers = [
+            { month: 12, label: 'Dec solstice', color: 0xE8C26A, tone: '#E8C26A' },
+            { month:  3, label: 'Mar equinox',  color: 0x8BB0A1, tone: '#A8C9BB' },
+            { month:  6, label: 'Jun solstice', color: 0xE8C26A, tone: '#E8C26A' },
+            { month:  9, label: 'Sep equinox',  color: 0x8BB0A1, tone: '#A8C9BB' },
+        ];
+        for (const m of markers) {
+            const pos = earthOrbitPosition(m.month);
+            const dot = new THREE.Mesh(
+                new THREE.SphereGeometry(0.055, 16, 12),
+                new THREE.MeshBasicMaterial({ color: m.color }),
+            );
+            dot.position.copy(pos);
+            this.group.add(dot);
+            const text = makeTextSprite(m.label, { color: m.tone });
+            // Push label outward along the radial so it doesn't overlap Earth.
+            const outward = pos.clone().normalize().multiplyScalar(0.45);
+            text.position.copy(pos).add(outward);
+            text.scale.set(0.70, 0.22, 1);
+            text.renderOrder = 6;
+            this.group.add(text);
+        }
+        // Minor ticks on the other 8 months — small radial stubs for rhythm.
+        for (let mm = 1; mm <= 12; mm++) {
+            if (mm % 3 === 0 || mm === 12) continue;
+            const p0 = earthOrbitPosition(mm);
+            const outward = p0.clone().normalize();
+            const p1 = p0.clone().add(outward.multiplyScalar(0.10));
+            const geom = new THREE.BufferGeometry().setFromPoints([p0, p1]);
+            const mat = new THREE.LineBasicMaterial({
+                color: 0x7FB8B5, transparent: true, opacity: 0.55,
+            });
+            this.group.add(new THREE.Line(geom, mat));
+        }
 
         // ── Mini-Earth hierarchy ───────────────────────────────────────
         this.earthPivot     = new THREE.Group();
@@ -218,6 +293,32 @@ export class OrbitScene {
         this.axisLine = new THREE.Line(axisGeom, axisMat);
         this.earthTiltGroup.add(this.axisLine);
 
+        // Latitude reference rings. These are rotationally symmetric so it
+        // doesn't matter whether they spin with Earth — attach to the tilt
+        // group so they anchor to the geographic frame without the cost of
+        // re-drawing during animation.
+        this.earthTiltGroup.add(latCircleLine( 23.4, { color: 0xE8C26A, opacity: 0.65 })); // Tropic of Cancer
+        this.earthTiltGroup.add(latCircleLine(-23.4, { color: 0xE8C26A, opacity: 0.65 })); // Tropic of Capricorn
+        this.earthTiltGroup.add(latCircleLine( 66.6, { color: 0xE4F1EE, opacity: 0.55 })); // Arctic Circle
+        this.earthTiltGroup.add(latCircleLine(-66.6, { color: 0xE4F1EE, opacity: 0.55 })); // Antarctic Circle
+        this.earthTiltGroup.add(latCircleLine(0,     { color: 0xFFFFFF, opacity: 0.30 })); // Equator
+
+        // Subsolar point marker: tiny warm sprite on Earth's surface at the
+        // point where the sun is directly overhead. Lives in the orbit group
+        // (not earthPivot) so it stays pinned to the sun-facing side rather
+        // than spinning with Earth — that way the yearly ±23.4° drift of
+        // the subsolar latitude is the only motion it shows.
+        this.subsolarMarker = new THREE.Sprite(new THREE.SpriteMaterial({
+            map: makeSunTexture(64),
+            transparent: true,
+            depthTest: true,
+            depthWrite: false,
+            blending: THREE.AdditiveBlending,
+        }));
+        this.subsolarMarker.scale.set(0.095, 0.095, 1);
+        this.subsolarMarker.renderOrder = 4;
+        this.group.add(this.subsolarMarker);
+
         this.update(1);
     }
 
@@ -234,6 +335,14 @@ export class OrbitScene {
         // Direction from Earth toward the sun (sun is at origin).
         const sunDir = earthPos.clone().negate().normalize();
         this.termMaterial.uniforms.uSunDir.value.copy(sunDir);
+
+        // Subsolar point: on Earth's surface, exactly on the sun-facing side.
+        // By construction this sits at the current subsolar latitude on
+        // Earth's disc, so it traces the ±23.4° seasonal drift as month
+        // advances.
+        this.subsolarMarker.position.copy(earthPos).add(
+            sunDir.clone().multiplyScalar(EARTH_R * 1.01),
+        );
     }
 
     setVisible(v) { this.group.visible = v; }
