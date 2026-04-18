@@ -699,6 +699,24 @@ class GlobeApp {
         btnMap.addEventListener('click',   () => { this.setViewMode('map');   setActive('map'); });
         btnOrbit.addEventListener('click', () => { this.setViewMode('orbit'); setActive('orbit'); });
 
+        // Mobile controls drawer: hamburger toggles the sidebar overlay.
+        const hamburger = document.getElementById('sidebar-toggle');
+        const sidebar   = document.getElementById('sidebar');
+        const backdrop  = document.getElementById('sidebar-backdrop');
+        const setDrawer = (open) => {
+            sidebar?.classList.toggle('open', open);
+            backdrop?.classList.toggle('open', open);
+        };
+        hamburger?.addEventListener('click', () => {
+            setDrawer(!sidebar?.classList.contains('open'));
+        });
+        backdrop?.addEventListener('click', () => setDrawer(false));
+        // Auto-close on any view-mode or field change so the user sees the result.
+        const closeOnSelect = () => { if (window.innerWidth <= 820) setDrawer(false); };
+        btnGlobe.addEventListener('click', closeOnSelect);
+        btnMap.addEventListener('click', closeOnSelect);
+        btnOrbit.addEventListener('click', closeOnSelect);
+
         this.refreshLevelAvailability();
         this.on('field-updated', ({ field }) => this.updateColorbar(field));
     }
