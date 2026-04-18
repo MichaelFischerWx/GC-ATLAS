@@ -63,9 +63,9 @@ function fieldU(month, level) {
     for (let i = 0; i < GRID.nlat; i++) {
         const lat = LATS[i];
         const latR = lat * D2R;
-        const nh = 40 * jetStrength * Math.exp(-((lat - 40) / 15) ** 2) * (1 + 0.45 * s);
-        const sh = 35 * jetStrength * Math.exp(-((lat + 40) / 15) ** 2) * (1 - 0.45 * s);
-        const trop = -4 * jetStrength * Math.exp(-(lat / 20) ** 2);
+        const nh = 40 * jetStrength * Math.exp(-(((lat - 40) / 15) ** 2)) * (1 + 0.45 * s);
+        const sh = 35 * jetStrength * Math.exp(-(((lat + 40) / 15) ** 2)) * (1 - 0.45 * s);
+        const trop = -4 * jetStrength * Math.exp(-((lat / 20) ** 2));
         const base = nh + sh + trop;
         for (let j = 0; j < GRID.nlon; j++) {
             const lonR = LONS[j] * D2R;
@@ -118,19 +118,19 @@ function fieldMSL(month) {
     for (let i = 0; i < GRID.nlat; i++) {
         const lat = LATS[i];
         const latR = lat * D2R;
-        const subHigh = 18 * Math.exp(-((Math.abs(lat) - 30) / 12) ** 2);
-        const eqLow = -4 * Math.exp(-(lat / 10) ** 2);
-        const polar = -6 * s * Math.exp(-((lat - 65) / 15) ** 2)
-                    +  6 * s * Math.exp(-((lat + 65) / 15) ** 2);
+        const subHigh = 18 * Math.exp(-(((Math.abs(lat) - 30) / 12) ** 2));
+        const eqLow = -4 * Math.exp(-((lat / 10) ** 2));
+        const polar = -6 * s * Math.exp(-(((lat - 65) / 15) ** 2))
+                    +  6 * s * Math.exp(-(((lat + 65) / 15) ** 2));
         const zonal = 1013 + subHigh + eqLow + polar;
         for (let j = 0; j < GRID.nlon; j++) {
             const lonR = LONS[j] * D2R;
             // Crude Aleutian (~170°E → 2.97 rad) and Icelandic (~340°E = -20° → -0.35 rad) lows.
             const lonAl = lonR - 2.97, lonIs = lonR + 0.35;
-            const alask = -10 * s * Math.exp(-((lat - 55) / 15) ** 2)
-                         * Math.exp(-(lonAl / 0.8) ** 2);
-            const iceld =  -8 * s * Math.exp(-((lat - 62) / 15) ** 2)
-                         * Math.exp(-(lonIs / 0.7) ** 2);
+            const alask = -10 * s * Math.exp(-(((lat - 55) / 15) ** 2))
+                         * Math.exp(-((lonAl / 0.8) ** 2));
+            const iceld =  -8 * s * Math.exp(-(((lat - 62) / 15) ** 2))
+                         * Math.exp(-((lonIs / 0.7) ** 2));
             values[i * GRID.nlon + j] = zonal + alask + iceld;
         }
     }
@@ -149,8 +149,8 @@ function fieldT2M(month) {
         for (let j = 0; j < GRID.nlon; j++) {
             const lonR = LONS[j] * D2R;
             // Continental cold pools (crude — around Asia ~+90° and N. America ~−95°)
-            const asia = Math.exp(-((lonR - 1.57) / 0.9) ** 2);
-            const noam = Math.exp(-((lonR + 1.66) / 0.9) ** 2);
+            const asia = Math.exp(-(((lonR - 1.57) / 0.9) ** 2));
+            const noam = Math.exp(-(((lonR + 1.66) / 0.9) ** 2));
             const continental = -10 * s * Math.max(0, Math.sin(latR)) * (asia + noam);
             values[i * GRID.nlon + j] = base + continental;
         }
