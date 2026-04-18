@@ -7,6 +7,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { fillRGBA, fillColorbar, COLORMAPS } from './colormap.js';
 import { getField, FIELDS, LEVELS, MONTHS, GRID } from './data.js';
 import { ParticleField } from './particles.js';
+import { StreamlineField } from './streamlines.js';
 import { computeZonalMean, renderCrossSection } from './cross_section.js';
 import { loadManifest, onFieldLoaded, isReady as era5Ready, prefetchField } from './era5.js';
 
@@ -32,7 +33,7 @@ class GlobeApp {
             viewMode: 'globe',   // 'globe' | 'map'
             showCoastlines: true,
             showGraticule: true,
-            showParticles: true,
+            windMode: 'particles',   // 'off' | 'particles' | 'streamlines'
             showXSection: false,
         };
         this.windCache = { u: null, v: null, nlat: 0, nlon: 0, stale: true };
@@ -276,14 +277,23 @@ class GlobeApp {
         this.coastGroup.visible = this.state.showCoastlines;
     }
 
-    // ── wind particle overlay ────────────────────────────────────────
+    // ── wind overlays (particles + streamlines) ──────────────────────
     initParticles() {
-        this.particles = new ParticleField(
-            (lat, lon) => this.sampleWind(lat, lon),
-            (lat, lon, r) => this.project(lat, lon, r),
-        );
-        this.particles.setVisible(this.state.showParticles);
+        const getUV = (lat, lon) => this.sampleWind(lat, lon);
+        const proj  = (lat, lon, r) => this.project(lat, lon, r);
+
+        this.particles = new ParticleField(getUV, proj);
+        this.streamlines = new StreamlineField(getUV, proj);
+
+        this.applyWindMode();
         this.currentGroup().add(this.particles.object);
+        this.currentGroup().add(this.streamlines.object);
+    }
+
+    applyWindMode() {
+        const m = this.state.windMode;
+        if (this.particles)   this.particles.setVisible(m === 'particles');
+        if (this.streamlines) this.streamlines.setVisible(m === 'streamlines');
     }
 
     refreshWindCache() {
@@ -328,8 +338,11 @@ class GlobeApp {
         this.rebuildGraticule();
 
         this.particles.object.parent?.remove(this.particles.object);
+        this.streamlines.object.parent?.remove(this.streamlines.object);
         this.currentGroup().add(this.particles.object);
+        this.currentGroup().add(this.streamlines.object);
         this.particles.onProjectionChanged();
+        this.streamlines.onProjectionChanged();
 
         this.configureCamera();
     }
@@ -358,7 +371,7 @@ class GlobeApp {
         Object.assign(this.state, patch);
         if ('showCoastlines' in patch && this.coastGroup) this.coastGroup.visible = !!patch.showCoastlines;
         if ('showGraticule' in patch && this.gratGroup)   this.gratGroup.visible   = !!patch.showGraticule;
-        if ('showParticles' in patch && this.particles)   this.particles.setVisible(!!patch.showParticles);
+        if ('windMode' in patch) this.applyWindMode();
         if ('showXSection' in patch) {
             const panel = document.getElementById('xsection-panel');
             if (panel) panel.hidden = !patch.showXSection;
@@ -371,6 +384,12 @@ class GlobeApp {
             prefetchField(this.state.field, { level: this.state.level });
             prefetchField('u', { level: this.state.level });
             prefetchField('v', { level: this.state.level });
+        }
+
+        // Streamlines are static — rebuild when the wind field changes.
+        if (this.streamlines && this.state.windMode === 'streamlines' &&
+            ('level' in patch || 'month' in patch || 'windMode' in patch)) {
+            this.streamlines.refresh();
         }
 
         this.updateField();
@@ -494,8 +513,14 @@ class GlobeApp {
         document.getElementById('toggle-graticule').addEventListener('change', (e) => {
             this.setState({ showGraticule: e.target.checked });
         });
-        document.getElementById('toggle-particles').addEventListener('change', (e) => {
-            this.setState({ showParticles: e.target.checked });
+        // Wind overlay mode: segmented control (Off / Particles / Streamlines)
+        document.querySelectorAll('[data-wind-mode]').forEach((btn) => {
+            btn.addEventListener('click', () => {
+                const mode = btn.getAttribute('data-wind-mode');
+                document.querySelectorAll('[data-wind-mode]').forEach((b) =>
+                    b.classList.toggle('active', b === btn));
+                this.setState({ windMode: mode });
+            });
         });
         document.getElementById('toggle-xsection').addEventListener('change', (e) => {
             this.setState({ showXSection: e.target.checked });
@@ -566,7 +591,7 @@ class GlobeApp {
     animate() {
         const tick = () => {
             this.controls.update();
-            if (this.state.showParticles && this.particles) this.particles.step();
+            if (this.state.windMode === 'particles' && this.particles) this.particles.step();
             this.renderer.render(this.scene, this.camera);
             requestAnimationFrame(tick);
         };

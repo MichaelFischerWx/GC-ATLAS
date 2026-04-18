@@ -264,6 +264,40 @@
         .sidebar-footer strong { color: var(--amber); display: block; margin-bottom: 4px; font-size: 0.72rem; letter-spacing: 0.1em; text-transform: uppercase; font-family: 'JetBrains Mono', monospace; }
         .sidebar-footer code { font-family: 'JetBrains Mono', monospace; font-size: 0.85em; background: rgba(255,255,255,0.06); padding: 1px 5px; border-radius: 3px; color: var(--paper); }
 
+        /* ── Segmented control (Wind mode) ────────────────── */
+        .wind-mode { margin-top: 0.6rem; }
+        .wind-mode-label {
+            font-size: 0.78rem;
+            color: var(--paper);
+            margin-bottom: 6px;
+            font-weight: 500;
+        }
+        .segmented {
+            display: flex;
+            background: var(--thalo-raised);
+            border: 1px solid var(--thalo-line);
+            border-radius: var(--radius);
+            overflow: hidden;
+        }
+        .segmented button {
+            flex: 1;
+            background: none;
+            border: none;
+            color: var(--sage);
+            padding: 7px 4px;
+            font: inherit;
+            font-size: 0.75rem;
+            letter-spacing: 0.02em;
+            cursor: pointer;
+            transition: background 0.15s, color 0.15s;
+        }
+        .segmented button:hover:not(.active) { color: var(--paper); background: rgba(255,255,255,0.05); }
+        .segmented button.active {
+            background: var(--emerald);
+            color: var(--deep);
+            font-weight: 600;
+        }
+
         /* ── Canvas area ────────────────────────────────────── */
         .canvas-area {
             flex: 1;
@@ -481,7 +515,14 @@
             <h4>Overlays</h4>
             <label class="check"><input type="checkbox" id="toggle-coastlines" checked> Coastlines</label>
             <label class="check"><input type="checkbox" id="toggle-graticule" checked> Graticule</label>
-            <label class="check"><input type="checkbox" id="toggle-particles" checked> Wind particles</label>
+            <div class="wind-mode">
+                <div class="wind-mode-label">Wind</div>
+                <div class="segmented">
+                    <button type="button" data-wind-mode="off">Off</button>
+                    <button type="button" data-wind-mode="particles" class="active">Particles</button>
+                    <button type="button" data-wind-mode="streamlines">Streamlines</button>
+                </div>
+            </div>
         </section>
 
         <section class="control-group">
