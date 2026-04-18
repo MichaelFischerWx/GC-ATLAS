@@ -26,13 +26,12 @@ Last update: 2026-04-18
 
 ## Immediate next steps
 
-### 1. Host tiles on GCS (blocker for public site)
-Tiles are currently local-only; GH Pages is too small / slow for 228 MB of binaries.
-- Create bucket `gs://gc-atlas-era5` in the same GCP project as TC-ATLAS.
-- Public read + CORS set for `https://michaelfischerwx.github.io`.
-- Upload: `gsutil -m cp -r data/tiles/ gs://gc-atlas-era5/tiles/`.
-- In `js/era5.js`, flip `TILE_BASE` to the GCS URL when `location.host !== 'localhost:8000'`.
-- Verify streaming + caching headers.
+### 1. ~~Host tiles on GCS~~ ✓ (2026-04-18)
+Bucket: `gs://gc-atlas-era5` in project `tc-atlas-web`, region `us-east1`.
+- Public read (`allUsers:objectViewer`), CORS for `https://michaelfischerwx.github.io` + `http://localhost:8000`.
+- 934 tiles / 227 MB uploaded with `cache-control: public,max-age=31536000,immutable`.
+- `js/era5.js` `TILE_BASE` switches to `https://storage.googleapis.com/gc-atlas-era5/tiles` on any non-localhost host.
+- Re-upload recipe: `gcloud storage cp -r data/tiles/* gs://gc-atlas-era5/tiles/ --cache-control="public,max-age=31536000,immutable"`.
 
 ### 2. Verify precipitation & radiative-flux unit conversions
 Current assumption: ERA5 monthly means are per-day accumulations.

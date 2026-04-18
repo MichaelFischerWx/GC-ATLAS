@@ -3,7 +3,9 @@
 // pattern so callers can keep a synchronous API: they get synthetic data until
 // the real tile lands, then we fire an event and they re-render.
 
-const TILE_BASE = 'data/tiles';
+const TILE_BASE = (location.hostname === 'localhost' || location.hostname === '127.0.0.1')
+    ? 'data/tiles'
+    : 'https://storage.googleapis.com/gc-atlas-era5/tiles';
 
 let manifest = null;
 const cache = new Map();        // key -> { values } | 'pending'
