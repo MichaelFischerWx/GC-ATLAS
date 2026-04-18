@@ -21,7 +21,7 @@ import { loadManifest, onFieldLoaded, isReady as era5Ready, prefetchField, cache
 import { decompose, annualMeanFrom } from './decompose.js';
 import { HoverProbe } from './hover.js';
 import { computeMassStreamfunction, computeAngularMomentum } from './diagnostics.js';
-import { ParcelField, PARCEL_SEED_PRESSURE_DEFAULT } from './parcels.js';
+import { ParcelField } from './parcels.js';
 
 const PLAY_INTERVAL_MS = 900;
 
@@ -114,11 +114,11 @@ class GlobeApp {
             const feedsCurrentField =
                 (name === s.field) ||
                 (s.field === 'wspd'  && (name === 'u' || name === 'v')) ||
-                (s.field === 'pv330' && (name === 't' || name === 'vo'));
+                (s.field === 'pv330' && (name === 't' || name === 'u' || name === 'v'));
 
             // pv330 sums over every pressure level, so don't require level
             // to match — any T or vo arrival might complete the cache.
-            const needsLevelMatch = !(s.field === 'pv330' && (name === 't' || name === 'vo'));
+            const needsLevelMatch = !(s.field === 'pv330' && (name === 't' || name === 'u' || name === 'v'));
             if (feedsCurrentField && monthMatches && (!needsLevelMatch || levelMatches)) {
                 // Bust the PV cache when any ingredient lands so recompute
                 // uses the freshest data.
@@ -241,7 +241,7 @@ class GlobeApp {
                     prefetchField('w', { level: L });
                 }
             }
-            this.parcels.seed(p.lat, p.lon, PARCEL_SEED_PRESSURE_DEFAULT);
+            this.parcels.seed(p.lat, p.lon, this.state.level);
         });
 
         el.addEventListener('pointerdown', (e) => {
@@ -912,13 +912,15 @@ class GlobeApp {
             prefetchField(this.state.field, { level: this.state.level });
             prefetchField('u', { level: this.state.level });
             prefetchField('v', { level: this.state.level });
-            // PV on an isentrope needs T and vo at every pressure level to
-            // compute θ and ∂θ/∂p. Kick those here so they arrive in
-            // parallel when the user picks PV from the field dropdown.
+            // PV on an isentrope needs T, u, v at every pressure level —
+            // θ from T, and relative vorticity computed on the fly from u,v.
+            // Kick those here so they arrive in parallel when the user picks
+            // PV from the field dropdown.
             if (this.state.field === 'pv330') {
                 for (const L of LEVELS) {
-                    prefetchField('t',  { level: L });
-                    prefetchField('vo', { level: L });
+                    prefetchField('t', { level: L });
+                    prefetchField('u', { level: L });
+                    prefetchField('v', { level: L });
                 }
             }
         }

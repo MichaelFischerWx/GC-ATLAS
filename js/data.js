@@ -137,16 +137,56 @@ function computeDerived(name, month, level) {
 // ── PV on an isentropic surface ──────────────────────────────────────────
 // Ertel PV in pressure coordinates:
 //     PV = -g · (ζ + f) · ∂θ/∂p
-// where ζ is relative vorticity (we have the ERA5 `vo` tile at every
-// pressure level), f = 2Ω sin φ, and θ = T·(1000/p)^(R/cp) is potential
-// temperature. We compute PV at every (lat, lon, p) level, then for each
-// column linearly interpolate (in p) to the surface where θ = θ₀.
+// ERA5 monthly climatology tiles include u, v, t on pressure levels but NOT
+// relative vorticity, so we compute ζ on the fly in spherical coordinates:
+//     ζ = (1/(a·cosφ)) · [∂v/∂λ - ∂(u·cosφ)/∂φ]
+// f = 2Ω sin φ, and θ = T·(1000/p)^(R/cp) is potential temperature. We
+// compute PV at every (lat, lon, p) level, then for each column linearly
+// interpolate (in p) to the surface where θ = θ₀.
 
 const OMEGA_EARTH = 7.2921e-5;
 const G_EARTH     = 9.80665;
 const KAPPA       = 0.2854;      // R / cp for dry air
+const A_EARTH_PV  = 6.371e6;     // m
 
 const _pvCache = new Map();
+
+/** Relative vorticity ζ on a 1° lat/lon grid. Centred differences; zonal
+ *  wrap; forward/backward at lat boundaries; output is zero at the exact
+ *  poles. Input u, v are Float32Array shape (nlat*nlon). */
+function relativeVorticityFromUV(u, v, nlat, nlon) {
+    const out = new Float32Array(nlat * nlon);
+    const dLam = Math.PI / 180;           // 1°
+    const dPhi = Math.PI / 180;
+    for (let i = 0; i < nlat; i++) {
+        const lat = 90 - i;
+        const phi = lat * Math.PI / 180;
+        const cosphi = Math.cos(phi);
+        // Skip exact poles — metric terms blow up; PV there is not meaningful.
+        if (Math.abs(lat) >= 89.5 || cosphi < 1e-6) {
+            for (let j = 0; j < nlon; j++) out[i * nlon + j] = 0;
+            continue;
+        }
+        // ∂(u·cosφ)/∂φ uses the neighbouring latitude rows' u·cosφ.
+        const iN = Math.max(0, i - 1);
+        const iS = Math.min(nlat - 1, i + 1);
+        const phiN = (90 - iN) * Math.PI / 180;
+        const phiS = (90 - iS) * Math.PI / 180;
+        const cosN = Math.cos(phiN);
+        const cosS = Math.cos(phiS);
+        const dPhiEff = (phiN - phiS);     // positive; N is bigger φ
+        for (let j = 0; j < nlon; j++) {
+            const jE = (j + 1) % nlon;
+            const jW = (j - 1 + nlon) % nlon;
+            const dvdlam = (v[i * nlon + jE] - v[i * nlon + jW]) / (2 * dLam);
+            const ucosN = u[iN * nlon + j] * cosN;
+            const ucosS = u[iS * nlon + j] * cosS;
+            const ducosdphi = (ucosN - ucosS) / dPhiEff;
+            out[i * nlon + j] = (dvdlam - ducosdphi) / (A_EARTH_PV * cosphi);
+        }
+    }
+    return out;
+}
 
 /** Invalidate any cached PV results — called when a new T or vo tile lands. */
 export function invalidatePVCache() { _pvCache.clear(); }
@@ -160,16 +200,19 @@ function computePVOnIsentrope(month, theta0) {
     const N = nlat * nlon;
     const nlev = LEVELS.length;
 
-    // Fetch every T and vo tile at the current month; bail if any are
-    // missing so the caller can retry when tiles land.
+    // Fetch every T, u, v tile at the current month; bail if any are
+    // missing so the caller can retry when tiles land. Relative vorticity
+    // is computed on the fly from u, v (ERA5 doesn't publish `vo` in our
+    // tile set).
     const Ts  = [];
     const vos = [];
     for (let k = 0; k < nlev; k++) {
-        const tT  = requestEra5('t',  { month, level: LEVELS[k] });
-        const tVo = requestEra5('vo', { month, level: LEVELS[k] });
-        if (!tT || !tVo) return null;
+        const tT = requestEra5('t', { month, level: LEVELS[k] });
+        const tU = requestEra5('u', { month, level: LEVELS[k] });
+        const tV = requestEra5('v', { month, level: LEVELS[k] });
+        if (!tT || !tU || !tV) return null;
         Ts.push(tT.values);
-        vos.push(tVo.values);
+        vos.push(relativeVorticityFromUV(tU.values, tV.values, nlat, nlon));
     }
 
     // θ at each level (index same as LEVELS).
