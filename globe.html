@@ -452,21 +452,63 @@
         }
         .view-toggle button:hover:not(.active) { color: var(--paper); background: rgba(255,255,255,0.05); }
 
-        /* ── Loading hint (only before scene is ready) ──────── */
-        .globe-hint {
+        /* ── Controls tips (bottom-right card) ─────────────── */
+        .tips-panel {
             position: absolute;
-            top: 50%; left: 50%;
-            transform: translate(-50%, -50%);
+            bottom: 18px;
+            right: 18px;
+            width: 260px;
+            padding: 12px 14px 12px;
+            background: rgba(12, 28, 24, 0.85);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            border: 1px solid var(--border);
+            border-radius: 10px;
             color: var(--sage);
-            font-size: 0.9rem;
-            font-family: 'JetBrains Mono', monospace;
-            letter-spacing: 0.08em;
-            z-index: 1;
-            pointer-events: none;
-            opacity: 0.55;
-            transition: opacity 0.6s ease;
+            font-size: 0.75rem;
+            z-index: 45;
+            transition: opacity 0.25s, transform 0.25s;
         }
-        .globe-hint.hidden { opacity: 0; }
+        .tips-panel.hidden { opacity: 0; pointer-events: none; transform: translateY(6px); }
+        .tips-title {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.68rem;
+            letter-spacing: 0.14em;
+            text-transform: uppercase;
+            color: var(--emerald-bright);
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .tips-title::before {
+            content: ''; width: 14px; height: 1px; background: var(--emerald-bright);
+        }
+        .tips-row { display: flex; gap: 10px; align-items: center; padding: 4px 0; }
+        .tips-kbd {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.72rem;
+            background: rgba(255,255,255,0.07);
+            color: var(--paper);
+            padding: 2px 7px;
+            border-radius: 4px;
+            min-width: 58px;
+            text-align: center;
+            border: 1px solid rgba(255,255,255,0.05);
+        }
+        .tips-desc { flex: 1; color: var(--sage); }
+        .tips-dismiss {
+            position: absolute;
+            top: 6px; right: 8px;
+            background: none; border: none;
+            color: var(--sage);
+            cursor: pointer;
+            font-size: 1rem;
+            line-height: 1;
+            padding: 2px 5px;
+            border-radius: 4px;
+        }
+        .tips-dismiss:hover { color: var(--paper); background: rgba(255,255,255,0.06); }
 
         /* ── Mobile drawer (hidden on desktop) ──────────────────── */
         .hamburger {
@@ -523,6 +565,7 @@
             .view-toggle { top: 72px; right: 14px; }  /* below topbar, clear of hamburger */
             .colorbar { left: 12px; right: 12px; bottom: 12px; min-width: 0; }
             .xsection { display: none; }
+            .tips-panel { display: none; }
             .topbar-nav { gap: 4px; }
             .topbar-nav a { padding: 5px 8px; font-size: 0.75rem; }
         }
@@ -636,7 +679,11 @@
 
     <section class="canvas-area">
         <div id="globe-mount"></div>
-        <div class="globe-hint">drag to rotate · shift+drag to draw cross-section · scroll to zoom</div>
+        <aside class="tips-panel" id="tips-panel">
+            <button class="tips-dismiss" id="tips-dismiss" aria-label="Dismiss tips">&times;</button>
+            <div class="tips-title" id="tips-title">Controls</div>
+            <div id="tips-content"></div>
+        </aside>
 
         <div class="view-toggle" role="group" aria-label="projection">
             <button id="view-globe" class="active" type="button">Globe</button>

@@ -158,19 +158,16 @@ class GlobeApp {
         this.controls.maxDistance = 8;
         this.controls.enablePan = false;
 
-        // Fade the on-canvas hint on first interaction (drag or scroll).
-        this.hint = document.querySelector('.globe-hint');
-        if (this.hint) {
-            const fade = () => {
-                this.hint.classList.add('hidden');
-                this.controls.removeEventListener('start', fade);
-                this.renderer.domElement.removeEventListener('pointerdown', fade);
-            };
-            this.controls.addEventListener('start', fade);
-            this.renderer.domElement.addEventListener('pointerdown', fade);
-            // Also auto-fade after 8 s if the user never touches it.
-            setTimeout(fade, 8000);
-        }
+        // Tips card in the bottom-right. Persistent (doesn't fade on
+        // interaction) until the user clicks the × — it's a reference for
+        // keyboard/mouse controls, not a first-run tutorial.
+        this.tipsPanel = document.getElementById('tips-panel');
+        this.tipsContent = document.getElementById('tips-content');
+        const dismiss = document.getElementById('tips-dismiss');
+        dismiss?.addEventListener('click', () => {
+            this.tipsPanel?.classList.add('hidden');
+        });
+        this.updateHintForViewMode();   // populate with the initial view's tips
 
         // Map-mode drag handler — shifts the central meridian instead of
         // panning the camera (OrbitControls.enablePan = false in map mode).
@@ -283,13 +280,29 @@ class GlobeApp {
     }
 
     updateHintForViewMode() {
-        if (!this.hint) return;
-        const txt = {
-            globe: 'drag to rotate · shift+drag to draw cross-section · scroll to zoom',
-            map:   'drag to pan · scroll to zoom',
-            orbit: 'drag to orbit · scroll to zoom',
-        }[this.state.viewMode] || '';
-        this.hint.textContent = txt;
+        if (!this.tipsContent) return;
+        // Three-row tips card with distinct kbd badges per row. Content
+        // swaps with view mode so each view only shows its relevant
+        // gestures.
+        const rows = {
+            globe: [
+                { kbd: 'drag',         desc: 'rotate the globe' },
+                { kbd: '⇧ + drag',    desc: 'draw cross-section arc' },
+                { kbd: 'scroll',       desc: 'zoom' },
+            ],
+            map: [
+                { kbd: 'drag',         desc: 'pan the central meridian' },
+                { kbd: 'scroll',       desc: 'zoom' },
+            ],
+            orbit: [
+                { kbd: 'drag',         desc: 'orbit the camera' },
+                { kbd: 'scroll',       desc: 'zoom' },
+            ],
+        }[this.state.viewMode] || [];
+        this.tipsContent.innerHTML = rows.map(r =>
+            `<div class="tips-row"><span class="tips-kbd">${r.kbd}</span>` +
+            `<span class="tips-desc">${r.desc}</span></div>`,
+        ).join('');
     }
 
     size() {
@@ -403,13 +416,20 @@ class GlobeApp {
         const endpointMat = new THREE.MeshBasicMaterial({
             color: 0xFFC74D, transparent: true, opacity: 0.95, depthTest: false,
         });
+        const midpointMat = new THREE.MeshBasicMaterial({
+            color: 0xFFE27A, transparent: true, opacity: 0.95, depthTest: false,
+        });
         const endpointGeom = new THREE.SphereGeometry(0.018, 16, 12);
+        const midpointGeom = new THREE.SphereGeometry(0.013, 16, 12);
         this.arcStartDot = new THREE.Mesh(endpointGeom, endpointMat);
         this.arcEndDot   = new THREE.Mesh(endpointGeom, endpointMat);
+        this.arcMidDot   = new THREE.Mesh(midpointGeom, midpointMat);
         this.arcStartDot.renderOrder = 8;
         this.arcEndDot.renderOrder = 8;
+        this.arcMidDot.renderOrder = 8;
         this.arcGroup.add(this.arcStartDot);
         this.arcGroup.add(this.arcEndDot);
+        this.arcGroup.add(this.arcMidDot);
         this.currentGroup().add(this.arcGroup);
 
         // Sun marker + day/night terminator. Both live in the scene (not the
@@ -841,11 +861,16 @@ class GlobeApp {
         this.arcLine.geometry = new LineGeometry();
         this.arcLine.geometry.setPositions(flat);
         this.arcLine.computeLineDistances();
-        // Endpoint dots pinned at the arc's start / end on the same lift.
+        // Endpoint dots + midpoint marker (aligns with the centre x-tick in
+        // the cross-section panel, so users can read off where the centre
+        // of the arc sits on the globe).
         const s = this.project(a.start.lat, a.start.lon, LIFT);
         const e = this.project(a.end.lat,   a.end.lon,   LIFT);
+        const midIdx = Math.floor(arc.length / 2);
+        const m = this.project(arc[midIdx].lat, arc[midIdx].lon, LIFT);
         this.arcStartDot.position.copy(s);
         this.arcEndDot.position.copy(e);
+        this.arcMidDot.position.copy(m);
         this.arcGroup.visible = this.state.showXSection && this.state.viewMode !== 'orbit';
     }
 
