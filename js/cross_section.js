@@ -73,8 +73,8 @@ function drawHeatmap(ctx, x0, y0, w, h, zm, cmap) {
     const { values, vmin, vmax, levels } = zm;
     const { nlat } = GRID;
     const nlev = levels.length;
-    const pMax = levels[nlev - 1];
-    const pMin = levels[0];
+    const pMax = levels[nlev - 1];   // largest pressure = surface
+    const pMin = levels[0];          // smallest pressure = stratosphere
     const logSpan = Math.log(pMax / pMin);
     const span = (vmax - vmin) || 1;
 
@@ -82,8 +82,10 @@ function drawHeatmap(ctx, x0, y0, w, h, zm, cmap) {
     const img = ctx.createImageData(iw, ih);
     const data = img.data;
 
+    // Atmospheric convention: py=0 (top of panel) → low pressure (stratosphere);
+    // py=ih-1 (bottom) → high pressure (surface).
     for (let py = 0; py < ih; py++) {
-        const p = pMax * Math.exp(-(py / (ih - 1)) * logSpan);
+        const p = pMin * Math.exp((py / (ih - 1)) * logSpan);
         // bracket p in the (ascending) levels array
         let k0 = 0;
         while (k0 < nlev - 1 && levels[k0 + 1] < p) k0++;
@@ -168,7 +170,7 @@ function drawAxes(ctx, x0, y0, w, h, zm) {
         const logSpan = Math.log(pMax / pMin);
         for (const p of P_TICKS) {
             if (p < pMin || p > pMax) continue;
-            const y = y0 + h * (Math.log(pMax / p) / logSpan);
+            const y = y0 + h * (Math.log(p / pMin) / logSpan);
             ctx.beginPath();
             ctx.moveTo(x0 - 3, y);
             ctx.lineTo(x0, y);
