@@ -7,6 +7,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { fillRGBA, fillColorbar, COLORMAPS } from './colormap.js';
 import { getField, FIELDS, LEVELS, MONTHS, GRID } from './data.js';
 import { ParticleField } from './particles.js';
+import { computeZonalMean, renderCrossSection } from './cross_section.js';
 
 const COASTLINE_URL = 'https://cdn.jsdelivr.net/gh/nvkelso/natural-earth-vector@master/geojson/ne_110m_coastline.geojson';
 const AXIAL_TILT = 23.4 * Math.PI / 180;
@@ -24,6 +25,7 @@ class GlobeApp {
             showCoastlines: true,
             showGraticule: true,
             showParticles: true,
+            showXSection: false,
         };
         this.windCache = { u: null, v: null, nlat: 0, nlon: 0, stale: true };
 
@@ -236,8 +238,25 @@ class GlobeApp {
         if ('showCoastlines' in patch && this.coastGroup) this.coastGroup.visible = !!patch.showCoastlines;
         if ('showGraticule' in patch && this.gratGroup)   this.gratGroup.visible   = !!patch.showGraticule;
         if ('showParticles' in patch && this.particles)   this.particles.setVisible(!!patch.showParticles);
-        if ('level' in patch || 'month' in patch)         this.windCache.stale = true;
+        if ('showXSection' in patch) {
+            const panel = document.getElementById('xsection-panel');
+            if (panel) panel.hidden = !patch.showXSection;
+        }
+        if ('level' in patch || 'month' in patch) this.windCache.stale = true;
         this.updateField();
+        if (this.state.showXSection) this.updateXSection();
+    }
+
+    updateXSection() {
+        const canvas = document.getElementById('xs-canvas');
+        if (!canvas) return;
+        const zm = computeZonalMean(this.state.field, this.state.month);
+        renderCrossSection(canvas, zm, this.state.cmap);
+        const title = document.getElementById('xs-title');
+        if (title) {
+            const suffix = zm.type === 'pl' ? '' : `  (${zm.units})`;
+            title.textContent = `Zonal mean · ${zm.name}${suffix}`;
+        }
     }
 
     updateField() {
@@ -305,6 +324,13 @@ class GlobeApp {
         });
         document.getElementById('toggle-particles').addEventListener('change', (e) => {
             this.setState({ showParticles: e.target.checked });
+        });
+        document.getElementById('toggle-xsection').addEventListener('change', (e) => {
+            this.setState({ showXSection: e.target.checked });
+        });
+        document.getElementById('xs-close').addEventListener('click', () => {
+            document.getElementById('toggle-xsection').checked = false;
+            this.setState({ showXSection: false });
         });
 
         this.refreshLevelAvailability();
