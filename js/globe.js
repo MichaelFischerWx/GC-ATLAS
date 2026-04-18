@@ -921,8 +921,10 @@ class GlobeApp {
             zm = computeZonalMean(field, month);
         }
         // Propagate display options into the renderer: gridlines always on,
-        // contours gated by the main Contours toggle.
-        zm.showContours = !!showContours;
+        // contours gated by the main Contours toggle for field sections,
+        // but forced on in diagnostic modes (ψ and M tell their story via
+        // isolines — contour slope IS the pedagogy).
+        zm.showContours = zm.isDiagnostic ? true : !!showContours;
         if (zm.contourInterval == null) {
             zm.contourInterval = FIELDS[field]?.contour || 0;
         }
@@ -944,7 +946,12 @@ class GlobeApp {
         }
         if (hint) {
             if (zm.isDiagnostic) {
-                hint.innerHTML = 'Zonal-mean diagnostic · pressure-integrated from TOA';
+                // Accurate footer per diagnostic.
+                const desc = {
+                    psi: 'ψ(φ, p) = (2π a cos φ / g) · ∫₀ᵖ [v] dp',
+                    M:   'M = (Ω a cos φ + u) · a cos φ · from zonal-mean u',
+                }[xsDiag] || 'Zonal-mean diagnostic';
+                hint.innerHTML = desc;
             } else if (zm.kind === 'arc') {
                 hint.innerHTML = '<span class="xs-kbd">⇧</span> + drag to redraw';
             } else {
