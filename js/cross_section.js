@@ -243,25 +243,28 @@ function drawArcAxes(ctx, x0, y0, w, h, zm) {
     ctx.lineWidth = 1;
 
     // Endpoint labels on the x-axis: start / middle / end (lat, lon).
-    const fmtPt = (p) => `${p.lat.toFixed(0)}°${p.lat >= 0 ? 'N' : 'S'} ${p.lon.toFixed(0)}°`;
+    // Align flush-left / centred / flush-right so the outer labels don't
+    // clip against the panel edge.
+    const fmtPt = (p) => `${Math.abs(Math.round(p.lat))}°${p.lat >= 0 ? 'N' : 'S'} ${Math.round(p.lon)}°`;
     const ticks = [
-        { t: 0.0, label: fmtPt(zm.arc[0]) },
-        { t: 0.5, label: fmtPt(zm.arc[Math.floor(zm.arc.length / 2)]) },
-        { t: 1.0, label: fmtPt(zm.arc[zm.arc.length - 1]) },
+        { t: 0.0, label: fmtPt(zm.arc[0]),                         align: 'left'   },
+        { t: 0.5, label: fmtPt(zm.arc[Math.floor(zm.arc.length / 2)]), align: 'center' },
+        { t: 1.0, label: fmtPt(zm.arc[zm.arc.length - 1]),         align: 'right'  },
     ];
-    ctx.textAlign = 'center';
     ctx.textBaseline = 'top';
-    for (const { t, label } of ticks) {
+    for (const { t, label, align } of ticks) {
         const x = x0 + t * w;
         ctx.beginPath();
         ctx.moveTo(x, y0 + h);
         ctx.lineTo(x, y0 + h + 3);
         ctx.stroke();
+        ctx.textAlign = align;
         ctx.fillText(label, x, y0 + h + 5);
     }
     // Distance caption under the middle tick.
     const distTxt = `${Math.round(zm.distanceKm).toLocaleString()} km`;
     ctx.textBaseline = 'bottom';
+    ctx.textAlign = 'center';
     ctx.fillStyle = 'rgba(174,195,182,0.7)';
     ctx.fillText(distTxt, x0 + w / 2, y0 + h + 22);
 
