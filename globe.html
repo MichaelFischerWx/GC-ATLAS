@@ -397,6 +397,29 @@
             height: 200px;
             border-radius: 4px;
         }
+        .xs-footer {
+            margin-top: 8px;
+            font-size: 0.72rem;
+            color: var(--sage);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 8px;
+        }
+        .xs-footer .xs-kbd {
+            font-family: 'JetBrains Mono', monospace;
+            background: rgba(255,255,255,0.06);
+            padding: 1px 5px;
+            border-radius: 3px;
+            color: var(--paper);
+        }
+        .xs-reset {
+            background: none; border: 1px solid var(--border);
+            color: var(--sage);
+            font: inherit; font-size: 0.72rem;
+            padding: 2px 8px; border-radius: 4px; cursor: pointer;
+        }
+        .xs-reset:hover { color: var(--paper); background: rgba(255,255,255,0.06); }
 
         /* ── View-mode toggle (Globe | Map) ──────────────────── */
         .view-toggle {
@@ -639,6 +662,10 @@
                 <button class="xs-close" id="xs-close" aria-label="Close panel">&times;</button>
             </div>
             <canvas id="xs-canvas" width="380" height="200"></canvas>
+            <div class="xs-footer">
+                <span id="xs-hint"><span class="xs-kbd">⇧</span> + drag globe to draw an arc</span>
+                <button class="xs-reset" id="xs-reset" type="button" hidden>Reset to zonal mean</button>
+            </div>
         </div>
     </section>
 

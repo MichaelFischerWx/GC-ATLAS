@@ -4,6 +4,9 @@
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { Line2 } from 'three/addons/lines/Line2.js';
+import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
+import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 import { fillRGBA, fillColorbar, COLORMAPS, meanLuminance } from './colormap.js';
 import { getField, FIELDS, LEVELS, MONTHS, GRID } from './data.js';
 import { ParticleField } from './particles.js';
@@ -300,6 +303,7 @@ class GlobeApp {
         this.camera.aspect = w / h;
         this.camera.updateProjectionMatrix();
         if (this.barbs) this.barbs.updateResolution(w, h);
+        if (this.arcLineMaterial) this.arcLineMaterial.resolution.set(w, h);
     }
 
     // ── meshes + data textures ───────────────────────────────────────
@@ -375,16 +379,38 @@ class GlobeApp {
         this.globeGroup.add(this.contourLabels.group);
         this.contourLabels.setVisible(this.state.showContours);
 
-        // Arc line for the cross-section feature (shift-drag to draw).
-        // Single line object, re-parented to the current view's group in
-        // setViewMode so it inherits tilt/projection correctly.
-        const arcMat = new THREE.LineBasicMaterial({
-            color: 0x2DBDA0, transparent: true, opacity: 0.95, depthTest: false,
+        // Arc for the cross-section feature (shift-drag to draw). Uses Line2
+        // (fat lines) so the stroke stays visible at any zoom; WebGL's
+        // built-in line rasteriser clamps to 1 px on most drivers. Two small
+        // amber spheres mark the endpoints so the direction of the arc reads
+        // at a glance.
+        this.arcGroup = new THREE.Group();
+        this.arcGroup.visible = false;
+        this.arcGroup.renderOrder = 7;
+        this.arcLineMaterial = new LineMaterial({
+            color: 0xFFE27A,
+            linewidth: 4,
+            worldUnits: false,
+            transparent: true,
+            opacity: 0.95,
+            depthTest: false,
+            resolution: new THREE.Vector2(window.innerWidth, window.innerHeight),
         });
-        this.arcLine = new THREE.Line(new THREE.BufferGeometry(), arcMat);
+        this.arcLine = new Line2(new LineGeometry(), this.arcLineMaterial);
         this.arcLine.renderOrder = 7;
-        this.arcLine.visible = false;
-        this.currentGroup().add(this.arcLine);
+        this.arcGroup.add(this.arcLine);
+
+        const endpointMat = new THREE.MeshBasicMaterial({
+            color: 0xFFC74D, transparent: true, opacity: 0.95, depthTest: false,
+        });
+        const endpointGeom = new THREE.SphereGeometry(0.018, 16, 12);
+        this.arcStartDot = new THREE.Mesh(endpointGeom, endpointMat);
+        this.arcEndDot   = new THREE.Mesh(endpointGeom, endpointMat);
+        this.arcStartDot.renderOrder = 8;
+        this.arcEndDot.renderOrder = 8;
+        this.arcGroup.add(this.arcStartDot);
+        this.arcGroup.add(this.arcEndDot);
+        this.currentGroup().add(this.arcGroup);
 
         // Sun marker + day/night terminator. Both live in the scene (not the
         // globeGroup) so their geometry is in world coords — the shadow
@@ -666,9 +692,9 @@ class GlobeApp {
             this.contourLabels.setProjection((lat, lon, r) => this.project(lat, lon, r));
             this.updateField();  // regenerate labels for new projection
         }
-        if (this.arcLine) {
-            this.arcLine.parent?.remove(this.arcLine);
-            overlayParent.add(this.arcLine);
+        if (this.arcGroup) {
+            this.arcGroup.parent?.remove(this.arcGroup);
+            overlayParent.add(this.arcGroup);
             this.updateArcLine();
         }
         this.applySunVisibility();
@@ -777,6 +803,8 @@ class GlobeApp {
         }
         renderCrossSection(canvas, zm, cmap);
         const title = document.getElementById('xs-title');
+        const hint  = document.getElementById('xs-hint');
+        const reset = document.getElementById('xs-reset');
         if (title) {
             if (zm.kind === 'arc') {
                 const km = Math.round(zm.distanceKm).toLocaleString();
@@ -787,18 +815,38 @@ class GlobeApp {
                 title.textContent = `Zonal mean · ${zm.name}${suffix}`;
             }
         }
+        if (hint) {
+            hint.innerHTML = zm.kind === 'arc'
+                ? '<span class="xs-kbd">⇧</span> + drag to redraw'
+                : '<span class="xs-kbd">⇧</span> + drag globe to draw an arc';
+        }
+        if (reset) reset.hidden = zm.kind !== 'arc';
         this.updateArcLine();
     }
 
     updateArcLine() {
-        if (!this.arcLine) return;
+        if (!this.arcGroup) return;
         const a = this.state.xsArc;
-        if (!a) { this.arcLine.visible = false; return; }
+        if (!a) { this.arcGroup.visible = false; return; }
         const arc = greatCircleArc(a.start.lat, a.start.lon, a.end.lat, a.end.lon, 96);
-        const pts = arc.map(({ lat, lon }) => this.project(lat, lon, 1.008));
+        const LIFT = 1.015;
+        const pts = arc.map(({ lat, lon }) => this.project(lat, lon, LIFT));
+        const flat = new Float32Array(pts.length * 3);
+        for (let i = 0; i < pts.length; i++) {
+            flat[i * 3]     = pts[i].x;
+            flat[i * 3 + 1] = pts[i].y;
+            flat[i * 3 + 2] = pts[i].z;
+        }
         this.arcLine.geometry.dispose();
-        this.arcLine.geometry = new THREE.BufferGeometry().setFromPoints(pts);
-        this.arcLine.visible = this.state.showXSection && this.state.viewMode !== 'orbit';
+        this.arcLine.geometry = new LineGeometry();
+        this.arcLine.geometry.setPositions(flat);
+        this.arcLine.computeLineDistances();
+        // Endpoint dots pinned at the arc's start / end on the same lift.
+        const s = this.project(a.start.lat, a.start.lon, LIFT);
+        const e = this.project(a.end.lat,   a.end.lon,   LIFT);
+        this.arcStartDot.position.copy(s);
+        this.arcEndDot.position.copy(e);
+        this.arcGroup.visible = this.state.showXSection && this.state.viewMode !== 'orbit';
     }
 
     updateField() {
@@ -1015,6 +1063,9 @@ class GlobeApp {
         });
         document.getElementById('toggle-xsection').addEventListener('change', (e) => {
             this.setState({ showXSection: e.target.checked });
+        });
+        document.getElementById('xs-reset')?.addEventListener('click', () => {
+            this.setState({ xsArc: null });
         });
         document.getElementById('xs-close').addEventListener('click', () => {
             document.getElementById('toggle-xsection').checked = false;

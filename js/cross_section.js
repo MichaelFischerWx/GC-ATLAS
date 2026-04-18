@@ -147,13 +147,27 @@ export function computeArcCrossSection(fieldName, month, arc) {
 }
 
 export function renderCrossSection(canvas, zm, cmap) {
+    // Retina-aware: size the canvas buffer to DPR × CSS size so text and
+    // heatmap pixels stay crisp on high-density displays. All drawing ops
+    // below use buffer (physical-pixel) coords, so padding and font sizes
+    // scale with DPR to preserve CSS-proportion spacing.
+    const DPR = Math.min(window.devicePixelRatio || 1, 2);
+    const cssW = canvas.clientWidth  || 380;
+    const cssH = canvas.clientHeight || 200;
+    if (canvas.width !== cssW * DPR || canvas.height !== cssH * DPR) {
+        canvas.width  = cssW * DPR;
+        canvas.height = cssH * DPR;
+    }
     const ctx = canvas.getContext('2d');
     const W = canvas.width, H = canvas.height;
     ctx.clearRect(0, 0, W, H);
 
-    const padL = 42, padR = 10, padT = 10, padB = 26;
+    const padL = 42 * DPR, padR = 10 * DPR, padT = 10 * DPR, padB = 26 * DPR;
     const plotW = W - padL - padR;
     const plotH = H - padT - padB;
+
+    // Stash DPR on the zm object so the draw fns can scale fonts + strokes.
+    zm._dpr = DPR;
 
     if (zm.kind === 'arc') {
         if (zm.type === 'pl') drawArcHeatmap(ctx, padL, padT, plotW, plotH, zm, cmap);
@@ -217,12 +231,13 @@ function drawArcHeatmap(ctx, x0, y0, w, h, zm, cmap) {
 function drawArcLine(ctx, x0, y0, w, h, zm) {
     const { values, vmin, vmax, nSamples } = zm;
     const span = (vmax - vmin) || 1;
+    const dpr = zm._dpr || 1;
     ctx.strokeStyle = 'rgba(255,255,255,0.18)';
-    ctx.lineWidth = 1;
+    ctx.lineWidth = dpr;
     ctx.strokeRect(x0 + 0.5, y0 + 0.5, w, h);
 
     ctx.strokeStyle = '#2DBDA0';
-    ctx.lineWidth = 2;
+    ctx.lineWidth = 2 * dpr;
     ctx.beginPath();
     let started = false;
     for (let j = 0; j < nSamples; j++) {
@@ -237,10 +252,11 @@ function drawArcLine(ctx, x0, y0, w, h, zm) {
 }
 
 function drawArcAxes(ctx, x0, y0, w, h, zm) {
-    ctx.font = "10px 'JetBrains Mono', monospace";
+    const dpr = zm._dpr || 1;
+    ctx.font = `${10 * dpr}px 'JetBrains Mono', monospace`;
     ctx.fillStyle = '#AEC3B6';
     ctx.strokeStyle = 'rgba(255,255,255,0.25)';
-    ctx.lineWidth = 1;
+    ctx.lineWidth = dpr;
 
     // Endpoint labels on the x-axis: start / middle / end (lat, lon).
     // Align flush-left / centred / flush-right so the outer labels don't
@@ -256,17 +272,17 @@ function drawArcAxes(ctx, x0, y0, w, h, zm) {
         const x = x0 + t * w;
         ctx.beginPath();
         ctx.moveTo(x, y0 + h);
-        ctx.lineTo(x, y0 + h + 3);
+        ctx.lineTo(x, y0 + h + 3 * dpr);
         ctx.stroke();
         ctx.textAlign = align;
-        ctx.fillText(label, x, y0 + h + 5);
+        ctx.fillText(label, x, y0 + h + 5 * dpr);
     }
     // Distance caption under the middle tick.
     const distTxt = `${Math.round(zm.distanceKm).toLocaleString()} km`;
     ctx.textBaseline = 'bottom';
     ctx.textAlign = 'center';
     ctx.fillStyle = 'rgba(174,195,182,0.7)';
-    ctx.fillText(distTxt, x0 + w / 2, y0 + h + 22);
+    ctx.fillText(distTxt, x0 + w / 2, y0 + h + 22 * dpr);
 
     // Pressure ticks on the y-axis (pl fields only).
     ctx.textAlign = 'right';
@@ -280,20 +296,20 @@ function drawArcAxes(ctx, x0, y0, w, h, zm) {
             if (p < pMin || p > pMax) continue;
             const y = y0 + h * (Math.log(p / pMin) / logSpan);
             ctx.beginPath();
-            ctx.moveTo(x0 - 3, y);
+            ctx.moveTo(x0 - 3 * dpr, y);
             ctx.lineTo(x0, y);
             ctx.stroke();
-            ctx.fillText(`${p}`, x0 - 5, y);
+            ctx.fillText(`${p}`, x0 - 5 * dpr, y);
         }
         ctx.save();
-        ctx.translate(x0 - 30, y0 + h / 2);
+        ctx.translate(x0 - 30 * dpr, y0 + h / 2);
         ctx.rotate(-Math.PI / 2);
         ctx.textAlign = 'center';
         ctx.fillText('hPa', 0, 0);
         ctx.restore();
     } else {
-        ctx.fillText(zm.vmax.toFixed(0), x0 - 5, y0 + 4);
-        ctx.fillText(zm.vmin.toFixed(0), x0 - 5, y0 + h - 4);
+        ctx.fillText(zm.vmax.toFixed(0), x0 - 5 * dpr, y0 + 4 * dpr);
+        ctx.fillText(zm.vmin.toFixed(0), x0 - 5 * dpr, y0 + h - 4 * dpr);
     }
 }
 
@@ -356,13 +372,14 @@ function drawLine(ctx, x0, y0, w, h, zm) {
     const { values, vmin, vmax } = zm;
     const { nlat } = GRID;
     const span = (vmax - vmin) || 1;
+    const dpr = zm._dpr || 1;
 
     ctx.strokeStyle = 'rgba(255,255,255,0.18)';
-    ctx.lineWidth = 1;
+    ctx.lineWidth = dpr;
     ctx.strokeRect(x0 + 0.5, y0 + 0.5, w, h);
 
     ctx.strokeStyle = '#2DBDA0';
-    ctx.lineWidth = 2;
+    ctx.lineWidth = 2 * dpr;
     ctx.beginPath();
     for (let i = 0; i < nlat; i++) {
         const lat = 90 - i;
@@ -374,10 +391,11 @@ function drawLine(ctx, x0, y0, w, h, zm) {
 }
 
 function drawAxes(ctx, x0, y0, w, h, zm) {
-    ctx.font = "10px 'JetBrains Mono', monospace";
+    const dpr = zm._dpr || 1;
+    ctx.font = `${10 * dpr}px 'JetBrains Mono', monospace`;
     ctx.fillStyle = '#AEC3B6';
     ctx.strokeStyle = 'rgba(255,255,255,0.25)';
-    ctx.lineWidth = 1;
+    ctx.lineWidth = dpr;
 
     ctx.textAlign = 'center';
     ctx.textBaseline = 'top';
@@ -385,9 +403,9 @@ function drawAxes(ctx, x0, y0, w, h, zm) {
         const x = x0 + ((lat + 90) / 180) * w;
         ctx.beginPath();
         ctx.moveTo(x, y0 + h);
-        ctx.lineTo(x, y0 + h + 3);
+        ctx.lineTo(x, y0 + h + 3 * dpr);
         ctx.stroke();
-        ctx.fillText(`${lat}°`, x, y0 + h + 5);
+        ctx.fillText(`${lat}°`, x, y0 + h + 5 * dpr);
     }
 
     ctx.textAlign = 'right';
@@ -400,19 +418,19 @@ function drawAxes(ctx, x0, y0, w, h, zm) {
             if (p < pMin || p > pMax) continue;
             const y = y0 + h * (Math.log(p / pMin) / logSpan);
             ctx.beginPath();
-            ctx.moveTo(x0 - 3, y);
+            ctx.moveTo(x0 - 3 * dpr, y);
             ctx.lineTo(x0, y);
             ctx.stroke();
-            ctx.fillText(`${p}`, x0 - 5, y);
+            ctx.fillText(`${p}`, x0 - 5 * dpr, y);
         }
         ctx.save();
-        ctx.translate(x0 - 30, y0 + h / 2);
+        ctx.translate(x0 - 30 * dpr, y0 + h / 2);
         ctx.rotate(-Math.PI / 2);
         ctx.textAlign = 'center';
         ctx.fillText('hPa', 0, 0);
         ctx.restore();
     } else {
-        ctx.fillText(zm.vmax.toFixed(0), x0 - 5, y0 + 4);
-        ctx.fillText(zm.vmin.toFixed(0), x0 - 5, y0 + h - 4);
+        ctx.fillText(zm.vmax.toFixed(0), x0 - 5 * dpr, y0 + 4 * dpr);
+        ctx.fillText(zm.vmin.toFixed(0), x0 - 5 * dpr, y0 + h - 4 * dpr);
     }
 }
