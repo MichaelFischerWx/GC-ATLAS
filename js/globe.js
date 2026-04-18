@@ -172,8 +172,69 @@ class GlobeApp {
         // Map-mode drag handler — shifts the central meridian instead of
         // panning the camera (OrbitControls.enablePan = false in map mode).
         this.installMapDrag();
+        // Globe-mode shift-drag: draw a great-circle arc for the cross-section.
+        this.installArcDrag();
 
         window.addEventListener('resize', () => this.onResize());
+    }
+
+    installArcDrag() {
+        const el = this.renderer.domElement;
+        const raycaster = new THREE.Raycaster();
+        const ndc = new THREE.Vector2();
+        let dragging = false;
+        let startPt = null;
+
+        const pointToLatLon = (e) => {
+            if (this.state.viewMode !== 'globe' || !this.globe) return null;
+            const rect = el.getBoundingClientRect();
+            ndc.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+            ndc.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+            raycaster.setFromCamera(ndc, this.camera);
+            const hits = raycaster.intersectObject(this.globe);
+            if (hits.length === 0) return null;
+            const local = this.globeGroup.worldToLocal(hits[0].point.clone());
+            const n = local.length() || 1;
+            return {
+                lat: Math.asin(local.y / n) * 180 / Math.PI,
+                lon: Math.atan2(local.x, local.z) * 180 / Math.PI,
+            };
+        };
+
+        el.addEventListener('pointerdown', (e) => {
+            if (!e.shiftKey) return;
+            if (this.state.viewMode !== 'globe') return;
+            const p = pointToLatLon(e);
+            if (!p) return;
+            dragging = true;
+            startPt = p;
+            this.controls.enabled = false;        // pause OrbitControls for this drag
+            e.preventDefault();
+            el.setPointerCapture(e.pointerId);
+            // Open the cross-section panel if it isn't already.
+            if (!this.state.showXSection) {
+                const chk = document.getElementById('toggle-xsection');
+                if (chk) chk.checked = true;
+                this.setState({ showXSection: true });
+            }
+            this.setState({ xsArc: { start: p, end: p } });
+        });
+
+        el.addEventListener('pointermove', (e) => {
+            if (!dragging) return;
+            const p = pointToLatLon(e);
+            if (!p) return;
+            this.setState({ xsArc: { start: startPt, end: p } });
+        });
+
+        const endDrag = (e) => {
+            if (!dragging) return;
+            dragging = false;
+            this.controls.enabled = true;
+            try { el.releasePointerCapture(e.pointerId); } catch { /* ignore */ }
+        };
+        el.addEventListener('pointerup', endDrag);
+        el.addEventListener('pointercancel', endDrag);
     }
 
     installMapDrag() {
@@ -221,7 +282,7 @@ class GlobeApp {
     updateHintForViewMode() {
         if (!this.hint) return;
         const txt = {
-            globe: 'drag to rotate · scroll to zoom',
+            globe: 'drag to rotate · shift+drag to draw cross-section · scroll to zoom',
             map:   'drag to pan · scroll to zoom',
             orbit: 'drag to orbit · scroll to zoom',
         }[this.state.viewMode] || '';
@@ -672,6 +733,7 @@ class GlobeApp {
             }
         }
         if ('mapCenterLon' in patch) this.applyMapCenterLon();
+        if ('xsArc' in patch) this.updateArcLine();
         if ('showXSection' in patch) {
             const panel = document.getElementById('xsection-panel');
             if (panel) panel.hidden = !patch.showXSection;
