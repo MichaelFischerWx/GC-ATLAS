@@ -25,10 +25,54 @@ import * as THREE from 'three';
 const AXIAL_TILT   = 23.4 * Math.PI / 180;
 const ORBIT_RADIUS = 3.0;
 const EARTH_R      = 0.22;
-const SUN_R        = 0.55;
+const SUN_R        = 0.42;            // diameter of the bright disk
+const GLOW_R       = SUN_R * 5.2;     // outer soft halo reach
 const AXIS_LEN     = EARTH_R * 1.7;   // stub out past each pole
 const DASH_N       = 96;              // segments around the dashed ring
 const MONTH_RAD    = Math.PI / 6;     // 30° per month
+
+function makeSunTexture(size = 256) {
+    const canvas = document.createElement('canvas');
+    canvas.width = canvas.height = size;
+    const ctx = canvas.getContext('2d');
+    const r = size / 2;
+    // Radial gradient with limb darkening: white-hot core → yellow → amber →
+    // faint orange → transparent. Alpha tapers off so the disk has a soft
+    // edge rather than a hard circle on a dark background.
+    const g = ctx.createRadialGradient(r, r, 0, r, r, r);
+    g.addColorStop(0.00, 'rgba(255, 253, 240, 1.00)');
+    g.addColorStop(0.22, 'rgba(255, 240, 170, 1.00)');
+    g.addColorStop(0.45, 'rgba(255, 205, 100, 0.95)');
+    g.addColorStop(0.62, 'rgba(255, 155, 60,  0.70)');
+    g.addColorStop(0.80, 'rgba(255, 110, 40,  0.28)');
+    g.addColorStop(0.92, 'rgba(255, 80,  30,  0.08)');
+    g.addColorStop(1.00, 'rgba(255, 70,  30,  0.00)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, size, size);
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    return tex;
+}
+
+function makeGlowTexture(size = 512) {
+    const canvas = document.createElement('canvas');
+    canvas.width = canvas.height = size;
+    const ctx = canvas.getContext('2d');
+    const r = size / 2;
+    // Wide, soft halo — deliberately warm and low-alpha so additive blending
+    // on a dark scene produces a gentle lift rather than an olive tint.
+    const g = ctx.createRadialGradient(r, r, 0, r, r, r);
+    g.addColorStop(0.00, 'rgba(255, 190, 110, 0.32)');
+    g.addColorStop(0.18, 'rgba(255, 150, 70,  0.18)');
+    g.addColorStop(0.40, 'rgba(255, 110, 40,  0.07)');
+    g.addColorStop(0.70, 'rgba(255, 80,  30,  0.02)');
+    g.addColorStop(1.00, 'rgba(255, 60,  30,  0.00)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, size, size);
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    return tex;
+}
 
 function sunDirectionFromEarth(month) {
     const theta = month * MONTH_RAD;
@@ -68,17 +112,29 @@ export class OrbitScene {
         this.group.visible = false;
 
         // ── Sun ────────────────────────────────────────────────────────
-        const sunMat = new THREE.MeshBasicMaterial({ color: 0xffd668 });
-        this.sunMesh = new THREE.Mesh(new THREE.SphereGeometry(SUN_R, 48, 32), sunMat);
-        this.group.add(this.sunMesh);
-
-        // Soft additive glow so the sun reads as luminous.
-        const glowMat = new THREE.MeshBasicMaterial({
-            color: 0xffae3a, transparent: true, opacity: 0.22,
-            blending: THREE.AdditiveBlending, depthWrite: false,
-        });
-        this.sunGlow = new THREE.Mesh(new THREE.SphereGeometry(SUN_R * 1.8, 32, 24), glowMat);
+        // The sun is built from layered camera-facing sprites: a soft wide
+        // halo underneath (additive), then the bright disk with limb
+        // darkening on top. Two sprites beats a sphere + ring here because
+        // real suns read as luminous disks from any viewing angle, and the
+        // additive halo composites cleanly against the dark background.
+        this.sunGlow = new THREE.Sprite(new THREE.SpriteMaterial({
+            map: makeGlowTexture(),
+            transparent: true,
+            depthWrite: false,
+            blending: THREE.AdditiveBlending,
+        }));
+        this.sunGlow.scale.set(GLOW_R * 2, GLOW_R * 2, 1);
         this.group.add(this.sunGlow);
+
+        this.sunDisk = new THREE.Sprite(new THREE.SpriteMaterial({
+            map: makeSunTexture(),
+            transparent: true,
+            depthWrite: false,
+            blending: THREE.AdditiveBlending,
+        }));
+        this.sunDisk.scale.set(SUN_R * 2.4, SUN_R * 2.4, 1);
+        this.sunDisk.renderOrder = 1;
+        this.group.add(this.sunDisk);
 
         // ── Ecliptic ring (dashed) ─────────────────────────────────────
         const ringPts = [];
