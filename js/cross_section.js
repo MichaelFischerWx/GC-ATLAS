@@ -224,7 +224,7 @@ function drawArcHeatmap(ctx, x0, y0, w, h, zm, cmap) {
     }
     ctx.putImageData(img, x0, y0);
     ctx.strokeStyle = 'rgba(255,255,255,0.22)';
-    ctx.lineWidth = 1;
+    ctx.lineWidth = zm._dpr || 1;
     ctx.strokeRect(x0 + 0.5, y0 + 0.5, w, h);
 }
 
@@ -352,9 +352,15 @@ function drawHeatmap(ctx, x0, y0, w, h, zm, cmap) {
             const vB = v10 * (1 - fLat) + v11 * fLat;
             const v  = vT * (1 - fLev) + vB * fLev;
 
+            const k = (py * iw + px) * 4;
+            if (!Number.isFinite(v)) {
+                // Tile still loading → NaN; paint as no-data instead of
+                // crashing downstream sample(cmap, NaN).
+                data[k] = 18; data[k+1] = 26; data[k+2] = 22; data[k+3] = 255;
+                continue;
+            }
             const t = (v - vmin) / span;
             const [r, g, b] = sample(cmap, t);
-            const k = (py * iw + px) * 4;
             data[k]     = r * 255;
             data[k + 1] = g * 255;
             data[k + 2] = b * 255;
@@ -364,7 +370,7 @@ function drawHeatmap(ctx, x0, y0, w, h, zm, cmap) {
     ctx.putImageData(img, x0, y0);
 
     ctx.strokeStyle = 'rgba(255,255,255,0.22)';
-    ctx.lineWidth = 1;
+    ctx.lineWidth = zm._dpr || 1;
     ctx.strokeRect(x0 + 0.5, y0 + 0.5, w, h);
 }
 
