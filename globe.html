@@ -202,6 +202,7 @@
             line-height: 1.55;
         }
         .sidebar-footer strong { color: var(--amber); display: block; margin-bottom: 4px; font-size: 0.72rem; letter-spacing: 0.1em; text-transform: uppercase; font-family: 'JetBrains Mono', monospace; }
+        .sidebar-footer code { font-family: 'JetBrains Mono', monospace; font-size: 0.85em; background: rgba(255,255,255,0.06); padding: 1px 5px; border-radius: 3px; color: var(--paper); }
 
         /* ── Canvas area ────────────────────────────────────── */
         .canvas-area {
@@ -393,7 +394,7 @@
             <label class="check"><input type="checkbox" id="toggle-xsection"> Zonal-mean cross-section</label>
         </section>
 
-        <div class="sidebar-footer">
+        <div class="sidebar-footer" id="sidebar-status">
             <strong>Synthetic data</strong>
             The globe is showing procedural fields shaped to look like ERA5 — a placeholder until the real climatology finishes staging. Everything you see will be replaced with observed 1991–2020 means.
         </div>

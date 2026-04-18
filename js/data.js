@@ -1,8 +1,15 @@
-// Synthetic "ERA5-like" fields for renderer development.
-// These are NOT real reanalysis data — they produce pedagogically plausible
-// shapes (mid-latitude jets, Hadley return, stationary waves, subtropical highs)
-// so we can build and validate the renderer before the ERA5 climatology lands.
-// When ERA5 is staged, swap the getField() body for a Zarr loader.
+// Field provider for the globe.
+//
+// getField() first asks the ERA5 tile loader (js/era5.js); if the tile isn't
+// cached yet, it returns the synthetic placeholder below and the loader
+// triggers a background fetch — when it completes, the loader fires an event
+// and the caller re-renders.
+//
+// The synthetic fields produce pedagogically plausible shapes (mid-latitude
+// jets, Hadley return, stationary waves, subtropical highs). They exist so
+// the renderer works offline / before real tiles are staged.
+
+import { requestField as requestEra5, availableLevels } from './era5.js';
 
 export const GRID = { nlat: 181, nlon: 360 };
 export const LEVELS = [10, 50, 100, 150, 200, 250, 300, 500, 700, 850, 925, 1000];
@@ -169,24 +176,56 @@ function fieldT2M(month) {
 
 // ── public API ───────────────────────────────────────────────────────────
 
-/** Return { values, vmin, vmax, shape, lats, lons, name, units, cmap, type }. */
+function syntheticField(name, month, level) {
+    switch (name) {
+        case 't':   return fieldT(month, level);
+        case 'u':   return fieldU(month, level);
+        case 'v':   return fieldV(month, level);
+        case 'z':   return fieldZ(month, level);
+        case 'msl': return fieldMSL(month);
+        case 't2m': return fieldT2M(month);
+        default:    throw new Error(`no generator for ${name}`);
+    }
+}
+
+/**
+ * Return { values, vmin, vmax, shape, lats, lons, name, units, cmap, type, isReal }.
+ * Prefers real ERA5 tiles when cached; falls back to synthetic (the ERA5
+ * loader will fire an event when the tile arrives so the caller can re-render).
+ */
 export function getField(name, { month = 1, level = 500 } = {}) {
     const meta = FIELDS[name];
     if (!meta) throw new Error(`unknown field: ${name}`);
-    let data;
-    switch (name) {
-        case 't':   data = fieldT(month, level); break;
-        case 'u':   data = fieldU(month, level); break;
-        case 'v':   data = fieldV(month, level); break;
-        case 'z':   data = fieldZ(month, level); break;
-        case 'msl': data = fieldMSL(month); break;
-        case 't2m': data = fieldT2M(month); break;
-        default:    throw new Error(`no generator for ${name}`);
+
+    const era = requestEra5(name, { month, level });
+    if (era) {
+        return {
+            values: era.values,
+            vmin: era.vmin, vmax: era.vmax,
+            shape: era.shape ?? [GRID.nlat, GRID.nlon],
+            lats: LATS, lons: LONS,
+            ...meta,
+            long_name: era.long_name || meta.name,
+            units: era.units || meta.units,
+            isReal: true,
+        };
     }
+
+    const data = syntheticField(name, month, level);
     return {
         ...data,
         shape: [GRID.nlat, GRID.nlon],
         lats: LATS, lons: LONS,
         ...meta,
+        isReal: false,
     };
+}
+
+/** True if ERA5 has the listed level (or sl fields w/ no level required). */
+export function hasRealLevel(name, level) {
+    const meta = FIELDS[name];
+    if (!meta) return false;
+    if (meta.type === 'sl') return true;
+    const levels = availableLevels(name);
+    return !!(levels && levels.includes(level));
 }

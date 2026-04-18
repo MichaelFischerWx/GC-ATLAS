@@ -8,6 +8,7 @@ import { fillRGBA, fillColorbar, COLORMAPS } from './colormap.js';
 import { getField, FIELDS, LEVELS, MONTHS, GRID } from './data.js';
 import { ParticleField } from './particles.js';
 import { computeZonalMean, renderCrossSection } from './cross_section.js';
+import { loadManifest, onFieldLoaded, isReady as era5Ready } from './era5.js';
 
 const COASTLINE_URL = 'https://cdn.jsdelivr.net/gh/nvkelso/natural-earth-vector@master/geojson/ne_110m_coastline.geojson';
 const AXIAL_TILT = 23.4 * Math.PI / 180;
@@ -37,6 +38,27 @@ class GlobeApp {
         this.bindUI();
         this.updateField();
         this.animate();
+        this.bootstrapEra5();
+    }
+
+    // ── ERA5 tile loader bootstrap ───────────────────────────────────
+    async bootstrapEra5() {
+        const ok = await loadManifest();
+        if (!ok) return;
+        onFieldLoaded(({ name, month, level }) => {
+            const s = this.state;
+            const matches = (name === s.field) && (month === s.month) &&
+                (level == null || level === s.level);
+            if (matches) this.updateField();
+            if (name === 'u' || name === 'v') {
+                this.windCache.stale = true;
+            }
+            if (s.showXSection && name === s.field && month === s.month) {
+                this.updateXSection();
+            }
+        });
+        // Prime: ask for the current field, which triggers a fetch.
+        this.updateField();
     }
 
     // ── scene / camera / controls ────────────────────────────────────
@@ -265,7 +287,20 @@ class GlobeApp {
         fillRGBA(this.imageData.data, f.values, { vmin: f.vmin, vmax: f.vmax, cmap });
         this.ctx.putImageData(this.imageData, 0, 0);
         this.texture.needsUpdate = true;
+        this.updateStatus(f);
         this.emit('field-updated', { field: f });
+    }
+
+    updateStatus(f) {
+        const el = document.getElementById('sidebar-status');
+        if (!el) return;
+        if (f.isReal) {
+            el.innerHTML = '<strong>ERA5 · 1991–2020</strong>' +
+                'Real monthly-mean climatology at 1° grid. Tiles served from <code>data/tiles/</code>.';
+        } else {
+            el.innerHTML = '<strong>Synthetic preview</strong>' +
+                'Procedural placeholder. The ERA5 tile for this field/month/level is not yet cached (or the pipeline hasn\'t produced it). Run a local HTTP server so the browser can fetch <code>data/tiles/</code>.';
+        }
     }
 
     // ── mini event bus ────────────────────────────────────────────────
