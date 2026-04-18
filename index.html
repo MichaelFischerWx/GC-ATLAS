@@ -1,0 +1,785 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="GC-ATLAS: An interactive atlas of Earth's atmospheric general circulation. ERA5 climatology on a spinnable globe, built for teaching graduate atmospheric dynamics.">
+    <meta name="keywords" content="atmospheric general circulation, ERA5, reanalysis, Hadley cell, jet stream, stationary waves, storm tracks, teaching, graduate atmospheric science">
+    <meta name="author" content="Dr. Michael Fischer, University of Miami">
+
+    <!-- Open Graph -->
+    <meta property="og:type" content="website">
+    <meta property="og:title" content="GC-ATLAS — The Atmospheric General Circulation Atlas">
+    <meta property="og:description" content="Explore Earth's atmospheric base state interactively. ERA5 climatology, cross-sections, EP flux, Lagrangian parcels, and guided tours — a teaching atlas for graduate atmospheric dynamics.">
+    <meta property="og:url" content="https://michaelfischerwx.github.io/GC-ATLAS/">
+    <meta property="og:site_name" content="GC-ATLAS">
+
+    <title>GC-ATLAS — The Atmospheric General Circulation Atlas</title>
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+    <style>
+        :root {
+            /* ── Thalo-green earth palette ───────────────────── */
+            --deep:           #061612;   /* page background, near-black with green bias */
+            --thalo-dark:     #0C2420;   /* topbar */
+            --thalo:          #123524;   /* section surface */
+            --thalo-raised:   #184536;   /* cards, panels */
+            --thalo-line:     #215946;   /* borders, rules */
+            --emerald:        #0E8C6E;   /* primary accent (Thalo-green pigment) */
+            --emerald-bright: #2DBDA0;   /* hover, active */
+            --emerald-glow:   rgba(45, 189, 160, 0.22);
+            --sage:           #8BB0A1;   /* secondary text */
+            --paper:          #E6EFE9;   /* primary text */
+            --paper-dim:      #AEC3B6;   /* tertiary text */
+            --ochre:          #D4A84B;   /* warm accent, sun/earth contrast */
+            --amber:          #E8C26A;   /* highlight */
+            --clay:           #A26A45;   /* deep earth */
+            --sky:            #7FB8B5;   /* cool atmospheric accent */
+            --violet:         #A98AC7;   /* stratosphere / variability accent */
+            --border:         rgba(255,255,255,0.07);
+            --border-light:   rgba(255,255,255,0.12);
+            --radius:         8px;
+            --radius-lg:      14px;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        html { scroll-behavior: smooth; }
+        body {
+            font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            line-height: 1.6;
+            color: var(--paper);
+            background: var(--deep);
+            min-height: 100vh;
+        }
+
+        /* ── Top bar ─────────────────────────────────────── */
+        .topbar {
+            background: rgba(12, 36, 32, 0.85);
+            border-bottom: 1px solid var(--border);
+            position: sticky;
+            top: 0;
+            z-index: 1000;
+            backdrop-filter: blur(14px);
+            -webkit-backdrop-filter: blur(14px);
+        }
+        .topbar-inner {
+            max-width: 1280px;
+            margin: 0 auto;
+            padding: 0 24px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            height: 56px;
+        }
+        .topbar-brand { display: flex; align-items: center; gap: 12px; }
+        .topbar-mark {
+            width: 28px; height: 28px;
+            display: grid; place-items: center;
+            border-radius: 6px;
+            background: radial-gradient(circle at 35% 30%, var(--emerald-bright), var(--emerald) 55%, #062f25 100%);
+            box-shadow: 0 0 18px var(--emerald-glow), inset 0 0 6px rgba(255,255,255,0.15);
+        }
+        .topbar-mark svg { width: 18px; height: 18px; color: var(--paper); opacity: 0.9; }
+        .topbar-logo {
+            font-size: 1.25rem;
+            font-weight: 700;
+            letter-spacing: 0.02em;
+            color: var(--paper);
+        }
+        .topbar-logo .accent {
+            background: linear-gradient(135deg, var(--emerald-bright) 0%, var(--sky) 80%);
+            -webkit-background-clip: text;
+            background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        .topbar-nav { display: flex; gap: 4px; list-style: none; align-items: center; }
+        .topbar-nav a {
+            color: var(--sage);
+            text-decoration: none;
+            font-weight: 500;
+            font-size: 0.82rem;
+            padding: 6px 12px;
+            border-radius: 6px;
+            transition: all 0.2s;
+        }
+        .topbar-nav a:hover { color: var(--paper); background: rgba(255,255,255,0.05); }
+        .topbar-nav a.nav-active { color: var(--paper); background: rgba(14, 140, 110, 0.18); }
+        .nav-hamburger {
+            display: none;
+            background: none;
+            border: 1px solid var(--border-light);
+            color: var(--sage);
+            font-size: 1.2rem;
+            padding: 4px 10px;
+            border-radius: 6px;
+            cursor: pointer;
+            line-height: 1;
+        }
+
+        /* ── Hero ────────────────────────────────────────── */
+        .hero {
+            min-height: calc(100vh - 56px);
+            display: grid;
+            grid-template-columns: 1.1fr 1fr;
+            gap: 3rem;
+            align-items: center;
+            padding: 4rem 24px 5rem;
+            max-width: 1280px;
+            margin: 0 auto;
+            position: relative;
+            overflow: hidden;
+        }
+        .hero::before {
+            content: '';
+            position: absolute;
+            inset: -30% -10% -30% -10%;
+            background:
+                radial-gradient(ellipse at 20% 30%, rgba(14, 140, 110, 0.18) 0%, transparent 55%),
+                radial-gradient(ellipse at 80% 70%, rgba(127, 184, 181, 0.10) 0%, transparent 60%),
+                radial-gradient(ellipse at 60% 10%, rgba(212, 168, 75, 0.06) 0%, transparent 50%);
+            pointer-events: none;
+            z-index: 0;
+        }
+        .hero-copy { position: relative; z-index: 1; }
+        .hero-eyebrow {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.78rem;
+            color: var(--emerald-bright);
+            letter-spacing: 0.18em;
+            text-transform: uppercase;
+            margin-bottom: 1.25rem;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .hero-eyebrow::before {
+            content: '';
+            display: inline-block;
+            width: 28px; height: 1px;
+            background: var(--emerald-bright);
+        }
+        .hero-title {
+            font-size: 3.6rem;
+            font-weight: 700;
+            letter-spacing: -0.03em;
+            line-height: 1.02;
+            margin-bottom: 1rem;
+            color: var(--paper);
+        }
+        .hero-title .accent {
+            background: linear-gradient(135deg, var(--emerald-bright) 0%, var(--sky) 60%, var(--amber) 110%);
+            -webkit-background-clip: text;
+            background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        .hero-subtitle {
+            font-size: 1.2rem;
+            color: var(--sage);
+            max-width: 560px;
+            margin-bottom: 1.4rem;
+            font-style: italic;
+            line-height: 1.5;
+        }
+        .hero-desc {
+            font-size: 1rem;
+            color: var(--paper-dim);
+            max-width: 560px;
+            line-height: 1.75;
+            margin-bottom: 2.25rem;
+        }
+        .hero-ctas { display: flex; gap: 12px; flex-wrap: wrap; }
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 11px 20px;
+            border-radius: 8px;
+            font-weight: 600;
+            font-size: 0.92rem;
+            text-decoration: none;
+            border: 1px solid transparent;
+            transition: all 0.2s;
+            cursor: pointer;
+        }
+        .btn-primary {
+            background: linear-gradient(135deg, var(--emerald) 0%, var(--emerald-bright) 100%);
+            color: var(--deep);
+            box-shadow: 0 6px 20px rgba(14, 140, 110, 0.35);
+        }
+        .btn-primary:hover { transform: translateY(-1px); box-shadow: 0 10px 28px rgba(14, 140, 110, 0.45); }
+        .btn-ghost {
+            background: transparent;
+            color: var(--paper);
+            border-color: var(--thalo-line);
+        }
+        .btn-ghost:hover { border-color: var(--emerald-bright); color: var(--emerald-bright); }
+
+        .hero-globe {
+            position: relative;
+            z-index: 1;
+            aspect-ratio: 1 / 1;
+            max-width: 520px;
+            width: 100%;
+            justify-self: center;
+        }
+        .hero-globe canvas { display: block; width: 100%; height: 100%; }
+        .hero-globe::after {
+            content: '';
+            position: absolute;
+            inset: 12%;
+            border-radius: 50%;
+            box-shadow: 0 0 120px 20px var(--emerald-glow);
+            z-index: -1;
+            pointer-events: none;
+        }
+
+        /* ── Section framing ─────────────────────────────── */
+        .section {
+            padding: 5rem 24px;
+            max-width: 1280px;
+            margin: 0 auto;
+        }
+        .section-bg { background: var(--thalo); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+        .section-bg-inner { max-width: 1280px; margin: 0 auto; padding: 5rem 24px; }
+        .section-eyebrow {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.75rem;
+            letter-spacing: 0.18em;
+            text-transform: uppercase;
+            color: var(--emerald-bright);
+            text-align: center;
+            margin-bottom: 0.9rem;
+        }
+        .section-title {
+            font-size: 2rem;
+            font-weight: 700;
+            letter-spacing: -0.02em;
+            text-align: center;
+            margin-bottom: 1rem;
+            color: var(--paper);
+        }
+        .section-title .accent { color: var(--emerald-bright); }
+        .section-desc {
+            text-align: center;
+            max-width: 720px;
+            margin: 0 auto 3rem;
+            color: var(--paper-dim);
+            font-size: 1.02rem;
+            line-height: 1.75;
+        }
+
+        /* ── Feature cards ───────────────────────────────── */
+        .feature-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 1.25rem;
+        }
+        .feature-card {
+            background: var(--thalo-raised);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg);
+            padding: 1.75rem 1.5rem 1.5rem;
+            position: relative;
+            overflow: hidden;
+            transition: transform 0.25s, border-color 0.25s, box-shadow 0.25s;
+        }
+        .feature-card:hover {
+            transform: translateY(-3px);
+            border-color: var(--emerald);
+            box-shadow: 0 16px 40px rgba(0, 0, 0, 0.35);
+        }
+        .feature-card::before {
+            content: '';
+            position: absolute;
+            top: 0; left: 0; right: 0;
+            height: 2px;
+            background: var(--accent, var(--emerald-bright));
+            opacity: 0.8;
+        }
+        .feature-icon {
+            width: 40px; height: 40px;
+            border-radius: 10px;
+            display: grid; place-items: center;
+            background: rgba(255,255,255,0.04);
+            border: 1px solid var(--border);
+            margin-bottom: 1.1rem;
+        }
+        .feature-icon svg {
+            width: 22px; height: 22px;
+            stroke-width: 1.5;
+            color: var(--accent, var(--emerald-bright));
+            fill: none;
+            stroke: currentColor;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+        }
+        .feature-title {
+            font-size: 1.08rem;
+            font-weight: 700;
+            color: var(--paper);
+            margin-bottom: 0.45rem;
+            letter-spacing: -0.01em;
+        }
+        .feature-kicker {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.68rem;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+            color: var(--sage);
+            margin-bottom: 0.85rem;
+        }
+        .feature-desc {
+            font-size: 0.88rem;
+            color: var(--paper-dim);
+            line-height: 1.65;
+        }
+        .feature-phase {
+            display: inline-block;
+            margin-top: 1.1rem;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.68rem;
+            padding: 3px 8px;
+            border-radius: 4px;
+            background: rgba(255,255,255,0.04);
+            border: 1px solid var(--border);
+            color: var(--paper-dim);
+            letter-spacing: 0.08em;
+        }
+        .feature-phase.ready   { color: var(--emerald-bright); border-color: rgba(45,189,160,0.3); }
+        .feature-phase.soon    { color: var(--amber); border-color: rgba(232,194,106,0.3); }
+        .feature-phase.horizon { color: var(--violet); border-color: rgba(169,138,199,0.3); }
+
+        /* ── About panel ─────────────────────────────────── */
+        .about-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 3rem;
+            align-items: start;
+        }
+        .about-copy p {
+            color: var(--paper-dim);
+            font-size: 1rem;
+            line-height: 1.8;
+            margin-bottom: 1rem;
+        }
+        .about-copy em { color: var(--paper); font-style: normal; font-weight: 600; }
+        .about-list {
+            list-style: none;
+            padding: 0;
+        }
+        .about-list li {
+            padding: 1rem 1.25rem;
+            border-left: 2px solid var(--emerald);
+            background: rgba(255,255,255,0.02);
+            border-radius: 0 var(--radius) var(--radius) 0;
+            margin-bottom: 0.8rem;
+        }
+        .about-list strong { color: var(--paper); display: block; margin-bottom: 0.2rem; font-size: 0.95rem; }
+        .about-list span { color: var(--paper-dim); font-size: 0.88rem; line-height: 1.55; }
+
+        /* ── Footer ──────────────────────────────────────── */
+        .footer {
+            border-top: 1px solid var(--border);
+            padding: 2.5rem 24px 3rem;
+            text-align: center;
+            color: var(--paper-dim);
+            font-size: 0.85rem;
+        }
+        .footer a { color: var(--emerald-bright); text-decoration: none; }
+        .footer a:hover { text-decoration: underline; }
+        .footer-meta {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.72rem;
+            color: var(--sage);
+            letter-spacing: 0.1em;
+            margin-top: 0.6rem;
+        }
+
+        /* ── Responsive ──────────────────────────────────── */
+        @media (max-width: 960px) {
+            .hero { grid-template-columns: 1fr; gap: 2rem; padding-top: 3rem; }
+            .hero-globe { max-width: 380px; }
+            .hero-title { font-size: 2.6rem; }
+            .feature-grid { grid-template-columns: repeat(2, 1fr); }
+            .about-grid { grid-template-columns: 1fr; gap: 2rem; }
+        }
+        @media (max-width: 640px) {
+            .topbar-nav { display: none; }
+            .nav-hamburger { display: inline-flex; }
+            .feature-grid { grid-template-columns: 1fr; }
+            .hero-title { font-size: 2.1rem; }
+            .section-title { font-size: 1.55rem; }
+        }
+    </style>
+</head>
+<body>
+
+<!-- ═══════════════ TOP BAR ═══════════════ -->
+<header class="topbar">
+    <div class="topbar-inner">
+        <div class="topbar-brand">
+            <div class="topbar-mark">
+                <!-- stylized circulation: a globe with flow arrows -->
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+                    <circle cx="12" cy="12" r="9"/>
+                    <path d="M3 12h18"/>
+                    <path d="M12 3c3 3 3 15 0 18"/>
+                    <path d="M12 3c-3 3 -3 15 0 18"/>
+                </svg>
+            </div>
+            <div class="topbar-logo">GC<span class="accent">-</span>ATLAS</div>
+        </div>
+        <nav>
+            <ul class="topbar-nav">
+                <li><a href="#features" class="nav-active">Features</a></li>
+                <li><a href="#about">About</a></li>
+                <li><a href="#pedagogy">Pedagogy</a></li>
+                <li><a href="https://michaelfischerwx.github.io/TC-ATLAS/" target="_blank" rel="noopener">TC-ATLAS</a></li>
+            </ul>
+            <button class="nav-hamburger" aria-label="menu">☰</button>
+        </nav>
+    </div>
+</header>
+
+<!-- ═══════════════ HERO ═══════════════ -->
+<section class="hero">
+    <div class="hero-copy">
+        <div class="hero-eyebrow">The Atmospheric General Circulation Atlas</div>
+        <h1 class="hero-title">See the <span class="accent">base state</span><br>of Earth's atmosphere.</h1>
+        <p class="hero-subtitle">An interactive ERA5 climatology on a spinnable globe — built for teaching the general circulation.</p>
+        <p class="hero-desc">
+            Hadley cells, jet streams, stationary waves, storm tracks, the Walker circulation — the bones of the atmospheric general circulation, rendered live. Spin the globe, pick a month, choose a level, toggle the eddies off. Slice a cross-section. Seed a parcel and watch it ride the climatological flow.
+        </p>
+        <div class="hero-ctas">
+            <a href="#features" class="btn btn-primary">
+                Explore the atlas
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 5l7 7-7 7"/></svg>
+            </a>
+            <a href="#about" class="btn btn-ghost">About the project</a>
+        </div>
+    </div>
+    <div class="hero-globe" id="hero-globe" aria-hidden="true"></div>
+</section>
+
+<!-- ═══════════════ FEATURES ═══════════════ -->
+<div class="section-bg">
+    <section class="section-bg-inner" id="features">
+        <div class="section-eyebrow">What's inside</div>
+        <h2 class="section-title">An atlas <span class="accent">and a diagnostic bench.</span></h2>
+        <p class="section-desc">
+            Not just pretty fields — a tool where every classical diagnostic in Holton, Vallis, and Peixoto-Oort is live, clickable, and decomposable.
+        </p>
+
+        <div class="feature-grid">
+
+            <!-- 1. Interactive globe -->
+            <article class="feature-card" style="--accent: var(--emerald-bright)">
+                <div class="feature-icon">
+                    <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg>
+                </div>
+                <div class="feature-kicker">Core · Phase 1</div>
+                <h3 class="feature-title">Interactive 3D Globe</h3>
+                <p class="feature-desc">Windy-style particle-advected winds and colormap scalars on a spinnable globe. Any ERA5 field, any month of the climatology, any pressure level.</p>
+                <span class="feature-phase ready">MVP</span>
+            </article>
+
+            <!-- 2. Cross sections -->
+            <article class="feature-card" style="--accent: var(--sky)">
+                <div class="feature-icon">
+                    <svg viewBox="0 0 24 24"><path d="M4 18h16M4 6h16"/><path d="M4 6v12M20 6v12"/><path d="M4 14l4-3 3 2 4-5 5 4"/></svg>
+                </div>
+                <div class="feature-kicker">Core · Phase 2</div>
+                <h3 class="feature-title">Live Cross-Sections</h3>
+                <p class="feature-desc">Click-drag any great-circle line on the globe and get the vertical cross-section in a side panel. Equator-circling line → zonal-mean. Watch the Hadley cell, the jet core, the tropopause fold appear in a click.</p>
+                <span class="feature-phase soon">Next</span>
+            </article>
+
+            <!-- 3. Decomposition -->
+            <article class="feature-card" style="--accent: var(--amber)">
+                <div class="feature-icon">
+                    <svg viewBox="0 0 24 24"><path d="M4 12h16"/><path d="M7 7l-3 5 3 5M17 7l3 5-3 5"/><circle cx="12" cy="12" r="2.2"/></svg>
+                </div>
+                <div class="feature-kicker">Core · Phase 2</div>
+                <h3 class="feature-title">Decomposition Toggles</h3>
+                <p class="feature-desc">Total · zonal-mean · eddy. Stationary · transient. Rotational · divergent. Climatology · anomaly. One click to peel the circulation apart the way the textbook does.</p>
+                <span class="feature-phase soon">Next</span>
+            </article>
+
+            <!-- 4. Derived diagnostics -->
+            <article class="feature-card" style="--accent: var(--ochre)">
+                <div class="feature-icon">
+                    <svg viewBox="0 0 24 24"><path d="M3 17c3-8 6-8 9 0s6 8 9 0"/><path d="M3 17l0 3M21 17l0 3"/><circle cx="12" cy="6" r="1.6"/><path d="M12 7.6v3.4"/></svg>
+                </div>
+                <div class="feature-kicker">Diagnostic · Phase 3</div>
+                <h3 class="feature-title">Derived Diagnostic Layers</h3>
+                <p class="feature-desc">Mass streamfunction, EP flux and its divergence, Plumb wave-activity flux, 2–8 day bandpass storm tracks, PV on isentropes, Lorenz energy cycle, MSE, angular momentum. The full diagnostic toolkit, precomputed and served.</p>
+                <span class="feature-phase soon">Roadmap</span>
+            </article>
+
+            <!-- 5. Lagrangian -->
+            <article class="feature-card" style="--accent: var(--emerald)">
+                <div class="feature-icon">
+                    <svg viewBox="0 0 24 24"><path d="M3 18c4-1 5-7 9-7s5 6 9 7"/><circle cx="3" cy="18" r="1.6"/><circle cx="21" cy="18" r="1.6"/><circle cx="12" cy="11" r="1.6"/><path d="M6 6l2 2M18 6l-2 2M12 3v2"/></svg>
+                </div>
+                <div class="feature-kicker">Signature · Phase 3</div>
+                <h3 class="feature-title">Lagrangian Mode</h3>
+                <p class="feature-desc">Seed parcels anywhere on the globe and watch them advect on the climatological 3D wind. Release a cluster at 15°N, 200 hPa in July and ride the monsoon anticyclone. The most visceral way to teach the overturning.</p>
+                <span class="feature-phase soon">Roadmap</span>
+            </article>
+
+            <!-- 6. Budgets -->
+            <article class="feature-card" style="--accent: var(--clay)">
+                <div class="feature-icon">
+                    <svg viewBox="0 0 24 24"><path d="M4 20V8M10 20V4M16 20v-9M22 20V12"/><path d="M3 20h20"/></svg>
+                </div>
+                <div class="feature-kicker">Diagnostic · Phase 3</div>
+                <h3 class="feature-title">Budget Viewers</h3>
+                <p class="feature-desc">Pick a latitude band or region. Get the closed (to reanalysis precision) energy budget, moisture budget (P–E + transport convergence), and angular-momentum budget with mountain and friction torques. Global constraints as numbers, not hand-waves.</p>
+                <span class="feature-phase soon">Roadmap</span>
+            </article>
+
+            <!-- 7. Variability -->
+            <article class="feature-card" style="--accent: var(--violet)">
+                <div class="feature-icon">
+                    <svg viewBox="0 0 24 24"><path d="M3 12c3-6 6-6 9 0s6 6 9 0"/><path d="M3 15c3-6 6-6 9 0s6 6 9 0" opacity="0.5"/><path d="M3 9c3-6 6-6 9 0s6 6 9 0" opacity="0.5"/></svg>
+                </div>
+                <div class="feature-kicker">Diagnostic · Phase 4</div>
+                <h3 class="feature-title">Variability & Composites</h3>
+                <p class="feature-desc">Toggle ±1σ envelopes to see where the climatology is robust vs where interannual variance rules. ENSO, NAO, SAM, MJO composite anomalies. "The" jet is really a PDF — show it.</p>
+                <span class="feature-phase horizon">Horizon</span>
+            </article>
+
+            <!-- 8. Guided tours -->
+            <article class="feature-card" style="--accent: var(--amber)">
+                <div class="feature-icon">
+                    <svg viewBox="0 0 24 24"><path d="M4 4h10l6 6v10H4z"/><path d="M14 4v6h6"/><path d="M8 14h8M8 17h5"/></svg>
+                </div>
+                <div class="feature-kicker">Teaching · Phase 4</div>
+                <h3 class="feature-title">Guided Tours</h3>
+                <p class="feature-desc">Author narrated walkthroughs — the globe auto-navigates, zooms, and toggles fields while text or audio narrates. "The Hadley circulation," "Why is the Aleutian Low there?," "Monsoon reversal." Students run them before lecture.</p>
+                <span class="feature-phase horizon">Horizon</span>
+            </article>
+
+            <!-- 9. CMIP/Obs overlays -->
+            <article class="feature-card" style="--accent: var(--sky)">
+                <div class="feature-icon">
+                    <svg viewBox="0 0 24 24"><rect x="3" y="4" width="8" height="8" rx="1.5"/><rect x="13" y="4" width="8" height="8" rx="1.5"/><rect x="3" y="14" width="8" height="6" rx="1.5"/><rect x="13" y="14" width="8" height="6" rx="1.5"/></svg>
+                </div>
+                <div class="feature-kicker">Research · Phase 4</div>
+                <h3 class="feature-title">Model &amp; Obs Overlays</h3>
+                <p class="feature-desc">Swap ERA5 for a CMIP6 historical or SSP585 end-of-century climatology — every field becomes a climate-change anomaly. Overlay observations (GPCP, CERES, OISST, ASCAT). Held-Suarez and paleoclimate runs for context.</p>
+                <span class="feature-phase horizon">Horizon</span>
+            </article>
+
+        </div>
+    </section>
+</div>
+
+<!-- ═══════════════ ABOUT ═══════════════ -->
+<section class="section" id="about">
+    <div class="section-eyebrow">Why this tool</div>
+    <h2 class="section-title">A foundation, <span class="accent">made visible.</span></h2>
+    <p class="section-desc">
+        Graduate courses in atmospheric general circulation lean on static textbook diagrams. GC-ATLAS gives students a live reference — the real, observed base state they can spin, slice, and decompose — so the lectures build on intuition students already have.
+    </p>
+
+    <div class="about-grid">
+        <div class="about-copy">
+            <p>
+                The atmospheric general circulation is famously hard to teach. The concepts are three-dimensional, span the globe, evolve with the seasons, and can only be fully appreciated as <em>decompositions</em> — zonal mean versus eddy, stationary versus transient, rotational versus divergent.
+            </p>
+            <p>
+                GC-ATLAS is a pedagogical companion to the course: an always-on, interactive ERA5 climatology (1991–2020 by default) rendered as a windy-style globe, with live cross-sections, derived diagnostics, Lagrangian parcels, and budget viewers — the working tools of a general-circulation researcher, adapted for a classroom.
+            </p>
+            <p>
+                It is the atmospheric sibling of <a href="https://michaelfischerwx.github.io/TC-ATLAS/" target="_blank" rel="noopener" style="color: var(--emerald-bright);">TC-ATLAS</a>, sharing its philosophy: free, open, fast in the browser, built by the people who teach this material.
+            </p>
+        </div>
+        <ul class="about-list" id="pedagogy">
+            <li>
+                <strong>Built around the syllabus</strong>
+                <span>Every feature maps to a classical topic: Hadley/Ferrel/polar cells, jets, stationary Rossby waves, storm tracks, monsoons, the stratospheric circulation, Lorenz energy cycle, angular momentum.</span>
+            </li>
+            <li>
+                <strong>Reanalysis-first</strong>
+                <span>ERA5 monthly means, 1991–2020 climatology, precomputed on cloud storage. Daily data where variance/transient diagnostics require it.</span>
+            </li>
+            <li>
+                <strong>Decomposition, not just display</strong>
+                <span>Raw fields are the starting point. The pedagogical payoff is the toggles — zonal-mean, eddy, stationary, transient — that make the circulation's structure visible.</span>
+            </li>
+            <li>
+                <strong>Globe-native</strong>
+                <span>A spinnable 3D globe (WebGL) with GPU-accelerated particle advection and true 3D Lagrangian trajectories — built to scale.</span>
+            </li>
+            <li>
+                <strong>Open and extensible</strong>
+                <span>Vanilla frontend, FastAPI backend, open data. Instructors can fork it, rewire it, and author guided tours for their own courses.</span>
+            </li>
+        </ul>
+    </div>
+</section>
+
+<!-- ═══════════════ FOOTER ═══════════════ -->
+<footer class="footer">
+    <div>
+        GC-ATLAS · A teaching atlas by <a href="https://michaelfischerwx.github.io/TC-ATLAS/" target="_blank" rel="noopener">Dr. Michael Fischer</a>, University of Miami.
+    </div>
+    <div class="footer-meta">
+        ERA5 reanalysis · 1991–2020 climatology · under construction
+    </div>
+</footer>
+
+<!-- ═══════════════ HERO GLOBE (Three.js graticule placeholder) ═══════════════ -->
+<script type="importmap">
+{
+    "imports": {
+        "three": "https://unpkg.com/three@0.163.0/build/three.module.js"
+    }
+}
+</script>
+<script type="module">
+import * as THREE from 'three';
+
+(function initHeroGlobe() {
+    const mount = document.getElementById('hero-globe');
+    if (!mount) return;
+
+    const getSize = () => {
+        const r = mount.getBoundingClientRect();
+        return { w: Math.max(1, r.width), h: Math.max(1, r.height) };
+    };
+
+    const { w, h } = getSize();
+
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(32, w / h, 0.1, 100);
+    camera.position.set(0, 0.2, 3.1);
+    camera.lookAt(0, 0, 0);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setSize(w, h);
+    renderer.setClearColor(0x000000, 0);
+    mount.appendChild(renderer.domElement);
+
+    // ── Globe group (tilted like Earth's axis) ───────
+    const globe = new THREE.Group();
+    globe.rotation.z = 23.4 * Math.PI / 180; // axial tilt
+    scene.add(globe);
+
+    // ── Core translucent sphere ──────────────────────
+    const coreGeom = new THREE.SphereGeometry(1.0, 96, 64);
+    const coreMat = new THREE.MeshBasicMaterial({
+        color: 0x0E8C6E,
+        transparent: true,
+        opacity: 0.10,
+    });
+    globe.add(new THREE.Mesh(coreGeom, coreMat));
+
+    // ── Glow/rim (slightly larger, additive-ish) ─────
+    const rimGeom = new THREE.SphereGeometry(1.01, 96, 64);
+    const rimMat = new THREE.MeshBasicMaterial({
+        color: 0x2DBDA0,
+        transparent: true,
+        opacity: 0.05,
+        side: THREE.BackSide,
+    });
+    globe.add(new THREE.Mesh(rimGeom, rimMat));
+
+    // ── Graticule lines ──────────────────────────────
+    const gratMatMain = new THREE.LineBasicMaterial({
+        color: 0x2DBDA0, transparent: true, opacity: 0.55,
+    });
+    const gratMatFaint = new THREE.LineBasicMaterial({
+        color: 0x7FB8B5, transparent: true, opacity: 0.22,
+    });
+    const eqMat = new THREE.LineBasicMaterial({
+        color: 0xE8C26A, transparent: true, opacity: 0.85,
+    });
+
+    const R = 1.001;
+    const segPerLine = 180;
+
+    // Latitude circles every 15°
+    for (let lat = -75; lat <= 75; lat += 15) {
+        const phi = (lat * Math.PI) / 180;
+        const y = Math.sin(phi) * R;
+        const r = Math.cos(phi) * R;
+        const pts = [];
+        for (let i = 0; i <= segPerLine; i++) {
+            const lon = (i / segPerLine) * Math.PI * 2;
+            pts.push(new THREE.Vector3(Math.cos(lon) * r, y, Math.sin(lon) * r));
+        }
+        const geom = new THREE.BufferGeometry().setFromPoints(pts);
+        const mat = (lat === 0) ? eqMat : (Math.abs(lat) === 30 || Math.abs(lat) === 60 ? gratMatMain : gratMatFaint);
+        globe.add(new THREE.LineLoop(geom, mat));
+    }
+
+    // Longitude meridians every 30°
+    for (let lon = 0; lon < 360; lon += 30) {
+        const theta = (lon * Math.PI) / 180;
+        const pts = [];
+        for (let i = 0; i <= segPerLine; i++) {
+            const phi = -Math.PI / 2 + (i / segPerLine) * Math.PI;
+            pts.push(new THREE.Vector3(
+                Math.cos(phi) * Math.cos(theta) * R,
+                Math.sin(phi) * R,
+                Math.cos(phi) * Math.sin(theta) * R,
+            ));
+        }
+        const geom = new THREE.BufferGeometry().setFromPoints(pts);
+        const mat = (lon % 90 === 0) ? gratMatMain : gratMatFaint;
+        globe.add(new THREE.Line(geom, mat));
+    }
+
+    // ── Sparse "data points" orbiting for life ──────
+    const dotCount = 120;
+    const dotPos = new Float32Array(dotCount * 3);
+    const dotPhase = new Float32Array(dotCount);
+    for (let i = 0; i < dotCount; i++) {
+        // random point on sphere
+        const u = Math.random(), v = Math.random();
+        const theta = 2 * Math.PI * u;
+        const phi = Math.acos(2 * v - 1);
+        dotPos[i * 3]     = Math.sin(phi) * Math.cos(theta) * 1.015;
+        dotPos[i * 3 + 1] = Math.cos(phi) * 1.015;
+        dotPos[i * 3 + 2] = Math.sin(phi) * Math.sin(theta) * 1.015;
+        dotPhase[i] = Math.random() * Math.PI * 2;
+    }
+    const dotGeom = new THREE.BufferGeometry();
+    dotGeom.setAttribute('position', new THREE.BufferAttribute(dotPos, 3));
+    const dotMat = new THREE.PointsMaterial({
+        color: 0xE8C26A, size: 0.018, transparent: true, opacity: 0.9,
+        sizeAttenuation: true,
+    });
+    const dots = new THREE.Points(dotGeom, dotMat);
+    globe.add(dots);
+
+    // ── Animate ──────────────────────────────────────
+    let t0 = performance.now();
+    function tick() {
+        const t = (performance.now() - t0) * 0.001;
+        globe.rotation.y = t * 0.12;
+        // gentle breathing of dots
+        dotMat.opacity = 0.65 + 0.25 * Math.sin(t * 0.8);
+        renderer.render(scene, camera);
+        requestAnimationFrame(tick);
+    }
+    tick();
+
+    // ── Resize ───────────────────────────────────────
+    const ro = new ResizeObserver(() => {
+        const { w, h } = getSize();
+        renderer.setSize(w, h);
+        camera.aspect = w / h;
+        camera.updateProjectionMatrix();
+    });
+    ro.observe(mount);
+})();
+</script>
+
+</body>
+</html>

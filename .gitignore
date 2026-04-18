@@ -1,0 +1,29 @@
+# Local data cache (ERA5 NetCDFs, intermediate Zarr, logs)
+data/
+*.nc
+*.nc4
+*.grib
+*.zarr/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+
+# CDS / cloud credentials (should live in $HOME; guard anyway)
+.cdsapirc
+deploy.env
+*.key.json
+service-account*.json
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Node (for any future build tooling, kept defensive)
+node_modules/

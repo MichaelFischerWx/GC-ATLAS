@@ -1,0 +1,143 @@
+# GC-ATLAS — ERA5 climatology variable inventory
+# ------------------------------------------------------------
+# Consumed by pipeline/download_era5.py and pipeline/build_climatology.py.
+# Edit here to add/remove fields from the Phase 1 core set.
+# ------------------------------------------------------------
+
+period:
+  start: 1991
+  end: 2020
+
+grid: 0.5   # degrees; CDS regrids on the server
+area: [90, -180, -90, 180]  # N, W, S, E — global
+
+# Pressure levels (hPa) used for all pressure-level variables
+pressure_levels:
+  - 10
+  - 50
+  - 100
+  - 150
+  - 200
+  - 250
+  - 300
+  - 500
+  - 700
+  - 850
+  - 925
+  - 1000
+
+datasets:
+
+  # ── 3D fields on pressure levels ────────────────────────────
+  pressure_levels:
+    dataset: reanalysis-era5-pressure-levels-monthly-means
+    variables:
+      - short: u
+        cds_name: u_component_of_wind
+        long:    Eastward wind
+        units:   m s-1
+      - short: v
+        cds_name: v_component_of_wind
+        long:    Northward wind
+        units:   m s-1
+      - short: w
+        cds_name: vertical_velocity
+        long:    Vertical velocity (omega)
+        units:   Pa s-1
+      - short: t
+        cds_name: temperature
+        long:    Temperature
+        units:   K
+      - short: z
+        cds_name: geopotential
+        long:    Geopotential
+        units:   m2 s-2
+      - short: q
+        cds_name: specific_humidity
+        long:    Specific humidity
+        units:   kg kg-1
+      - short: r
+        cds_name: relative_humidity
+        long:    Relative humidity
+        units:   '%'
+      - short: d
+        cds_name: divergence
+        long:    Horizontal divergence
+        units:   s-1
+      - short: vo
+        cds_name: vorticity
+        long:    Relative vorticity
+        units:   s-1
+      - short: pv
+        cds_name: potential_vorticity
+        long:    Potential vorticity
+        units:   K m2 kg-1 s-1
+
+  # ── 2D surface / single-level fields ────────────────────────
+  single_levels:
+    dataset: reanalysis-era5-single-levels-monthly-means
+    variables:
+      - short: msl
+        cds_name: mean_sea_level_pressure
+        long:    Mean sea level pressure
+        units:   Pa
+      - short: sp
+        cds_name: surface_pressure
+        long:    Surface pressure
+        units:   Pa
+      - short: t2m
+        cds_name: 2m_temperature
+        long:    2-metre temperature
+        units:   K
+      - short: d2m
+        cds_name: 2m_dewpoint_temperature
+        long:    2-metre dewpoint temperature
+        units:   K
+      - short: u10
+        cds_name: 10m_u_component_of_wind
+        long:    10-metre eastward wind
+        units:   m s-1
+      - short: v10
+        cds_name: 10m_v_component_of_wind
+        long:    10-metre northward wind
+        units:   m s-1
+      - short: sst
+        cds_name: sea_surface_temperature
+        long:    Sea surface temperature
+        units:   K
+      - short: tcwv
+        cds_name: total_column_water_vapour
+        long:    Total column water vapour
+        units:   kg m-2
+      - short: tp
+        cds_name: total_precipitation
+        long:    Total precipitation
+        units:   m
+      - short: sshf
+        cds_name: surface_sensible_heat_flux
+        long:    Surface sensible heat flux
+        units:   J m-2
+      - short: slhf
+        cds_name: surface_latent_heat_flux
+        long:    Surface latent heat flux
+        units:   J m-2
+      - short: ssr
+        cds_name: surface_net_solar_radiation
+        long:    Surface net shortwave radiation
+        units:   J m-2
+      - short: str
+        cds_name: surface_net_thermal_radiation
+        long:    Surface net longwave radiation
+        units:   J m-2
+      - short: tisr
+        cds_name: toa_incident_solar_radiation
+        long:    TOA incident solar radiation
+        units:   J m-2
+      - short: ttr
+        cds_name: top_net_thermal_radiation
+        long:    TOA net longwave radiation
+        units:   J m-2
+      - short: blh
+        cds_name: boundary_layer_height
+        long:    Planetary boundary layer height
+        units:   m
