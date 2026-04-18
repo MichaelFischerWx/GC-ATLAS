@@ -13,7 +13,8 @@ import { ContourLabels } from './contour_labels.js';
 import { SunLight } from './sun.js';
 import { OrbitScene, ORBIT_RADIUS } from './orbit.js';
 import { computeZonalMean, renderCrossSection } from './cross_section.js';
-import { loadManifest, onFieldLoaded, isReady as era5Ready, prefetchField } from './era5.js';
+import { loadManifest, onFieldLoaded, isReady as era5Ready, prefetchField, cachedMonth } from './era5.js';
+import { decompose, annualMeanFrom } from './decompose.js';
 
 const PLAY_INTERVAL_MS = 900;
 
@@ -57,6 +58,7 @@ class GlobeApp {
             showContours: false,
             showSun: true,
             windMode: 'particles',   // 'off' | 'particles' | 'streamlines'
+            decompose: 'total',      // 'total' | 'zonal' | 'eddy' | 'anomaly'
             showXSection: false,
         };
         this.windCache = { u: null, v: null, nlat: 0, nlon: 0, stale: true };
@@ -85,6 +87,14 @@ class GlobeApp {
                 (s.field === 'wspd' && (name === 'u' || name === 'v'));
 
             if (feedsCurrentField && monthMatches && levelMatches) this.updateField();
+
+            // Anomaly mode needs all 12 months to compute an accurate annual
+            // mean; re-render whenever any month of the current field lands
+            // so the anomaly sharpens as tiles come in.
+            if (feedsCurrentField && levelMatches && !monthMatches &&
+                s.decompose === 'anomaly') {
+                this.updateField();
+            }
 
             if (name === 'u' || name === 'v') this.windCache.stale = true;
 
@@ -374,10 +384,13 @@ class GlobeApp {
         if (!this.particles) return;
         // Ink a dark near-black on bright colormaps (turbo, wind, plasma end)
         // and white on dark ones (viridis, magma). Threshold tuned so magma
-        // stays white and turbo flips to dark.
-        const darkInk = 0x0b1a14;   // near-black with faint emerald
+        // stays white and turbo flips to dark. In eddy/anomaly modes the
+        // effective cmap is forced to RdBu_r, so use that instead.
+        const darkInk = 0x0b1a14;
         const lightInk = 0xffffff;
-        this.particles.setColor(meanLuminance(this.state.cmap) > 0.52 ? darkInk : lightInk);
+        const sym = this.state.decompose === 'eddy' || this.state.decompose === 'anomaly';
+        const cmap = sym ? 'RdBu_r' : this.state.cmap;
+        this.particles.setColor(meanLuminance(cmap) > 0.52 ? darkInk : lightInk);
     }
 
     applyWindMode() {
@@ -490,6 +503,14 @@ class GlobeApp {
         if ('month' in patch && this.orbit)               this.orbit.update(this.state.month, this.spinAngle, this.camera);
         if ('windMode' in patch) this.applyWindMode();
         if ('cmap' in patch) this.applyParticleContrast();
+        if ('decompose' in patch) {
+            this.applyParticleContrast();
+            // Anomaly needs the full 12-month tile set to compute the annual
+            // mean; prefetch here so switching modes hurries them along.
+            if (patch.decompose === 'anomaly') {
+                prefetchField(this.state.field, { level: this.state.level });
+            }
+        }
         if ('showXSection' in patch) {
             const panel = document.getElementById('xsection-panel');
             if (panel) panel.hidden = !patch.showXSection;
@@ -527,16 +548,57 @@ class GlobeApp {
     }
 
     updateField() {
-        const { field, level, month, cmap } = this.state;
+        const { field, level, month, cmap, decompose: mode } = this.state;
         const f = getField(field, { month, level });
-        fillRGBA(this.imageData.data, f.values, { vmin: f.vmin, vmax: f.vmax, cmap });
+
+        // Apply decomposition mode (total / zonal / eddy / anomaly).
+        const decomp = this.applyDecomposition(f, mode);
+        const effCmap = decomp.symmetric ? 'RdBu_r' : cmap;
+
+        fillRGBA(this.imageData.data, decomp.values, {
+            vmin: decomp.vmin, vmax: decomp.vmax, cmap: effCmap,
+        });
         this.ctx.putImageData(this.imageData, 0, 0);
         this.texture.needsUpdate = true;
         if (this.mapTexture) this.mapTexture.needsUpdate = true;
         if (this.earthTexture) this.earthTexture.needsUpdate = true;
-        this.updateContours(f);
-        this.updateStatus(f);
-        this.emit('field-updated', { field: f });
+
+        // Decorated field for contour overlay + colorbar — use the transformed
+        // values and range so contours track whichever mode is showing.
+        const fDecorated = {
+            ...f,
+            values: decomp.values,
+            vmin: decomp.vmin,
+            vmax: decomp.vmax,
+            decomposeMode: mode,
+            isSymmetric: decomp.symmetric,
+            effCmap,
+        };
+        this.updateContours(fDecorated);
+        this.updateStatus(f);   // status reflects raw tile, not the transform
+        this.emit('field-updated', { field: fDecorated });
+    }
+
+    applyDecomposition(f, mode) {
+        if (mode === 'total' || !mode) {
+            return decompose(f.values, GRID.nlat, GRID.nlon, 'total');
+        }
+        if (mode === 'anomaly') {
+            // Build the 12-month mean from whatever tiles are cached so far.
+            // If fewer than all 12 are in, the mean uses what it has and
+            // will refine itself when more arrive (each field-loaded event
+            // re-triggers updateField).
+            const meta = FIELDS[this.state.field] || {};
+            const useLevel = meta.type === 'pl' ? this.state.level : null;
+            const comp = meta.derived === true
+                ? null  // derived fields (wspd) handled below via components
+                : annualMeanFrom(
+                    (m) => cachedMonth(this.state.field, m, useLevel),
+                    GRID.nlat, GRID.nlon,
+                );
+            return decompose(f.values, GRID.nlat, GRID.nlon, 'anomaly', comp);
+        }
+        return decompose(f.values, GRID.nlat, GRID.nlon, mode);
     }
 
     updateContours(f) {
@@ -551,11 +613,13 @@ class GlobeApp {
         }
         this.contours.setData(f.values);
         this.contours.setInterval(interval);
-        // Divergent colormaps → emphasise the zero line.
-        const divergent = meta.cmap === 'RdBu_r';
+        // Divergent colormaps → emphasise the zero line. True for the
+        // configured cmap (e.g. RdBu_r on u/v) OR any symmetric decomposition.
+        const divergent = meta.cmap === 'RdBu_r' || f.isSymmetric;
         this.contours.setEmphasis(0, divergent);
-        // Ink tracks colormap luminance so contours stay legible on any cmap.
-        const darkBg = meanLuminance(this.state.cmap) < 0.45;
+        // Ink tracks EFFECTIVE cmap luminance (eddy/anomaly forces RdBu_r).
+        const effCmap = f.effCmap || this.state.cmap;
+        const darkBg = meanLuminance(effCmap) < 0.45;
         this.contours.setInk(darkBg ? 0xf4faf7 : 0x0a1712);
         this.contours.setOpacity(darkBg ? 0.70 : 0.85);
         this.contours.setVisible(this.state.showContours);
@@ -678,6 +742,15 @@ class GlobeApp {
                 this.setState({ windMode: mode });
             });
         });
+        // Decomposition mode: Total / Zonal / Eddy / Anomaly
+        document.querySelectorAll('[data-decompose]').forEach((btn) => {
+            btn.addEventListener('click', () => {
+                const mode = btn.getAttribute('data-decompose');
+                document.querySelectorAll('[data-decompose]').forEach((b) =>
+                    b.classList.toggle('active', b === btn));
+                this.setState({ decompose: mode });
+            });
+        });
         document.getElementById('toggle-xsection').addEventListener('change', (e) => {
             this.setState({ showXSection: e.target.checked });
         });
@@ -756,11 +829,19 @@ class GlobeApp {
 
     updateColorbar(field) {
         const cb = document.getElementById('colorbar-canvas');
-        if (cb) fillColorbar(cb, this.state.cmap);
+        // Use the effective cmap from the decomposition so the colorbar
+        // matches the painted globe (forced to RdBu_r in eddy/anomaly).
+        const effCmap = field.effCmap || this.state.cmap;
+        if (cb) fillColorbar(cb, effCmap);
         const set = (id, text) => { const el = document.getElementById(id); if (el) el.textContent = text; };
         set('cb-min',   fmtValue(field.vmin));
         set('cb-max',   fmtValue(field.vmax));
-        set('cb-title', field.name);
+        const modeSuffix = {
+            zonal:   ' · zonal mean',
+            eddy:    ' · eddy',
+            anomaly: ' · anomaly',
+        }[field.decomposeMode] || '';
+        set('cb-title', field.name + modeSuffix);
         set('cb-units', field.units);
     }
 

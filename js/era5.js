@@ -55,6 +55,15 @@ export function availableLevels(name) {
     return r && r.meta.levels ? r.meta.levels.slice() : null;
 }
 
+/** Cached-only lookup — no fetch side-effect. Returns Float32Array | null. */
+export function cachedMonth(name, month, level = null) {
+    const r = resolveField(name);
+    if (!r) return null;
+    const useLevel = r.meta.levels ? level : null;
+    const hit = cache.get(keyOf(name, month, useLevel));
+    return hit && hit !== 'pending' ? hit.values : null;
+}
+
 /**
  * Return the field synchronously if cached; otherwise kick off a fetch,
  * return null, and notify subscribers when the tile arrives.
