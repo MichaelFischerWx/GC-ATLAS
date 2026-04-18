@@ -39,7 +39,9 @@ function zFromPressure(p) {
 
 function fieldT(month, level) {
     const z = zFromPressure(level);
-    const T0 = 288.15 - 6.5e-3 * Math.min(z, 11000);
+    // Troposphere: standard lapse to 11 km. Stratosphere: ~3 K/km warming above.
+    const strat = z > 11000 ? 3e-3 * Math.min(z - 11000, 20000) : 0;
+    const T0 = 288.15 - 6.5e-3 * Math.min(z, 11000) + strat;
     const s = seasonalPhase(month);
     const values = new Float32Array(GRID.nlat * GRID.nlon);
     for (let i = 0; i < GRID.nlat; i++) {
@@ -57,19 +59,23 @@ function fieldT(month, level) {
 
 function fieldU(month, level) {
     const z = zFromPressure(level);
-    const jetStrength = Math.min(1, Math.max(0, z / 10000));
+    // Jet strength peaks at ~200 hPa (z ≈ 12 km) and decays above and below.
+    // Gaussian in z with width 7 km → half-peak at z = 12±5.8 km (≈ 500 → 70 hPa).
+    const jetStrength = Math.exp(-(((z - 12000) / 7000) ** 2));
+    // Tropical easterlies: maximum near 150 hPa.
+    const tropStrength = Math.exp(-(((z - 14500) / 4000) ** 2));
     const s = seasonalPhase(month);
     const values = new Float32Array(GRID.nlat * GRID.nlon);
     for (let i = 0; i < GRID.nlat; i++) {
         const lat = LATS[i];
         const latR = lat * D2R;
-        const nh = 40 * jetStrength * Math.exp(-(((lat - 40) / 15) ** 2)) * (1 + 0.45 * s);
-        const sh = 35 * jetStrength * Math.exp(-(((lat + 40) / 15) ** 2)) * (1 - 0.45 * s);
-        const trop = -4 * jetStrength * Math.exp(-((lat / 20) ** 2));
+        const nh = 42 * jetStrength * Math.exp(-(((lat - 38) / 14) ** 2)) * (1 + 0.45 * s);
+        const sh = 38 * jetStrength * Math.exp(-(((lat + 38) / 14) ** 2)) * (1 - 0.45 * s);
+        const trop = -8 * tropStrength * Math.exp(-((lat / 18) ** 2));
         const base = nh + sh + trop;
         for (let j = 0; j < GRID.nlon; j++) {
             const lonR = LONS[j] * D2R;
-            const wave = 3 * Math.cos(2 * lonR) * Math.cos(latR);
+            const wave = 3 * jetStrength * Math.cos(2 * lonR) * Math.cos(latR);
             values[i * GRID.nlon + j] = base + wave;
         }
     }
@@ -78,14 +84,17 @@ function fieldU(month, level) {
 
 function fieldV(month, level) {
     const z = zFromPressure(level);
-    const upper = Math.tanh((z - 5000) / 5000); // −1 near surface, +1 aloft
+    // Tropospheric overturning only: reverses sign near tropopause, decays in stratosphere.
+    const tropMask = Math.exp(-(((z - 9000) / 6000) ** 2));
+    const upper = Math.tanh((z - 5500) / 3500);  // −1 low, +1 upper trop
+    const sign = upper * tropMask;
     const s = seasonalPhase(month);
     const values = new Float32Array(GRID.nlat * GRID.nlon);
     for (let i = 0; i < GRID.nlat; i++) {
         const latR = LATS[i] * D2R;
         const hadley = -3.5 * Math.sin(3 * latR) * Math.exp(-Math.abs(LATS[i]) / 45);
-        const seasonalShift = -2 * s * Math.sin(2 * latR);
-        const base = upper * hadley + seasonalShift;
+        const seasonalShift = -2 * s * Math.sin(2 * latR) * tropMask;
+        const base = sign * hadley + seasonalShift;
         for (let j = 0; j < GRID.nlon; j++) {
             const lonR = LONS[j] * D2R;
             values[i * GRID.nlon + j] = base + 0.8 * Math.sin(2 * lonR);
