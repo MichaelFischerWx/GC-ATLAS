@@ -29,6 +29,25 @@ const DEFAULT_VIEW = { lat: 35, lon: -95, distance: 3.35 };
 const MAP_W = 4;
 const MAP_H = 2;
 
+// Split a polyline at points where consecutive x-coords jump by more than
+// `maxJump` (i.e., the line crosses the equirectangular map's seam when the
+// central meridian isn't at longitude 0). Returns a list of sub-polylines.
+function splitAtSeam(pts, maxJump) {
+    if (pts.length < 2) return [pts];
+    const out = [];
+    let cur = [pts[0]];
+    for (let i = 1; i < pts.length; i++) {
+        if (Math.abs(pts[i].x - pts[i - 1].x) > maxJump) {
+            if (cur.length >= 2) out.push(cur);
+            cur = [pts[i]];
+        } else {
+            cur.push(pts[i]);
+        }
+    }
+    if (cur.length >= 2) out.push(cur);
+    return out;
+}
+
 function cameraFromView({ lat, lon, distance }, tilt = 0) {
     const phi = lat * Math.PI / 180;
     const lam = lon * Math.PI / 180;
@@ -59,6 +78,7 @@ class GlobeApp {
             showSun: true,
             windMode: 'particles',   // 'off' | 'particles' | 'streamlines'
             decompose: 'total',      // 'total' | 'zonal' | 'eddy' | 'anomaly'
+            mapCenterLon: 0,         // central meridian for the flat map (-180..180)
             showXSection: false,
         };
         this.windCache = { u: null, v: null, nlat: 0, nlon: 0, stale: true };
@@ -185,10 +205,13 @@ class GlobeApp {
         this.texture.colorSpace = THREE.SRGBColorSpace;
         this.texture.offset.x = 0.25;
 
-        // Plane uses a clone of the same canvas, no offset (PlaneGeometry UVs map 0→1 naturally).
+        // Plane uses a clone of the same canvas. Repeat-wrap horizontally so
+        // shifting texture.offset.x changes the central meridian without
+        // revealing an edge.
         this.mapTexture = new THREE.CanvasTexture(this.canvas);
         this.mapTexture.minFilter = THREE.LinearFilter;
         this.mapTexture.magFilter = THREE.LinearFilter;
+        this.mapTexture.wrapS = THREE.RepeatWrapping;
         this.mapTexture.colorSpace = THREE.SRGBColorSpace;
 
         // Mini-Earth in orbit view shares the same shaded canvas but needs
@@ -258,8 +281,12 @@ class GlobeApp {
     // Unified projection. r=1 lives on the sphere (or plane); r>1 lifts overlays.
     project(lat, lon, r = 1) {
         if (this.state.viewMode === 'map') {
+            // Re-centre around state.mapCenterLon, wrapping into [-180, 180].
+            let x = lon - this.state.mapCenterLon;
+            if (x >  180) x -= 360;
+            else if (x < -180) x += 360;
             return new THREE.Vector3(
-                lon * (MAP_W / 360),
+                x * (MAP_W / 360),
                 lat * (MAP_H / 180),
                 (r - 1) * 0.25,
             );
@@ -307,14 +334,22 @@ class GlobeApp {
         const eq   = new THREE.LineBasicMaterial({ color: 0xE8C26A, transparent: true, opacity: 0.90 });
         const R = 1.006;
         const wrap = this.state.viewMode === 'globe';  // parallels wrap on the sphere; not on a flat map
+        const isMap = this.state.viewMode === 'map';
+        const seamJump = MAP_W / 2;
         for (const path of this.gratPaths) {
             const pts = path.pts.map(([lat, lon]) => this.project(lat, lon, R));
-            const geom = new THREE.BufferGeometry().setFromPoints(pts);
-            const mat  = path.style === 'eq' ? eq : main;
-            const obj  = (wrap && (path.kind === 'parallel' || path.kind === 'equator'))
-                ? new THREE.LineLoop(geom, mat)
-                : new THREE.Line(geom, mat);
-            this.gratGroup.add(obj);
+            const mat = path.style === 'eq' ? eq : main;
+            if (wrap && (path.kind === 'parallel' || path.kind === 'equator')) {
+                const geom = new THREE.BufferGeometry().setFromPoints(pts);
+                this.gratGroup.add(new THREE.LineLoop(geom, mat));
+            } else {
+                const segments = isMap ? splitAtSeam(pts, seamJump) : [pts];
+                for (const seg of segments) {
+                    if (seg.length < 2) continue;
+                    const geom = new THREE.BufferGeometry().setFromPoints(seg);
+                    this.gratGroup.add(new THREE.Line(geom, mat));
+                }
+            }
         }
         this.currentGroup().add(this.gratGroup);
         this.gratGroup.visible = this.state.showGraticule;
@@ -348,10 +383,20 @@ class GlobeApp {
 
         const mat = new THREE.LineBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.88 });
         const R = 1.003;
+        const seamJump = MAP_W / 2;  // flag if consecutive x-coords wrap the map
+        const isMap = this.state.viewMode === 'map';
         for (const ring of this.coastFeatures) {
             const pts = ring.map(([lon, lat]) => this.project(lat, lon, R));
-            const geom = new THREE.BufferGeometry().setFromPoints(pts);
-            this.coastGroup.add(new THREE.Line(geom, mat));
+            // In map mode the central-meridian shift can split continents across
+            // the seam; drop adjacent points whose x jumps by more than half the
+            // map width into separate Line objects so we don't draw a spurious
+            // stroke across the whole globe.
+            const segments = isMap ? splitAtSeam(pts, seamJump) : [pts];
+            for (const seg of segments) {
+                if (seg.length < 2) continue;
+                const geom = new THREE.BufferGeometry().setFromPoints(seg);
+                this.coastGroup.add(new THREE.Line(geom, mat));
+            }
         }
         this.currentGroup().add(this.coastGroup);
         this.coastGroup.visible = this.state.showCoastlines;
@@ -372,6 +417,26 @@ class GlobeApp {
         this.applyParticleContrast();
         this.currentGroup().add(this.particles.object);
         this.currentGroup().add(this.streamlines.object);
+    }
+
+    applyMapCenterLon() {
+        const u = -(this.state.mapCenterLon / 360);  // [-0.5, 0.5]
+        // Shaded plane texture — wraps via RepeatWrapping by default.
+        if (this.mapTexture) {
+            this.mapTexture.wrapS = THREE.RepeatWrapping;
+            this.mapTexture.offset.x = u;
+            this.mapTexture.needsUpdate = true;
+        }
+        // Contour overlay on the plane shares the same texture sample space
+        // (see contours.js planeMaterial.uUOffset).
+        if (this.contours?.planeMaterial?.uniforms?.uUOffset) {
+            this.contours.planeMaterial.uniforms.uUOffset.value = u;
+        }
+        // Coastlines and graticule use project() which now reads state.mapCenterLon.
+        if (this.state.viewMode === 'map') {
+            this.rebuildCoastlines();
+            this.rebuildGraticule();
+        }
     }
 
     applySunVisibility() {
@@ -437,6 +502,10 @@ class GlobeApp {
         this.globeGroup.visible = mode === 'globe';
         this.mapGroup.visible   = mode === 'map';
         this.orbitGroup.visible = mode === 'orbit';
+
+        // Map-specific controls only meaningful in map view.
+        const mcg = document.getElementById('map-center-group');
+        if (mcg) mcg.hidden = mode !== 'map';
 
         this.rebuildCoastlines();
         this.rebuildGraticule();
@@ -511,6 +580,7 @@ class GlobeApp {
                 prefetchField(this.state.field, { level: this.state.level });
             }
         }
+        if ('mapCenterLon' in patch) this.applyMapCenterLon();
         if ('showXSection' in patch) {
             const panel = document.getElementById('xsection-panel');
             if (panel) panel.hidden = !patch.showXSection;
@@ -750,6 +820,14 @@ class GlobeApp {
                     b.classList.toggle('active', b === btn));
                 this.setState({ decompose: mode });
             });
+        });
+        // Central-meridian slider (map view only)
+        const mapCenterSlider = document.getElementById('map-center-slider');
+        const mapCenterValue  = document.getElementById('map-center-value');
+        mapCenterSlider?.addEventListener('input', () => {
+            const lon = +mapCenterSlider.value;
+            mapCenterValue.textContent = `${lon}°`;
+            this.setState({ mapCenterLon: lon });
         });
         document.getElementById('toggle-xsection').addEventListener('change', (e) => {
             this.setState({ showXSection: e.target.checked });

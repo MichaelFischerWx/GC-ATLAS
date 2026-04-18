@@ -575,6 +575,15 @@
             </div>
         </section>
 
+        <section class="control-group" id="map-center-group" hidden>
+            <label class="field-label" for="map-center-slider">
+                Central meridian: <span id="map-center-value">0°</span>
+            </label>
+            <input id="map-center-slider" class="slider" type="range"
+                   min="-180" max="180" step="1" value="0"
+                   aria-label="central meridian">
+        </section>
+
         <section class="control-group">
             <h4>Overlays</h4>
             <label class="check"><input type="checkbox" id="toggle-coastlines" checked> Coastlines</label>
