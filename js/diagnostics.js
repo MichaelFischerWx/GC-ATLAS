@@ -15,10 +15,12 @@
 import { cachedMonth } from './era5.js';
 import { LEVELS, GRID } from './data.js';
 
-const A_EARTH = 6.371e6;   // m
-const G       = 9.80665;   // m s⁻²
+const A_EARTH = 6.371e6;         // m
+const G       = 9.80665;         // m s⁻²
+const OMEGA   = 7.2921e-5;       // rad s⁻¹
 const D2R     = Math.PI / 180;
-const PSI_UNIT = 1e9;      // 10⁹ kg/s
+const PSI_UNIT = 1e9;            // 10⁹ kg/s
+const M_UNIT   = 1e9;            // 10⁹ m²/s
 
 /**
  * Compute the monthly-mean mass streamfunction ψ(lat, p). Requires v tiles
@@ -84,6 +86,67 @@ export function computeMassStreamfunction(month) {
         name: 'Mass streamfunction ψ',
         units: '10⁹ kg s⁻¹',
         isSymmetric: true,
+        isDiagnostic: true,
+    };
+}
+
+/**
+ * Absolute zonal-mean angular momentum M(φ, p) = (Ω a cos φ + u) · a cos φ,
+ * where u is the zonal-mean zonal wind. Output in 10⁹ m² s⁻¹.
+ *
+ * Pedagogically this is where the subtropical jet "comes from" —
+ * parcels rising at the equator in the Hadley cell carry M ≈ Ω a², so
+ * as they move poleward aloft (cos φ falls), u must rise to conserve M,
+ * producing the upper-tropospheric zonal jet near the Hadley cell's
+ * poleward edge.
+ */
+export function computeAngularMomentum(month) {
+    const { nlat, nlon } = GRID;
+    const nlev = LEVELS.length;
+
+    // Zonal-mean u at each (k, lat).
+    const uzm = new Float32Array(nlev * nlat);
+    for (let k = 0; k < nlev; k++) {
+        const tile = cachedMonth('u', month, LEVELS[k]);
+        if (!tile) return null;
+        for (let i = 0; i < nlat; i++) {
+            let s = 0, n = 0;
+            const row = i * nlon;
+            for (let j = 0; j < nlon; j++) {
+                const v = tile[row + j];
+                if (Number.isFinite(v)) { s += v; n += 1; }
+            }
+            uzm[k * nlat + i] = n > 0 ? s / n : NaN;
+        }
+    }
+
+    const M = new Float32Array(nlev * nlat);
+    let vmin = Infinity, vmax = -Infinity;
+    for (let i = 0; i < nlat; i++) {
+        const lat = 90 - i;
+        const cosPhi = Math.cos(lat * D2R);
+        const aCos   = A_EARTH * cosPhi;
+        const solid  = OMEGA * A_EARTH * cosPhi;   // m/s
+        for (let k = 0; k < nlev; k++) {
+            const u = uzm[k * nlat + i];
+            if (!Number.isFinite(u)) { M[k * nlat + i] = NaN; continue; }
+            const m = (solid + u) * aCos / M_UNIT;
+            M[k * nlat + i] = m;
+            if (m < vmin) vmin = m;
+            if (m > vmax) vmax = m;
+        }
+    }
+    if (!Number.isFinite(vmin)) { vmin = 0; vmax = 1; }
+
+    return {
+        kind: 'zonal',
+        type: 'pl',
+        values: M,
+        vmin, vmax,
+        levels: LEVELS.slice(),
+        name: 'Angular momentum M',
+        units: '10⁹ m² s⁻¹',
+        isSymmetric: false,
         isDiagnostic: true,
     };
 }

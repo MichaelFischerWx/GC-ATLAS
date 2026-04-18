@@ -399,32 +399,29 @@
         }
         .xs-diag {
             display: flex;
-            gap: 4px;
+            align-items: center;
+            gap: 10px;
             margin: 0 0 8px 0;
-            padding: 3px;
-            background: rgba(255,255,255,0.03);
-            border: 1px solid var(--border);
-            border-radius: 6px;
         }
-        .xs-diag button {
-            flex: 1;
-            background: none;
-            border: none;
+        .xs-diag-label {
+            font-size: 0.68rem;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
             color: var(--sage);
+            font-family: 'JetBrains Mono', monospace;
+        }
+        #xs-diag-select {
+            flex: 1;
+            background: rgba(255,255,255,0.04);
+            border: 1px solid var(--border);
+            color: var(--paper);
             font: inherit;
-            font-size: 0.72rem;
-            letter-spacing: 0.03em;
+            font-size: 0.75rem;
             padding: 4px 8px;
-            border-radius: 4px;
+            border-radius: 5px;
             cursor: pointer;
-            transition: background 0.15s, color 0.15s;
         }
-        .xs-diag button.active {
-            background: var(--emerald);
-            color: var(--deep);
-            font-weight: 600;
-        }
-        .xs-diag button:hover:not(.active) { color: var(--paper); background: rgba(255,255,255,0.05); }
+        #xs-diag-select:focus { outline: 1px solid var(--emerald); }
         .xs-footer {
             margin-top: 8px;
             font-size: 0.72rem;
@@ -762,8 +759,12 @@
                 <button class="xs-close" id="xs-close" aria-label="Close panel">&times;</button>
             </div>
             <div class="xs-diag">
-                <button type="button" data-xs-diag="field" class="active">Field section</button>
-                <button type="button" data-xs-diag="psi">ψ streamfunction</button>
+                <label class="xs-diag-label" for="xs-diag-select">Variable</label>
+                <select id="xs-diag-select">
+                    <option value="field">Field section</option>
+                    <option value="psi">ψ — Mass streamfunction</option>
+                    <option value="M">M — Angular momentum</option>
+                </select>
             </div>
             <canvas id="xs-canvas" width="380" height="200"></canvas>
             <div class="xs-footer">

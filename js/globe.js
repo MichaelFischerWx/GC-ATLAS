@@ -20,7 +20,7 @@ import { greatCircleArc, latLonToVec3, gcDistanceKm } from './arc.js';
 import { loadManifest, onFieldLoaded, isReady as era5Ready, prefetchField, cachedMonth } from './era5.js';
 import { decompose, annualMeanFrom } from './decompose.js';
 import { HoverProbe } from './hover.js';
-import { computeMassStreamfunction } from './diagnostics.js';
+import { computeMassStreamfunction, computeAngularMomentum } from './diagnostics.js';
 
 const PLAY_INTERVAL_MS = 900;
 
@@ -127,10 +127,12 @@ class GlobeApp {
             if (name === 'u' || name === 'v') this.windCache.stale = true;
 
             if (s.showXSection && feedsCurrentField && monthMatches) this.updateXSection();
-            // ψ diagnostic needs v at every pressure level — re-render the
-            // panel every time a v tile lands so it fills in as the cache
-            // warms up.
-            if (s.showXSection && s.xsDiag === 'psi' && name === 'v' && monthMatches) {
+            // ψ needs v at every level; M needs u at every level. Refresh
+            // the panel whenever a relevant tile lands so the diagnostic
+            // sharpens as the cache warms up.
+            const diagNeeds = (s.xsDiag === 'psi' && name === 'v')
+                           || (s.xsDiag === 'M'   && name === 'u');
+            if (s.showXSection && diagNeeds && monthMatches) {
                 this.updateXSection();
             }
         });
@@ -213,8 +215,8 @@ class GlobeApp {
         el.addEventListener('pointerdown', (e) => {
             if (!e.shiftKey) return;
             if (this.state.viewMode !== 'globe') return;
-            // No arcs in ψ mode — the diagnostic is inherently zonal.
-            if (this.state.xsDiag === 'psi') return;
+            // No arcs in diagnostic modes — they're inherently zonal.
+            if (this.state.xsDiag !== 'field') return;
             const p = pointToLatLon(e);
             if (!p) return;
             dragging = true;
@@ -851,10 +853,13 @@ class GlobeApp {
         if ('mapCenterLon' in patch) this.applyMapCenterLon();
         if ('xsArc' in patch) this.updateArcLine();
         if ('xsDiag' in patch) {
-            // ψ needs v at every pressure level; prefetch so it fills in
-            // quickly if tiles aren't already cached.
+            // Diagnostics sample a specific component field at every
+            // pressure level — prefetch them all so the panel fills in
+            // quickly when the user switches mode.
             if (patch.xsDiag === 'psi') {
                 for (const L of LEVELS) prefetchField('v', { level: L });
+            } else if (patch.xsDiag === 'M') {
+                for (const L of LEVELS) prefetchField('u', { level: L });
             }
         }
         if ('showXSection' in patch) {
@@ -891,13 +896,18 @@ class GlobeApp {
         if (xsDiag === 'psi') {
             zm = computeMassStreamfunction(month);
             if (!zm) {
-                // Tiles still loading — fall back to the field section so the
-                // panel isn't blank; will re-render when v tiles arrive.
                 zm = computeZonalMean(field, month);
             } else {
                 effCmap = 'RdBu_r';
-                // Nice round interval for ψ in 10⁹ kg/s.
-                zm.contourInterval = 20;
+                zm.contourInterval = 20;             // 10⁹ kg/s
+            }
+        } else if (xsDiag === 'M') {
+            zm = computeAngularMomentum(month);
+            if (!zm) {
+                zm = computeZonalMean(field, month);
+            } else {
+                effCmap = 'viridis';
+                zm.contourInterval = 0.5;            // 10⁹ m²/s
             }
         } else if (xsArc) {
             const arc = greatCircleArc(
@@ -973,10 +983,10 @@ class GlobeApp {
         this.arcEndDot.position.copy(e);
         this.arcMidDot.position.copy(m);
         // Hide the arc line when the panel is closed, in orbit view, or in
-        // ψ mode (ψ is always zonal, so an arc would be misleading).
+        // any diagnostic mode (all diagnostics are zonal).
         this.arcGroup.visible = this.state.showXSection
                               && this.state.viewMode !== 'orbit'
-                              && this.state.xsDiag !== 'psi';
+                              && this.state.xsDiag === 'field';
     }
 
     updateField() {
@@ -1208,14 +1218,13 @@ class GlobeApp {
         document.getElementById('xs-reset')?.addEventListener('click', () => {
             this.setState({ xsArc: null });
         });
-        document.querySelectorAll('[data-xs-diag]').forEach((btn) => {
-            btn.addEventListener('click', () => {
-                const mode = btn.getAttribute('data-xs-diag');
-                document.querySelectorAll('[data-xs-diag]').forEach((b) =>
-                    b.classList.toggle('active', b === btn));
-                this.setState({ xsDiag: mode });
+        const diagSel = document.getElementById('xs-diag-select');
+        if (diagSel) {
+            diagSel.value = this.state.xsDiag;
+            diagSel.addEventListener('change', () => {
+                this.setState({ xsDiag: diagSel.value });
             });
-        });
+        }
         document.getElementById('xs-close').addEventListener('click', () => {
             document.getElementById('toggle-xsection').checked = false;
             this.setState({ showXSection: false });
