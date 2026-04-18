@@ -277,12 +277,7 @@ function drawArcAxes(ctx, x0, y0, w, h, zm) {
         ctx.textAlign = align;
         ctx.fillText(label, x, y0 + h + 5 * dpr);
     }
-    // Distance caption under the middle tick.
-    const distTxt = `${Math.round(zm.distanceKm).toLocaleString()} km`;
-    ctx.textBaseline = 'bottom';
-    ctx.textAlign = 'center';
-    ctx.fillStyle = 'rgba(174,195,182,0.7)';
-    ctx.fillText(distTxt, x0 + w / 2, y0 + h + 22 * dpr);
+    // (Distance intentionally omitted here — it's already in the panel title.)
 
     // Pressure ticks on the y-axis (pl fields only).
     ctx.textAlign = 'right';
