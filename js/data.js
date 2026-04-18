@@ -23,9 +23,19 @@ export const FIELDS = {
     w:    { type: 'pl', name: 'Vertical velocity (ω)',    units: 'Pa s⁻¹',  cmap: 'RdBu_r',  defaultLevel: 500 },
     z:    { type: 'pl', name: 'Geopotential height',      units: 'm',       cmap: 'viridis', defaultLevel: 500 },
     msl:  { type: 'sl', name: 'Mean sea-level pressure',  units: 'hPa',     cmap: 'plasma' },
+    sp:   { type: 'sl', name: 'Surface pressure',         units: 'hPa',     cmap: 'plasma' },
     t2m:  { type: 'sl', name: '2-m temperature',          units: 'K',       cmap: 'turbo' },
+    d2m:  { type: 'sl', name: '2-m dewpoint',             units: 'K',       cmap: 'turbo' },
     sst:  { type: 'sl', name: 'Sea surface temperature',  units: 'K',       cmap: 'turbo' },
     tcwv: { type: 'sl', name: 'Precipitable water (TCWV)', units: 'kg m⁻²', cmap: 'thalo' },
+    tp:   { type: 'sl', name: 'Total precipitation',      units: 'mm day⁻¹', cmap: 'thalo' },
+    blh:  { type: 'sl', name: 'Boundary-layer height',    units: 'm',       cmap: 'plasma' },
+    sshf: { type: 'sl', name: 'Surface sensible heat flux', units: 'W m⁻²', cmap: 'RdBu_r' },
+    slhf: { type: 'sl', name: 'Surface latent heat flux',   units: 'W m⁻²', cmap: 'RdBu_r' },
+    ssr:  { type: 'sl', name: 'Surface net SW radiation',   units: 'W m⁻²', cmap: 'plasma' },
+    str:  { type: 'sl', name: 'Surface net LW radiation',   units: 'W m⁻²', cmap: 'RdBu_r' },
+    tisr: { type: 'sl', name: 'TOA incoming solar',         units: 'W m⁻²', cmap: 'plasma' },
+    ttr:  { type: 'sl', name: 'TOA net LW (OLR)',           units: 'W m⁻²', cmap: 'magma' },
 };
 
 // ── lat/lon axes ─────────────────────────────────────────────────────────
@@ -192,7 +202,13 @@ function syntheticField(name, month, level) {
         case 't2m':  return fieldT2M(month);
         case 'sst':  return fieldSST(month);
         case 'tcwv': return fieldTCWV(month);
-        default:     throw new Error(`no generator for ${name}`);
+        default:
+            // Field has no bespoke synthetic — return a zero placeholder so the
+            // globe renders a neutral backdrop until the ERA5 tile arrives.
+            return {
+                values: new Float32Array(GRID.nlat * GRID.nlon),
+                vmin: -1, vmax: 1,
+            };
     }
 }
 

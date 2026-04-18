@@ -139,16 +139,23 @@ export function prefetchField(name, { level = null, months = [1,2,3,4,5,6,7,8,9,
 // ── per-variable unit normalisations ─────────────────────────────────────
 // Applied once at tile load, before caching, so all downstream code sees
 // values in the units advertised in data.js FIELDS metadata.
-const G = 9.80665;
+const G   = 9.80665;
+const DAY = 86400;
+const RADIATIVE_FLUX_VARS = new Set(['sshf', 'slhf', 'ssr', 'str', 'tisr', 'ttr']);
+
 function applyUnitConversions(name, values) {
+    const n = values.length;
     if (name === 'z') {
         // ERA5 geopotential (m² s⁻²) → geopotential height (m)
-        for (let i = 0; i < values.length; i++) values[i] /= G;
+        for (let i = 0; i < n; i++) values[i] /= G;
     } else if (name === 'msl' || name === 'sp') {
-        // ERA5 pressure in Pa → hPa
-        for (let i = 0; i < values.length; i++) values[i] /= 100;
+        // Pa → hPa
+        for (let i = 0; i < n; i++) values[i] /= 100;
     } else if (name === 'tp') {
-        // Monthly total precip in m → mm/day (approx ÷30 days)
-        for (let i = 0; i < values.length; i++) values[i] *= 1000 / 30;
+        // Monthly means provide m per day — convert to mm/day.
+        for (let i = 0; i < n; i++) values[i] *= 1000;
+    } else if (RADIATIVE_FLUX_VARS.has(name)) {
+        // Monthly means provide J m⁻² per day — convert to W m⁻².
+        for (let i = 0; i < n; i++) values[i] /= DAY;
     }
 }

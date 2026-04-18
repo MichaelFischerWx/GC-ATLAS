@@ -7,15 +7,15 @@
 
 import * as THREE from 'three';
 
-const N           = 8000;    // particle count — dense cover
+const N           = 12000;   // particle count — dense cover (≈ nullschool feel)
 const TRAIL       = 12;      // trail length (positions per particle)
 const MAX_AGE     = 160;     // frames before a particle respawns
 const SPEED       = 0.0042;  // deg per (m/s · frame)
 const RADIUS      = 1.006;   // lift slightly above data texture
 const POLE_MASK   = 82;      // avoid seeding beyond ±82°
 const SPEED_NORM  = 22;      // m/s that saturates particle opacity
-const ALPHA_FLOOR = 0.28;    // minimum head opacity so calm flow is still legible
-const ALPHA_PEAK  = 0.95;    // head opacity at jet-stream speeds
+const ALPHA_FLOOR = 0.55;    // minimum head opacity so calm flow is clearly visible
+const ALPHA_PEAK  = 1.00;    // head opacity at jet-stream speeds
 
 export class ParticleField {
     constructor(getUV, projectFn) {
