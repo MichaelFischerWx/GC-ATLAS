@@ -6,6 +6,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { fillRGBA, fillColorbar, COLORMAPS } from './colormap.js';
 import { getField, FIELDS, LEVELS, MONTHS, GRID } from './data.js';
+import { ParticleField } from './particles.js';
 
 const COASTLINE_URL = 'https://cdn.jsdelivr.net/gh/nvkelso/natural-earth-vector@master/geojson/ne_110m_coastline.geojson';
 const AXIAL_TILT = 23.4 * Math.PI / 180;
@@ -22,11 +23,15 @@ class GlobeApp {
             cmap: FIELDS.t.cmap,
             showCoastlines: true,
             showGraticule: true,
+            showParticles: true,
         };
+        this.windCache = { u: null, v: null, nlat: 0, nlon: 0, stale: true };
+
         this.initScene();
         this.initGlobe();
         this.initGraticule();
         this.initCoastlines();
+        this.initParticles();
         this.bindUI();
         this.updateField();
         this.animate();
@@ -175,6 +180,44 @@ class GlobeApp {
         this.coastGroup.visible = this.state.showCoastlines;
     }
 
+    // ── wind particle overlay ────────────────────────────────────────
+    initParticles() {
+        this.particles = new ParticleField((lat, lon) => this.sampleWind(lat, lon));
+        this.particles.setVisible(this.state.showParticles);
+        this.world.add(this.particles.object);
+    }
+
+    refreshWindCache() {
+        const { month, level } = this.state;
+        const uF = getField('u', { month, level });
+        const vF = getField('v', { month, level });
+        this.windCache.u = uF.values;
+        this.windCache.v = vF.values;
+        this.windCache.nlat = GRID.nlat;
+        this.windCache.nlon = GRID.nlon;
+        this.windCache.stale = false;
+    }
+
+    sampleWind(lat, lon) {
+        if (this.windCache.stale) this.refreshWindCache();
+        const { u, v, nlat, nlon } = this.windCache;
+        // Grid row 0 = lat +90, col 0 = lon −180.
+        const rLat = 90 - lat;
+        const rLon = ((lon + 180) % 360 + 360) % 360;
+        if (rLat < 0 || rLat > nlat - 1) return null;
+        const i0 = Math.floor(rLat);
+        const i1 = Math.min(nlat - 1, i0 + 1);
+        const j0 = Math.floor(rLon) % nlon;
+        const j1 = (j0 + 1) % nlon;
+        const fi = rLat - i0;
+        const fj = rLon - Math.floor(rLon);
+        const uTop = u[i0 * nlon + j0] * (1 - fj) + u[i0 * nlon + j1] * fj;
+        const uBot = u[i1 * nlon + j0] * (1 - fj) + u[i1 * nlon + j1] * fj;
+        const vTop = v[i0 * nlon + j0] * (1 - fj) + v[i0 * nlon + j1] * fj;
+        const vBot = v[i1 * nlon + j0] * (1 - fj) + v[i1 * nlon + j1] * fj;
+        return [uTop * (1 - fi) + uBot * fi, vTop * (1 - fi) + vBot * fi];
+    }
+
     // ── coordinate mapping ────────────────────────────────────────────
     // Convention: lon=0 at +Z (camera default), +X is lon=+90, +Y is north pole.
     latLonToXYZ(lat, lon, r = 1) {
@@ -192,6 +235,8 @@ class GlobeApp {
         Object.assign(this.state, patch);
         if ('showCoastlines' in patch && this.coastGroup) this.coastGroup.visible = !!patch.showCoastlines;
         if ('showGraticule' in patch && this.gratGroup)   this.gratGroup.visible   = !!patch.showGraticule;
+        if ('showParticles' in patch && this.particles)   this.particles.setVisible(!!patch.showParticles);
+        if ('level' in patch || 'month' in patch)         this.windCache.stale = true;
         this.updateField();
     }
 
@@ -258,6 +303,9 @@ class GlobeApp {
         document.getElementById('toggle-graticule').addEventListener('change', (e) => {
             this.setState({ showGraticule: e.target.checked });
         });
+        document.getElementById('toggle-particles').addEventListener('change', (e) => {
+            this.setState({ showParticles: e.target.checked });
+        });
 
         this.refreshLevelAvailability();
         this.on('field-updated', ({ field }) => this.updateColorbar(field));
@@ -286,6 +334,7 @@ class GlobeApp {
     animate() {
         const tick = () => {
             this.controls.update();
+            if (this.state.showParticles && this.particles) this.particles.step();
             this.renderer.render(this.scene, this.camera);
             requestAnimationFrame(tick);
         };
