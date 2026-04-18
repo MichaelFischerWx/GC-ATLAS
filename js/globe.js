@@ -9,6 +9,7 @@ import { getField, FIELDS, LEVELS, MONTHS, GRID } from './data.js';
 import { ParticleField } from './particles.js';
 import { StreamlineField } from './streamlines.js';
 import { ContourField } from './contours.js';
+import { ContourLabels } from './contour_labels.js';
 import { SunLight } from './sun.js';
 import { computeZonalMean, renderCrossSection } from './cross_section.js';
 import { loadManifest, onFieldLoaded, isReady as era5Ready, prefetchField } from './era5.js';
@@ -192,6 +193,12 @@ class GlobeApp {
         this.globeGroup.add(this.contours.sphereMesh);
         this.mapGroup.add(this.contours.planeMesh);
         this.contours.setVisible(this.state.showContours);
+
+        // Labels for the contour isolines. Separate groups for globe vs map
+        // since the sprite positions depend on projection.
+        this.contourLabels = new ContourLabels((lat, lon, r) => this.project(lat, lon, r));
+        this.globeGroup.add(this.contourLabels.group);
+        this.contourLabels.setVisible(this.state.showContours);
 
         // Sun marker + day/night terminator. Both live in the scene (not the
         // globeGroup) so their geometry is in world coords — the shadow
@@ -403,6 +410,14 @@ class GlobeApp {
         this.particles.onProjectionChanged();
         this.streamlines.onProjectionChanged();
 
+        if (this.contourLabels) {
+            this.contourLabels.group.parent?.remove(this.contourLabels.group);
+            this.currentGroup().add(this.contourLabels.group);
+            this.contourLabels.setProjection((lat, lon, r) => this.project(lat, lon, r));
+            this.updateField();  // regenerate labels for new projection
+        }
+        this.applySunVisibility();
+
         this.configureCamera();
     }
 
@@ -487,7 +502,12 @@ class GlobeApp {
         if (!this.contours) return;
         const meta = FIELDS[this.state.field] || {};
         const interval = meta.contour;
-        if (!interval) { this.contours.setVisible(false); return; }
+        const hasContours = !!interval;
+        if (!hasContours) {
+            this.contours.setVisible(false);
+            this.contourLabels?.clear();
+            return;
+        }
         this.contours.setData(f.values);
         this.contours.setInterval(interval);
         // Divergent colormaps → emphasise the zero line.
@@ -498,6 +518,14 @@ class GlobeApp {
         this.contours.setInk(darkBg ? 0xf4faf7 : 0x0a1712);
         this.contours.setOpacity(darkBg ? 0.70 : 0.85);
         this.contours.setVisible(this.state.showContours);
+
+        if (this.contourLabels) {
+            this.contourLabels.update(
+                f.values, GRID.nlat, GRID.nlon, interval,
+                { viewMode: this.state.viewMode },
+            );
+            this.contourLabels.setVisible(this.state.showContours);
+        }
     }
 
     updateStatus(f) {
