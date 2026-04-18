@@ -80,21 +80,31 @@ export function sample(name, t) {
     return [a[0] + f*(b[0]-a[0]), a[1] + f*(b[1]-a[1]), a[2] + f*(b[2]-a[2])];
 }
 
-/** Fill a Uint8ClampedArray (ImageData.data) from a Float32 field. */
+// Fill colour for NaN cells (e.g. SST over land): near-black with a faint
+// emerald tint to match the site chrome. Coastlines / contours overlay this.
+const NAN_R = 18, NAN_G = 26, NAN_B = 22;
+
+/** Fill a Uint8ClampedArray (ImageData.data) from a Float32 field. NaN-safe:
+ *  non-finite samples render as the dark "no-data" colour. */
 export function fillRGBA(rgba, values, { vmin, vmax, cmap = 'viridis' } = {}) {
     const n = values.length;
     const span = (vmax - vmin) || 1;
     const lut = LUT[cmap] ?? LUT.viridis;
     const stops = lut.length - 1;
     for (let i = 0; i < n; i++) {
-        let t = (values[i] - vmin) / span;
+        const v = values[i];
+        const k = i * 4;
+        if (!Number.isFinite(v)) {
+            rgba[k] = NAN_R; rgba[k + 1] = NAN_G; rgba[k + 2] = NAN_B; rgba[k + 3] = 255;
+            continue;
+        }
+        let t = (v - vmin) / span;
         t = t < 0 ? 0 : (t > 1 ? 1 : t);
         const idx = t * stops;
         const i0 = Math.floor(idx);
         const i1 = i0 + 1 > stops ? stops : i0 + 1;
         const f = idx - i0;
         const a = lut[i0], b = lut[i1];
-        const k = i * 4;
         rgba[k]     = (a[0] + f*(b[0]-a[0])) * 255;
         rgba[k + 1] = (a[1] + f*(b[1]-a[1])) * 255;
         rgba[k + 2] = (a[2] + f*(b[2]-a[2])) * 255;

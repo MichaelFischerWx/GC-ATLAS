@@ -9,6 +9,7 @@ import { getField, FIELDS, LEVELS, MONTHS, GRID } from './data.js';
 import { ParticleField } from './particles.js';
 import { StreamlineField } from './streamlines.js';
 import { ContourField } from './contours.js';
+import { SunLight } from './sun.js';
 import { computeZonalMean, renderCrossSection } from './cross_section.js';
 import { loadManifest, onFieldLoaded, isReady as era5Ready, prefetchField } from './era5.js';
 
@@ -52,6 +53,7 @@ class GlobeApp {
             showCoastlines: true,
             showGraticule: true,
             showContours: true,
+            showSun: true,
             windMode: 'particles',   // 'off' | 'particles' | 'streamlines'
             showXSection: false,
         };
@@ -191,6 +193,15 @@ class GlobeApp {
         this.mapGroup.add(this.contours.planeMesh);
         this.contours.setVisible(this.state.showContours);
 
+        // Sun marker + day/night terminator. Both live in the scene (not the
+        // globeGroup) so their geometry is in world coords — the shadow
+        // shader's dot(vNormal, uSunDir) is a direct world-space product.
+        this.sun = new SunLight();
+        this.scene.add(this.sun.sprite);
+        this.scene.add(this.sun.shadowMesh);
+        this.sun.update(this.state.month);
+        this.applySunVisibility();
+
         // Subtle rim glow on the globe (sphere mode only).
         const glow = new THREE.Mesh(
             new THREE.SphereGeometry(1.04, 96, 48),
@@ -322,6 +333,12 @@ class GlobeApp {
         this.currentGroup().add(this.streamlines.object);
     }
 
+    applySunVisibility() {
+        if (!this.sun) return;
+        // Sun / terminator are globe-mode concepts; hide in flat-map mode.
+        this.sun.setVisible(this.state.showSun && this.state.viewMode === 'globe');
+    }
+
     applyParticleContrast() {
         if (!this.particles) return;
         // Ink a dark near-black on bright colormaps (turbo, wind, plasma end)
@@ -414,6 +431,8 @@ class GlobeApp {
         if ('showCoastlines' in patch && this.coastGroup) this.coastGroup.visible = !!patch.showCoastlines;
         if ('showGraticule' in patch && this.gratGroup)   this.gratGroup.visible   = !!patch.showGraticule;
         if ('showContours' in patch && this.contours)     this.contours.setVisible(!!patch.showContours);
+        if ('showSun' in patch || 'viewMode' in patch)    this.applySunVisibility();
+        if ('month' in patch && this.sun)                 this.sun.update(this.state.month);
         if ('windMode' in patch) this.applyWindMode();
         if ('cmap' in patch) this.applyParticleContrast();
         if ('showXSection' in patch) {
@@ -577,6 +596,9 @@ class GlobeApp {
         });
         document.getElementById('toggle-contours').addEventListener('change', (e) => {
             this.setState({ showContours: e.target.checked });
+        });
+        document.getElementById('toggle-sun').addEventListener('change', (e) => {
+            this.setState({ showSun: e.target.checked });
         });
         // Wind overlay mode: segmented control (Off / Particles / Streamlines)
         document.querySelectorAll('[data-wind-mode]').forEach((btn) => {

@@ -40,7 +40,10 @@ Current assumption: ERA5 monthly means are per-day accumulations.
 - BUT: ECMWF docs are ambiguous for the "monthly_averaged_reanalysis" product. Confirm against a known reference (e.g. global mean precip ≈ 2.7 mm/day).
 - If wrong, the fix is one-line in `js/era5.js` `applyUnitConversions`.
 
-### 3. Decomposition toggles (high pedagogical value, low effort)
+### 3. Orbit mode ("viewer from space", Level 3 of the sun series)
+Levels 1 + 2 ship the sun marker and terminator on the current globe view. Level 3 adds a **third view mode** (Globe / Map / Orbit) where the camera zooms out and shows Earth as a small body orbiting a central sun, with a dashed ecliptic ring. Play cycles the orbit *and* Earth's diurnal rotation, so students see axial tilt + revolution simultaneously. Needs a second camera setup, a new scene graph root, and an interpolated orbital position keyed to `state.month`. Keep current month-sync so scrubbing months moves Earth around the orbit.
+
+### 4. Decomposition toggles (high pedagogical value, low effort)
 Radio group: `Total | Zonal-mean | Eddy | Anomaly`.
 - Zonal-mean: subtract longitude mean → 1D lat × level.
 - Eddy: values − zonal_mean → reveals stationary waves instantly.
