@@ -239,7 +239,7 @@ class GlobeApp {
         this.orbit = new OrbitScene(() => this.earthTexture);
         this.orbitGroup.add(this.orbit.group);
         this.orbit.group.visible = true;   // group already parented; outer group handles visibility
-        this.orbit.update(this.state.month);
+        this.orbit.update(this.state.month, 0, this.camera);
         this.spinAngle = 0;                 // cumulative diurnal rotation (rad)
     }
 
@@ -487,7 +487,7 @@ class GlobeApp {
         if ('showContours' in patch && this.contours)     this.contours.setVisible(!!patch.showContours);
         if ('showSun' in patch || 'viewMode' in patch)    this.applySunVisibility();
         if ('month' in patch && this.sun)                 this.sun.update(this.state.month);
-        if ('month' in patch && this.orbit)               this.orbit.update(this.state.month, this.spinAngle);
+        if ('month' in patch && this.orbit)               this.orbit.update(this.state.month, this.spinAngle, this.camera);
         if ('windMode' in patch) this.applyWindMode();
         if ('cmap' in patch) this.applyParticleContrast();
         if ('showXSection' in patch) {
@@ -756,7 +756,7 @@ class GlobeApp {
             // day), but the rotation sells the "this is a planet" effect.
             if (this.state.viewMode === 'orbit' && this.orbit) {
                 this.spinAngle = (this.spinAngle + 0.012) % (Math.PI * 2);
-                this.orbit.update(this.state.month, this.spinAngle);
+                this.orbit.update(this.state.month, this.spinAngle, this.camera);
             }
             this.renderer.render(this.scene, this.camera);
             requestAnimationFrame(tick);

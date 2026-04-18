@@ -303,20 +303,26 @@ export class OrbitScene {
         this.earthTiltGroup.add(latCircleLine(-66.6, { color: 0xE4F1EE, opacity: 0.55 })); // Antarctic Circle
         this.earthTiltGroup.add(latCircleLine(0,     { color: 0xFFFFFF, opacity: 0.30 })); // Equator
 
-        // Subsolar point marker: tiny warm sprite on Earth's surface at the
-        // point where the sun is directly overhead. Lives in the orbit group
-        // (not earthPivot) so it stays pinned to the sun-facing side rather
-        // than spinning with Earth — that way the yearly ±23.4° drift of
-        // the subsolar latitude is the only motion it shows.
+        // Subsolar point marker: warm sprite on Earth's surface at the point
+        // where the sun is directly overhead. Lives in the orbit group (not
+        // earthPivot) so it stays pinned to the sun-facing side rather than
+        // spinning with Earth — that way the yearly ±23.4° drift of the
+        // subsolar latitude is the only motion it shows.
+        //
+        // depthTest is OFF so the full circular sprite always renders (a
+        // billboard quad with depth-test on gets half-culled by the sphere
+        // near the limb, which reads as a clipped half-moon). Instead we
+        // cull it in JS via a camera-side dot-product test inside update().
         this.subsolarMarker = new THREE.Sprite(new THREE.SpriteMaterial({
             map: makeSunTexture(64),
             transparent: true,
-            depthTest: true,
+            depthTest: false,
             depthWrite: false,
             blending: THREE.AdditiveBlending,
         }));
-        this.subsolarMarker.scale.set(0.095, 0.095, 1);
-        this.subsolarMarker.renderOrder = 4;
+        this.subsolarMarker.scale.set(0.105, 0.105, 1);
+        this.subsolarMarker.renderOrder = 6;
+        this.subsolarMarker.frustumCulled = false;
         this.group.add(this.subsolarMarker);
 
         this.update(1);
@@ -327,7 +333,7 @@ export class OrbitScene {
      * update the terminator's sun direction. Call this whenever month or
      * spin angle changes.
      */
-    update(month, spinAngle = 0) {
+    update(month, spinAngle = 0, camera = null) {
         const earthPos = earthOrbitPosition(month);
         this.earthPivot.position.copy(earthPos);
         this.earthSpinGroup.rotation.y = spinAngle;
@@ -343,6 +349,18 @@ export class OrbitScene {
         this.subsolarMarker.position.copy(earthPos).add(
             sunDir.clone().multiplyScalar(EARTH_R * 1.01),
         );
+
+        // Hide the marker when the subsolar point is on the far hemisphere
+        // from the camera. (depthTest is off, so without this check the
+        // marker would draw straight through Earth when the camera is on
+        // the night side.)
+        if (camera) {
+            const toCam = new THREE.Vector3()
+                .subVectors(camera.position, earthPos);
+            this.subsolarMarker.visible = toCam.dot(sunDir) > 0;
+        } else {
+            this.subsolarMarker.visible = true;
+        }
     }
 
     setVisible(v) { this.group.visible = v; }
