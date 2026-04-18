@@ -364,6 +364,15 @@ class GlobeApp {
             if (panel) panel.hidden = !patch.showXSection;
         }
         if ('level' in patch || 'month' in patch) this.windCache.stale = true;
+
+        // Eagerly prefetch all 12 months at this (field, level) so the
+        // colorbar stabilises quickly once any tile lands.
+        if ('field' in patch || 'level' in patch) {
+            prefetchField(this.state.field, { level: this.state.level });
+            prefetchField('u', { level: this.state.level });
+            prefetchField('v', { level: this.state.level });
+        }
+
         this.updateField();
         if (this.state.showXSection) this.updateXSection();
     }
@@ -441,10 +450,29 @@ class GlobeApp {
                 { value: i + 1, textContent: m }));
         });
         monthSel.value = this.state.month;
+        const monthSlider = document.getElementById('month-slider');
+        if (monthSlider) monthSlider.value = this.state.month;
+
+        const syncMonthUI = (m) => {
+            monthSel.value = m;
+            if (monthSlider) monthSlider.value = m;
+        };
+        this._syncMonthUI = syncMonthUI;
+
         monthSel.addEventListener('change', () => {
             this.stopPlay();
-            this.setState({ month: +monthSel.value });
+            const m = +monthSel.value;
+            syncMonthUI(m);
+            this.setState({ month: m });
         });
+        if (monthSlider) {
+            monthSlider.addEventListener('input', () => {
+                this.stopPlay();
+                const m = +monthSlider.value;
+                syncMonthUI(m);
+                this.setState({ month: m });
+            });
+        }
 
         const playBtn = document.getElementById('month-play');
         playBtn.addEventListener('click', () => {
@@ -502,7 +530,7 @@ class GlobeApp {
         prefetchField('v', { level: this.state.level });
         this.playTimer = setInterval(() => {
             const next = this.state.month === 12 ? 1 : this.state.month + 1;
-            if (monthSel) monthSel.value = next;
+            if (this._syncMonthUI) this._syncMonthUI(next);
             this.setState({ month: next });
         }, PLAY_INTERVAL_MS);
     }

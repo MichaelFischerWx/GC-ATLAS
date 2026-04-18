@@ -64,10 +64,13 @@ export function requestField(name, { month, level } = {}) {
     const key = keyOf(name, month, useLevel);
     const hit = cache.get(key);
     if (hit && hit !== 'pending') {
+        // Aggregate range across every cached month at this (field, level) so
+        // the colorbar stays fixed while the user scrubs / auto-plays months.
+        const agg = aggregateStats(name, useLevel);
         return {
             values: hit.values,
-            vmin: hit.vmin,
-            vmax: hit.vmax,
+            vmin: agg ? agg.vmin : hit.vmin,
+            vmax: agg ? agg.vmax : hit.vmax,
             shape: r.meta.shape,
             units: r.meta.units,
             long_name: r.meta.long_name,
@@ -107,6 +110,20 @@ async function fetchTile(name, group, meta, month, level) {
 }
 
 export function onFieldLoaded(fn) { subscribers.add(fn); return () => subscribers.delete(fn); }
+
+/** Aggregate vmin/vmax across every cached month at (name, level). Returns null if none yet. */
+function aggregateStats(name, level) {
+    const prefix = level == null ? `${name}|sl|` : `${name}|${level}|`;
+    let vmin = Infinity, vmax = -Infinity, any = false;
+    for (const [key, val] of cache.entries()) {
+        if (!val || typeof val !== 'object') continue;
+        if (!key.startsWith(prefix)) continue;
+        if (val.vmin < vmin) vmin = val.vmin;
+        if (val.vmax > vmax) vmax = val.vmax;
+        any = true;
+    }
+    return any ? { vmin, vmax } : null;
+}
 
 /** Kick off fetches for many months in parallel (for the "play" seasonal cycle). */
 export function prefetchField(name, { level = null, months = [1,2,3,4,5,6,7,8,9,10,11,12] } = {}) {

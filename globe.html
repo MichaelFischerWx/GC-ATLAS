@@ -158,12 +158,11 @@
         select:focus  { outline: none; border-color: var(--emerald-bright); box-shadow: 0 0 0 3px var(--emerald-glow); }
         select:disabled { cursor: not-allowed; }
 
-        .row-controls { display: flex; gap: 8px; }
-        .row-controls select { flex: 1; }
+        .slider-row { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
         .icon-btn {
             flex-shrink: 0;
-            width: 40px;
-            height: auto;
+            width: 36px;
+            height: 36px;
             font-size: 0.85rem;
             font-family: inherit;
             background: var(--thalo-raised);
@@ -181,6 +180,42 @@
             background: var(--emerald);
             border-color: var(--emerald-bright);
             color: var(--deep);
+        }
+
+        .slider {
+            flex: 1;
+            -webkit-appearance: none;
+            appearance: none;
+            height: 5px;
+            background: var(--thalo-raised);
+            border: 1px solid var(--thalo-line);
+            border-radius: 4px;
+            outline: none;
+            cursor: pointer;
+            padding: 0;
+            margin: 0;
+        }
+        .slider:focus { border-color: var(--emerald-bright); box-shadow: 0 0 0 3px var(--emerald-glow); }
+        .slider::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 16px;
+            height: 16px;
+            background: var(--emerald-bright);
+            border: 2px solid var(--deep);
+            border-radius: 50%;
+            cursor: grab;
+            box-shadow: 0 0 0 2px rgba(45, 189, 160, 0.25);
+            transition: transform 0.12s;
+        }
+        .slider::-webkit-slider-thumb:active { cursor: grabbing; transform: scale(1.15); }
+        .slider::-moz-range-thumb {
+            width: 16px; height: 16px;
+            background: var(--emerald-bright);
+            border: 2px solid var(--deep);
+            border-radius: 50%;
+            cursor: grab;
+            box-shadow: 0 0 0 2px rgba(45, 189, 160, 0.25);
         }
 
         .check {
@@ -430,9 +465,10 @@
 
         <section class="control-group">
             <label class="field-label" for="month-select">Month</label>
-            <div class="row-controls">
-                <select id="month-select"></select>
+            <select id="month-select"></select>
+            <div class="slider-row">
                 <button id="month-play" class="icon-btn" type="button" aria-label="play through months" title="Play through the seasonal cycle">▶</button>
+                <input id="month-slider" class="slider" type="range" min="1" max="12" step="1" value="1" aria-label="scrub month">
             </div>
         </section>
 

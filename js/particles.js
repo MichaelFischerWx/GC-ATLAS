@@ -129,24 +129,38 @@ export class ParticleField {
                 this.respawn(i);
                 continue;
             }
-            if (lon > 180) lon -= 360;
-            else if (lon < -180) lon += 360;
+            let wrapped = false;
+            if (lon > 180)       { lon -= 360; wrapped = true; }
+            else if (lon < -180) { lon += 360; wrapped = true; }
 
             this.state[i * 3]     = lat;
             this.state[i * 3 + 1] = lon;
             this.state[i * 3 + 2] = age;
 
-            // Shift trail: position[0] is newest, position[TRAIL-1] oldest.
             const tx = i * TRAIL * 3;
-            for (let t = TRAIL - 1; t > 0; t--) {
-                this.trail[tx + t * 3]     = this.trail[tx + (t - 1) * 3];
-                this.trail[tx + t * 3 + 1] = this.trail[tx + (t - 1) * 3 + 1];
-                this.trail[tx + t * 3 + 2] = this.trail[tx + (t - 1) * 3 + 2];
-            }
             const [x, y, z] = this.latLonToXYZ(lat, lon);
-            this.trail[tx]     = x;
-            this.trail[tx + 1] = y;
-            this.trail[tx + 2] = z;
+
+            if (wrapped) {
+                // Reset the trail to the new head. On the sphere this doesn't
+                // matter (old and new positions are adjacent in 3D), but on the
+                // flat equirectangular map the trail would streak across the
+                // whole width if we shifted normally.
+                for (let t = 0; t < TRAIL; t++) {
+                    this.trail[tx + t * 3]     = x;
+                    this.trail[tx + t * 3 + 1] = y;
+                    this.trail[tx + t * 3 + 2] = z;
+                }
+            } else {
+                // Shift trail: position[0] is newest, position[TRAIL-1] oldest.
+                for (let t = TRAIL - 1; t > 0; t--) {
+                    this.trail[tx + t * 3]     = this.trail[tx + (t - 1) * 3];
+                    this.trail[tx + t * 3 + 1] = this.trail[tx + (t - 1) * 3 + 1];
+                    this.trail[tx + t * 3 + 2] = this.trail[tx + (t - 1) * 3 + 2];
+                }
+                this.trail[tx]     = x;
+                this.trail[tx + 1] = y;
+                this.trail[tx + 2] = z;
+            }
         }
         this.updateGeometry();
     }
