@@ -509,6 +509,43 @@
         }
         .view-toggle button:hover:not(.active) { color: var(--paper); background: rgba(255,255,255,0.05); }
 
+        /* ── Loading overlay (isentropic mode needs ~24 tiles to land) ─── */
+        #globe-loading {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity 0.18s ease-out;
+            z-index: 40;
+        }
+        #globe-loading.visible { opacity: 1; }
+        .globe-loading-card {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 10px 16px;
+            background: rgba(12, 28, 24, 0.88);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            border: 1px solid var(--border);
+            border-radius: 999px;
+            color: var(--sage);
+            font-size: 0.85rem;
+            letter-spacing: 0.04em;
+        }
+        .globe-loading-spinner {
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            border: 2px solid rgba(146, 229, 196, 0.25);
+            border-top-color: var(--emerald-bright);
+            animation: gc-spin 0.9s linear infinite;
+        }
+        @keyframes gc-spin { to { transform: rotate(360deg); } }
+
         /* ── Controls tips (bottom-right card) ─────────────── */
         .tips-panel {
             position: absolute;

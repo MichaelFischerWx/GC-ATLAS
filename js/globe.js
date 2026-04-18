@@ -942,18 +942,34 @@ class GlobeApp {
             // when the primary field is something else.
             const needsAllLevels = (this.state.field === 'pv') || isen;
             if (needsAllLevels) {
+                // Build the list of ingredients we need at every level.
+                const ingredients = ['t'];
+                if (isen || this.state.field === 'pv' || this.state.field === 'wspd') {
+                    ingredients.push('u', 'v');
+                }
+                if (FIELDS[this.state.field]?.type === 'pl' &&
+                    !['u','v','wspd','pv','t'].includes(this.state.field)) {
+                    ingredients.push(this.state.field);
+                }
+                // Hot path: fetch every level for the CURRENT month first so
+                // the view renders asap. Deferring the other 11 months keeps
+                // the browser's 6-connection queue focused on what we need
+                // right now — the all-months warmup follows in a microtask
+                // for the colorbar aggregation + play mode.
+                const current = [this.state.month];
                 for (const L of LEVELS) {
-                    prefetchField('t', { level: L });
-                    if (isen || this.state.field === 'pv' || this.state.field === 'wspd') {
-                        prefetchField('u', { level: L });
-                        prefetchField('v', { level: L });
-                    }
-                    if (FIELDS[this.state.field]?.type === 'pl' &&
-                        this.state.field !== 'u' && this.state.field !== 'v' &&
-                        this.state.field !== 'wspd' && this.state.field !== 'pv') {
-                        prefetchField(this.state.field, { level: L });
+                    for (const name of ingredients) {
+                        prefetchField(name, { level: L, months: current });
                     }
                 }
+                setTimeout(() => {
+                    const others = [1,2,3,4,5,6,7,8,9,10,11,12].filter(m => m !== this.state.month);
+                    for (const L of LEVELS) {
+                        for (const name of ingredients) {
+                            prefetchField(name, { level: L, months: others });
+                        }
+                    }
+                }, 1500);
             }
         }
 
@@ -1103,6 +1119,7 @@ class GlobeApp {
     updateField() {
         const { field, level, theta, vCoord, month, cmap, decompose: mode } = this.state;
         const f = getField(field, { month, level, coord: vCoord, theta });
+        this.setLoadingOverlay(!f.isReal);
 
         // Apply decomposition mode (total / zonal / eddy / anomaly).
         const decomp = this.applyDecomposition(f, mode);
@@ -1136,6 +1153,17 @@ class GlobeApp {
         this.updateContours(fDecorated);
         this.updateStatus(f);   // status reflects raw tile, not the transform
         this.emit('field-updated', { field: fDecorated });
+    }
+
+    setLoadingOverlay(visible) {
+        let el = document.getElementById('globe-loading');
+        if (!el) {
+            el = document.createElement('div');
+            el.id = 'globe-loading';
+            el.innerHTML = '<div class="globe-loading-card"><div class="globe-loading-spinner"></div><div class="globe-loading-text">Loading ERA5 tiles…</div></div>';
+            this.mount.appendChild(el);
+        }
+        el.classList.toggle('visible', !!visible);
     }
 
     applyDecomposition(f, mode) {
