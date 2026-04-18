@@ -13,7 +13,8 @@ const MAX_AGE     = 160;     // frames before a particle respawns
 const SPEED       = 0.0042;  // deg per (m/s · frame)
 const RADIUS      = 1.006;   // lift slightly above data texture
 const POLE_MASK   = 82;      // avoid seeding beyond ±82°
-const SPEED_NORM  = 38;      // m/s that maps to full particle brightness
+const SPEED_NORM  = 18;      // m/s that maps to full brightness (typical mid-trop wind)
+const BRIGHT_FLOOR = 0.32;   // baseline so slow regions still show streamlines
 
 export class ParticleField {
     constructor(getUV, projectFn) {
@@ -156,7 +157,7 @@ export class ParticleField {
         for (let i = 0; i < N; i++) {
             // Brightness scales with local wind speed (up to SPEED_NORM),
             // floored so slow flow still hints at streamlines.
-            const brightness = 0.15 + 0.85 * Math.min(1, this.speed[i] / SPEED_NORM);
+            const brightness = BRIGHT_FLOOR + (1 - BRIGHT_FLOOR) * Math.min(1, this.speed[i] / SPEED_NORM);
             const tx = i * TRAIL * 3;
             const ox = i * tailMax * 6;
             const ax = i * tailMax * 2;
