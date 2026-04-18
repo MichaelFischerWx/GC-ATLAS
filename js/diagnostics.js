@@ -18,9 +18,12 @@ import { LEVELS, GRID } from './data.js';
 const A_EARTH = 6.371e6;         // m
 const G       = 9.80665;         // m s⁻²
 const OMEGA   = 7.2921e-5;       // rad s⁻¹
+const R_DRY   = 287.04;          // J kg⁻¹ K⁻¹ — dry-air gas constant
+const KAPPA   = 0.2854;          // R_dry / cp
 const D2R     = Math.PI / 180;
 const PSI_UNIT = 1e9;            // 10⁹ kg/s
 const M_UNIT   = 1e9;            // 10⁹ m²/s
+const N2_UNIT  = 1e-4;           // 10⁻⁴ s⁻²  (tropospheric N² ≈ 1, stratosphere ≈ 4)
 
 /**
  * Compute the monthly-mean mass streamfunction ψ(lat, p). Requires v tiles
@@ -146,6 +149,93 @@ export function computeAngularMomentum(month) {
         levels: LEVELS.slice(),
         name: 'Angular momentum M',
         units: '10⁹ m² s⁻¹',
+        isSymmetric: false,
+        isDiagnostic: true,
+    };
+}
+
+/**
+ * Brunt–Väisälä frequency squared on the (lat, p) zonal-mean grid.
+ *
+ *   N² = (g / θ) · ∂θ/∂z = -(g² p / (R T θ)) · ∂θ/∂p
+ *
+ * where θ = T·(1000/p)^κ. Computed from zonal-mean T at each (lat, p), with
+ * centred differences in p (one-sided at the edges). Output in 10⁻⁴ s⁻²
+ * (tropospheric N² ≈ 1, stratospheric ≈ 4 in these units).
+ *
+ * Pedagogically this exposes static stability: the stratosphere lights up as
+ * a strongly stable layer, the tropical free troposphere is weakly stable,
+ * and the boundary layer / inversions in mid-latitudes show finer structure.
+ */
+export function computeBruntVaisala(month) {
+    const { nlat, nlon } = GRID;
+    const nlev = LEVELS.length;
+
+    // Zonal-mean T and θ at each (k, lat).
+    const Tzm = new Float32Array(nlev * nlat);
+    const Thzm = new Float32Array(nlev * nlat);
+    for (let k = 0; k < nlev; k++) {
+        const tile = cachedMonth('t', month, LEVELS[k]);
+        if (!tile) return null;
+        const thetaFactor = Math.pow(1000 / LEVELS[k], KAPPA);
+        for (let i = 0; i < nlat; i++) {
+            let s = 0, n = 0;
+            const row = i * nlon;
+            for (let j = 0; j < nlon; j++) {
+                const v = tile[row + j];
+                if (Number.isFinite(v)) { s += v; n += 1; }
+            }
+            const T = n > 0 ? s / n : NaN;
+            Tzm[k * nlat + i] = T;
+            Thzm[k * nlat + i] = T * thetaFactor;
+        }
+    }
+
+    // ∂θ/∂p with centred differences in pressure (Pa). LEVELS is ascending in p
+    // (top of atmosphere at index 0, surface at last). N² = -(g² p / (R T θ)) · dθ/dp.
+    const N2 = new Float32Array(nlev * nlat);
+    let vmin = Infinity, vmax = -Infinity;
+    for (let k = 0; k < nlev; k++) {
+        const p = LEVELS[k] * 100;     // hPa → Pa
+        for (let i = 0; i < nlat; i++) {
+            const T  = Tzm[k * nlat + i];
+            const Th = Thzm[k * nlat + i];
+            if (!Number.isFinite(T) || !Number.isFinite(Th)) {
+                N2[k * nlat + i] = NaN;
+                continue;
+            }
+            let dthdp;
+            if (k === 0) {
+                const dp = (LEVELS[1] - LEVELS[0]) * 100;
+                dthdp = (Thzm[1 * nlat + i] - Thzm[0 * nlat + i]) / dp;
+            } else if (k === nlev - 1) {
+                const dp = (LEVELS[nlev - 1] - LEVELS[nlev - 2]) * 100;
+                dthdp = (Thzm[(nlev - 1) * nlat + i] - Thzm[(nlev - 2) * nlat + i]) / dp;
+            } else {
+                const dp = (LEVELS[k + 1] - LEVELS[k - 1]) * 100;
+                dthdp = (Thzm[(k + 1) * nlat + i] - Thzm[(k - 1) * nlat + i]) / dp;
+            }
+            const n2 = -(G * G * p / (R_DRY * T * Th)) * dthdp;
+            const out = n2 / N2_UNIT;
+            N2[k * nlat + i] = out;
+            if (out < vmin) vmin = out;
+            if (out > vmax) vmax = out;
+        }
+    }
+    if (!Number.isFinite(vmin)) { vmin = 0; vmax = 4; }
+    // Clamp the colorbar a little — exotic values near the model top can blow it
+    // out and squash the troposphere; cap at 12 (× 10⁻⁴ s⁻²).
+    if (vmax > 12) vmax = 12;
+    if (vmin < -2) vmin = -2;
+
+    return {
+        kind: 'zonal',
+        type: 'pl',
+        values: N2,
+        vmin, vmax,
+        levels: LEVELS.slice(),
+        name: 'Brunt–Väisälä N²',
+        units: '10⁻⁴ s⁻²',
         isSymmetric: false,
         isDiagnostic: true,
     };

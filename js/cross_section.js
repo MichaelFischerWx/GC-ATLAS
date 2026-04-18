@@ -177,6 +177,8 @@ export function renderCrossSection(canvas, zm, cmap) {
         if (zm.type === 'pl') drawHeatmap(ctx, padL, padT, plotW, plotH, zm, cmap);
         else                  drawLine   (ctx, padL, padT, plotW, plotH, zm);
         drawAxes(ctx, padL, padT, plotW, plotH, zm);
+        // EP-flux mode overlays vector arrows on top of the ∇·F shading.
+        if (zm.arrows) drawEPArrows(ctx, padL, padT, plotW, plotH, zm);
     }
 }
 
@@ -456,6 +458,63 @@ function drawLine(ctx, x0, y0, w, h, zm) {
         if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
     }
     ctx.stroke();
+}
+
+/**
+ * Edmon–Hoskins–McIntyre arrows on the (lat, log-p) panel. zm.arrows holds
+ * pre-balanced (dx, dy) so visual length is proportional in (φ, log p) space.
+ * We rescale so the longest arrow occupies ~LONG_FRAC of the panel width.
+ */
+function drawEPArrows(ctx, x0, y0, w, h, zm) {
+    const dpr = zm._dpr || 1;
+    const { arrows, levels } = zm;
+    const pMin = levels[0], pMax = levels[levels.length - 1];
+    const logSpan = Math.log(pMax / pMin);
+    const LONG_FRAC = 0.10;     // longest arrow ≈ 10% of plot width
+
+    let maxLen = 0;
+    for (let i = 0; i < arrows.dx.length; i++) {
+        const m = Math.hypot(arrows.dx[i], arrows.dy[i]);
+        if (m > maxLen) maxLen = m;
+    }
+    if (maxLen === 0) return;
+    const targetPx = LONG_FRAC * w;
+    const scale = targetPx / maxLen;
+
+    ctx.save();
+    ctx.lineWidth = Math.max(1, dpr * 1.1);
+    ctx.strokeStyle = 'rgba(255, 232, 168, 0.92)';
+    ctx.fillStyle   = 'rgba(255, 232, 168, 0.92)';
+
+    for (let i = 0; i < arrows.lats.length; i++) {
+        const lat = arrows.lats[i];
+        const p   = arrows.pressures[i];
+        const dx  = arrows.dx[i] * scale;
+        const dy  = arrows.dy[i] * scale;
+        if (Math.hypot(dx, dy) < 2 * dpr) continue;        // skip dust
+        const x = x0 + ((lat + 90) / 180) * w;
+        const y = y0 + h * (Math.log(p / pMin) / logSpan);
+        // Panel-y increases downward; F_p positive (downward in pressure ⇒
+        // toward the surface) maps to +y. F_φ positive (northward) ⇒ +x.
+        const x2 = x + dx;
+        const y2 = y + dy;
+        ctx.beginPath();
+        ctx.moveTo(x, y);
+        ctx.lineTo(x2, y2);
+        ctx.stroke();
+        // Arrowhead.
+        const ang = Math.atan2(y2 - y, x2 - x);
+        const head = 4 * dpr;
+        ctx.beginPath();
+        ctx.moveTo(x2, y2);
+        ctx.lineTo(x2 - head * Math.cos(ang - Math.PI / 7),
+                   y2 - head * Math.sin(ang - Math.PI / 7));
+        ctx.lineTo(x2 - head * Math.cos(ang + Math.PI / 7),
+                   y2 - head * Math.sin(ang + Math.PI / 7));
+        ctx.closePath();
+        ctx.fill();
+    }
+    ctx.restore();
 }
 
 function drawAxes(ctx, x0, y0, w, h, zm) {

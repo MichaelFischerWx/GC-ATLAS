@@ -28,3 +28,6 @@ service-account*.json
 
 # Node (for any future build tooling, kept defensive)
 node_modules/
+
+# Personal notes / drafts (kept locally, not part of the repo)
+docs/

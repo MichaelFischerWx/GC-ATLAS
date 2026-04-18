@@ -17,10 +17,12 @@ import { SunLight } from './sun.js';
 import { OrbitScene, ORBIT_RADIUS } from './orbit.js';
 import { computeZonalMean, computeArcCrossSection, renderCrossSection } from './cross_section.js';
 import { greatCircleArc, latLonToVec3, gcDistanceKm } from './arc.js';
-import { loadManifest, onFieldLoaded, isReady as era5Ready, prefetchField, cachedMonth } from './era5.js';
+import { loadManifest, onFieldLoaded, isReady as era5Ready, prefetchField, cachedMonth, registerClamps } from './era5.js';
 import { decompose, annualMeanFrom } from './decompose.js';
 import { HoverProbe } from './hover.js';
-import { computeMassStreamfunction, computeAngularMomentum } from './diagnostics.js';
+import { computeMassStreamfunction, computeAngularMomentum, computeBruntVaisala } from './diagnostics.js';
+import { computeEPFlux } from './ep_flux.js';
+import { computeLorenzCycle } from './lorenz.js';
 import { ParcelField } from './parcels.js';
 import { GifExporter, downloadBlob } from './gif_export.js';
 
@@ -90,8 +92,10 @@ class GlobeApp {
             decompose: 'total',      // 'total' | 'zonal' | 'eddy' | 'anomaly'
             mapCenterLon: 0,         // central meridian for the flat map (-180..180)
             showXSection: false,
+            showLorenz: false,
+            lorenzRef: 'lorenz',     // 'lorenz' (sorted) | 'simple' (area-mean)
             xsArc: null,             // { start:{lat,lon}, end:{lat,lon} } or null for zonal-mean
-            xsDiag: 'field',         // 'field' | 'psi' (cross-section variable)
+            xsDiag: 'field',         // 'field' | 'psi' | 'M' | 'N2' | 'epflux' (cross-section variable)
         };
         this.windCache = { u: null, v: null, nlat: 0, nlon: 0, stale: true };
 
@@ -110,6 +114,10 @@ class GlobeApp {
     async bootstrapEra5() {
         const ok = await loadManifest();
         if (!ok) return;
+        // Register percentile-clamp metadata so spiky fields (vo, d, w, tp)
+        // get colorbars based on their bulk distribution rather than isolated
+        // topographic / convective extremes.
+        registerClamps(FIELDS);
         onFieldLoaded(({ name, month, level }) => {
             const s = this.state;
             const levelMatches = (level == null || level === s.level);
@@ -120,11 +128,13 @@ class GlobeApp {
             const isenNeedsName = isenActive &&
                 (name === 't' || name === s.field ||
                  (s.field === 'wspd' && (name === 'u' || name === 'v')) ||
-                 (s.field === 'pv'   && (name === 'u' || name === 'v')));
+                 (s.field === 'pv'   && (name === 'u' || name === 'v')) ||
+                 (s.field === 'mse'  && (name === 'z' || name === 'q')));
             const feedsCurrentField =
                 (name === s.field) ||
                 (s.field === 'wspd' && (name === 'u' || name === 'v')) ||
                 (s.field === 'pv'   && (name === 't' || name === 'u' || name === 'v')) ||
+                (s.field === 'mse'  && (name === 't' || name === 'z' || name === 'q')) ||
                 isenNeedsName;
 
             // PV and θ-coord fields span every pressure level, so don't
@@ -134,6 +144,8 @@ class GlobeApp {
                 isenNeedsName ||
                 (s.field === 'pv' && (name === 't' || name === 'u' || name === 'v'))
             );
+            // MSE in pressure-coord is single-level (only the chosen level matters).
+            // In θ-coord it gets caught by isenNeedsName below.
             if (feedsCurrentField && monthMatches && (!needsLevelMatch || levelMatches)) {
                 if (s.field === 'pv' || isenActive) invalidateIsentropicCache();
                 this.updateField();
@@ -151,13 +163,20 @@ class GlobeApp {
                 (isenActive && name === 't')) this.windCache.stale = true;
 
             if (s.showXSection && feedsCurrentField && monthMatches) this.updateXSection();
-            // ψ needs v at every level; M needs u at every level. Refresh
-            // the panel whenever a relevant tile lands so the diagnostic
-            // sharpens as the cache warms up.
-            const diagNeeds = (s.xsDiag === 'psi' && name === 'v')
-                           || (s.xsDiag === 'M'   && name === 'u');
+            // ψ needs v at every level; M needs u at every level; N² needs T;
+            // EP flux needs u, v, w, t. Refresh the panel whenever a relevant
+            // tile lands so the diagnostic sharpens as the cache warms up.
+            const diagNeeds = (s.xsDiag === 'psi'    && name === 'v')
+                           || (s.xsDiag === 'M'      && name === 'u')
+                           || (s.xsDiag === 'N2'     && name === 't')
+                           || (s.xsDiag === 'epflux' && (name === 'u' || name === 'v' || name === 'w' || name === 't'));
             if (s.showXSection && diagNeeds && monthMatches) {
                 this.updateXSection();
+            }
+            // Lorenz cycle needs u, v, w, t at every level for the current month.
+            const lorenzIngredient = (name === 'u' || name === 'v' || name === 'w' || name === 't');
+            if (s.showLorenz && lorenzIngredient && monthMatches) {
+                this.updateLorenz();
             }
         });
         // Prime: ask for the current field, which triggers a fetch.
@@ -918,11 +937,33 @@ class GlobeApp {
                 for (const L of LEVELS) prefetchField('v', { level: L });
             } else if (patch.xsDiag === 'M') {
                 for (const L of LEVELS) prefetchField('u', { level: L });
+            } else if (patch.xsDiag === 'N2') {
+                for (const L of LEVELS) prefetchField('t', { level: L });
+            } else if (patch.xsDiag === 'epflux') {
+                for (const L of LEVELS) {
+                    prefetchField('u', { level: L });
+                    prefetchField('v', { level: L });
+                    prefetchField('w', { level: L });
+                    prefetchField('t', { level: L });
+                }
             }
         }
         if ('showXSection' in patch) {
             const panel = document.getElementById('xsection-panel');
             if (panel) panel.hidden = !patch.showXSection;
+        }
+        if ('showLorenz' in patch) {
+            const panel = document.getElementById('lorenz-panel');
+            if (panel) panel.hidden = !patch.showLorenz;
+            if (patch.showLorenz) {
+                // Lorenz needs u, v, w, t at every level — kick a full prefetch.
+                for (const L of LEVELS) {
+                    prefetchField('u', { level: L });
+                    prefetchField('v', { level: L });
+                    prefetchField('w', { level: L });
+                    prefetchField('t', { level: L });
+                }
+            }
         }
         if ('level' in patch || 'month' in patch || 'vCoord' in patch || 'theta' in patch) this.windCache.stale = true;
         if ('month' in patch && this.parcels) this.parcels.invalidateCube();
@@ -935,6 +976,23 @@ class GlobeApp {
             prefetchField(this.state.field, { level: this.state.level });
             prefetchField('u', { level: this.state.level });
             prefetchField('v', { level: this.state.level });
+            // MSE depends on t, z, q at the chosen level (and at every level
+            // when in θ-coord OR when the cross-section panel is open).
+            // We prefetch ALL 12 months at the chosen level so the aggregate
+            // colorbar stabilises rather than re-shifting as months load —
+            // mirrors what prefetchField does automatically for raw tiles.
+            if (this.state.field === 'mse') {
+                prefetchField('t', { level: this.state.level });
+                prefetchField('z', { level: this.state.level });
+                prefetchField('q', { level: this.state.level });
+                if (this.state.showXSection) {
+                    for (const L of LEVELS) {
+                        prefetchField('t', { level: L });
+                        prefetchField('z', { level: L });
+                        prefetchField('q', { level: L });
+                    }
+                }
+            }
             // PV and any θ-coord rendering require T at every pressure level
             // (for the θ cube) plus the chosen field at every level — kick
             // those here so they arrive in parallel. In θ-coord we also
@@ -948,8 +1006,11 @@ class GlobeApp {
                 if (isen || this.state.field === 'pv' || this.state.field === 'wspd') {
                     ingredients.push('u', 'v');
                 }
+                if (this.state.field === 'mse') {
+                    ingredients.push('z', 'q');
+                }
                 if (FIELDS[this.state.field]?.type === 'pl' &&
-                    !['u','v','wspd','pv','t'].includes(this.state.field)) {
+                    !['u','v','wspd','pv','t','mse'].includes(this.state.field)) {
                     ingredients.push(this.state.field);
                 }
                 // Hot path: fetch every level for the CURRENT month first so
@@ -983,6 +1044,51 @@ class GlobeApp {
 
         this.updateField();
         if (this.state.showXSection) this.updateXSection();
+        if (this.state.showLorenz)   this.updateLorenz();
+    }
+
+    updateLorenz() {
+        const cycle = computeLorenzCycle(this.state.month, this.state.lorenzRef);
+        const setText = (id, t) => { const el = document.getElementById(id); if (el) el.textContent = t; };
+        const setConv = (id, val) => {
+            const el = document.getElementById(id);
+            if (!el) return;
+            if (!Number.isFinite(val)) { el.textContent = '—'; el.classList.remove('neg'); return; }
+            el.textContent = `${val >= 0 ? '+' : ''}${val.toFixed(2)}`;
+            el.classList.toggle('neg', val < 0);
+        };
+        const setReservoir = (id, val) => {
+            // Display in MJ/m² (J/m² ÷ 1e6).
+            if (!Number.isFinite(val)) { setText(id, '—'); return; }
+            const mj = val / 1e6;
+            setText(id, mj >= 100 ? mj.toFixed(0) : mj.toFixed(1));
+        };
+        if (!cycle) {
+            setText('lz-PM','…'); setText('lz-PE','…'); setText('lz-KM','…'); setText('lz-KE','…');
+            return;
+        }
+        setReservoir('lz-PM', cycle.reservoirs.PM);
+        setReservoir('lz-PE', cycle.reservoirs.PE);
+        setReservoir('lz-KM', cycle.reservoirs.KM);
+        setReservoir('lz-KE', cycle.reservoirs.KE);
+        setConv('lz-c-PMPE', cycle.conversions.C_PM_PE);
+        setConv('lz-c-PEKE', cycle.conversions.C_PE_KE);
+        setConv('lz-c-KEKM', cycle.conversions.C_KE_KM);
+        setConv('lz-c-PMKM', cycle.conversions.C_PM_KM);
+        // Arrow widths encode |C| (capped). Flip direction when negative by
+        // swapping the line endpoints' marker; simpler: rotate the visible
+        // marker via the line's `transform` if needed. For now we leave
+        // arrows pointing in canonical direction and let the sign in the
+        // label communicate reversal.
+        const widthFor = (v) => Number.isFinite(v) ? Math.max(0.8, Math.min(4.5, Math.abs(v) * 0.6)) : 1.2;
+        const setArrow = (id, val) => {
+            const el = document.getElementById(id);
+            if (el) el.setAttribute('stroke-width', widthFor(val).toFixed(2));
+        };
+        setArrow('lz-arrow-PMPE', cycle.conversions.C_PM_PE);
+        setArrow('lz-arrow-PEKE', cycle.conversions.C_PE_KE);
+        setArrow('lz-arrow-KEKM', cycle.conversions.C_KE_KM);
+        setArrow('lz-arrow-PMKM', cycle.conversions.C_PM_KM);
     }
 
     updateXSection() {
@@ -1006,6 +1112,22 @@ class GlobeApp {
             } else {
                 effCmap = 'viridis';
                 zm.contourInterval = 0.5;            // 10⁹ m²/s
+            }
+        } else if (xsDiag === 'N2') {
+            zm = computeBruntVaisala(month);
+            if (!zm) {
+                zm = computeZonalMean(field, month);
+            } else {
+                effCmap = 'magma';
+                zm.contourInterval = 1;              // 10⁻⁴ s⁻²
+            }
+        } else if (xsDiag === 'epflux') {
+            zm = computeEPFlux(month);
+            if (!zm) {
+                zm = computeZonalMean(field, month);
+            } else {
+                effCmap = 'RdBu_r';                  // ∇·F shading: westerly + / easterly −
+                zm.contourInterval = 2;              // m s⁻¹ day⁻¹
             }
         } else if (xsArc) {
             const arc = greatCircleArc(
@@ -1049,6 +1171,8 @@ class GlobeApp {
                 const desc = {
                     psi: 'ψ(φ, p) = (2π a cos φ / g) · ∫₀ᵖ [v] dp',
                     M:   'M = (Ω a cos φ + u) · a cos φ · from zonal-mean u',
+                    N2:  'N² = -(g²p / R T θ) · ∂θ/∂p · static stability',
+                    epflux: 'F = (-a cos φ [u′v′], a cos φ f [v′θ′] / ∂[θ]/∂p) — stationary eddies; shading: ∇·F (m s⁻¹ day⁻¹)',
                 }[xsDiag] || 'Zonal-mean diagnostic';
                 hint.innerHTML = desc;
             } else if (zm.kind === 'arc') {
@@ -1248,9 +1372,23 @@ class GlobeApp {
     // ── UI wiring ────────────────────────────────────────────────────
     bindUI() {
         const fieldSel = document.getElementById('field-select');
+        // Build a Map of group → entries to emit one <optgroup> per category,
+        // preserving insertion order so the dropdown reads as a guided tour
+        // (Dynamics → Moisture → Derived → Surface → fluxes → TOA).
+        const groups = new Map();
         for (const [key, meta] of Object.entries(FIELDS)) {
-            fieldSel.appendChild(Object.assign(document.createElement('option'),
-                { value: key, textContent: meta.name }));
+            const g = meta.group || 'Other';
+            if (!groups.has(g)) groups.set(g, []);
+            groups.get(g).push([key, meta]);
+        }
+        for (const [groupName, entries] of groups) {
+            const og = document.createElement('optgroup');
+            og.label = groupName;
+            for (const [key, meta] of entries) {
+                og.appendChild(Object.assign(document.createElement('option'),
+                    { value: key, textContent: meta.name }));
+            }
+            fieldSel.appendChild(og);
         }
         fieldSel.value = this.state.field;
         fieldSel.addEventListener('change', () => {
@@ -1378,6 +1516,30 @@ class GlobeApp {
         });
         document.getElementById('toggle-xsection').addEventListener('change', (e) => {
             this.setState({ showXSection: e.target.checked });
+        });
+        document.getElementById('toggle-lorenz')?.addEventListener('change', (e) => {
+            this.setState({ showLorenz: e.target.checked });
+            if (e.target.checked) this.updateLorenz();
+        });
+        document.getElementById('lorenz-close')?.addEventListener('click', () => {
+            const cb = document.getElementById('toggle-lorenz');
+            if (cb) cb.checked = false;
+            this.setState({ showLorenz: false });
+        });
+        document.getElementById('lorenz-info-btn')?.addEventListener('click', () => {
+            const info = document.getElementById('lorenz-info');
+            const btn  = document.getElementById('lorenz-info-btn');
+            if (!info || !btn) return;
+            const open = info.hasAttribute('hidden');
+            if (open) { info.removeAttribute('hidden'); btn.classList.add('active'); }
+            else      { info.setAttribute('hidden', ''); btn.classList.remove('active'); }
+        });
+        document.querySelectorAll('input[name="lorenz-ref"]').forEach((radio) => {
+            radio.addEventListener('change', (e) => {
+                if (!e.target.checked) return;
+                this.setState({ lorenzRef: e.target.value });
+                if (this.state.showLorenz) this.updateLorenz();
+            });
         });
         document.getElementById('xs-reset')?.addEventListener('click', () => {
             this.setState({ xsArc: null });

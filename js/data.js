@@ -9,7 +9,7 @@
 // jets, Hadley return, stationary waves, subtropical highs). They exist so
 // the renderer works offline / before real tiles are staged.
 
-import { requestField as requestEra5, availableLevels } from './era5.js';
+import { requestField as requestEra5, availableLevels, cachedMonth } from './era5.js';
 
 export const GRID = { nlat: 181, nlon: 360 };
 export const LEVELS = [10, 50, 100, 150, 200, 250, 300, 500, 700, 850, 925, 1000];
@@ -17,27 +17,32 @@ export const THETA_LEVELS = [280, 300, 315, 330, 350, 400, 500, 700];
 export const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 
 export const FIELDS = {
-    t:    { type: 'pl', name: 'Temperature',              units: 'K',       cmap: 'turbo',   defaultLevel: 500, contour: 10 },
-    u:    { type: 'pl', name: 'Zonal wind (u)',           units: 'm s⁻¹',   cmap: 'RdBu_r',  defaultLevel: 200, contour: 10 },
-    v:    { type: 'pl', name: 'Meridional wind (v)',      units: 'm s⁻¹',   cmap: 'RdBu_r',  defaultLevel: 200, contour: 5 },
-    wspd: { type: 'pl', name: 'Wind speed (|V|)',         units: 'm s⁻¹',   cmap: 'turbo',   defaultLevel: 200, derived: true, contour: 10 },
-    w:    { type: 'pl', name: 'Vertical velocity (ω)',    units: 'Pa s⁻¹',  cmap: 'RdBu_r',  defaultLevel: 500, contour: 0.05 },
-    z:    { type: 'pl', name: 'Geopotential height',      units: 'm',       cmap: 'viridis', defaultLevel: 500, contour: 60 },
-    msl:  { type: 'sl', name: 'Mean sea-level pressure',  units: 'hPa',     cmap: 'plasma',  contour: 4 },
-    sp:   { type: 'sl', name: 'Surface pressure',         units: 'hPa',     cmap: 'plasma',  contour: 20 },
-    t2m:  { type: 'sl', name: '2-m temperature',          units: 'K',       cmap: 'turbo',   contour: 5 },
-    d2m:  { type: 'sl', name: '2-m dewpoint',             units: 'K',       cmap: 'turbo',   contour: 5 },
-    sst:  { type: 'sl', name: 'Sea surface temperature',  units: 'K',       cmap: 'turbo',   contour: 2 },
-    tcwv: { type: 'sl', name: 'Precipitable water (TCWV)', units: 'kg m⁻²', cmap: 'thalo',   contour: 5 },
-    tp:   { type: 'sl', name: 'Total precipitation',      units: 'mm day⁻¹', cmap: 'thalo',  contour: 2 },
-    blh:  { type: 'sl', name: 'Boundary-layer height',    units: 'm',       cmap: 'plasma',  contour: 200 },
-    sshf: { type: 'sl', name: 'Surface sensible heat flux', units: 'W m⁻²', cmap: 'RdBu_r',  contour: 20 },
-    slhf: { type: 'sl', name: 'Surface latent heat flux',   units: 'W m⁻²', cmap: 'RdBu_r',  contour: 25 },
-    ssr:  { type: 'sl', name: 'Surface net SW radiation',   units: 'W m⁻²', cmap: 'plasma',  contour: 25 },
-    str:  { type: 'sl', name: 'Surface net LW radiation',   units: 'W m⁻²', cmap: 'RdBu_r',  contour: 10 },
-    tisr: { type: 'sl', name: 'TOA incoming solar',         units: 'W m⁻²', cmap: 'plasma',  contour: 50 },
-    ttr:  { type: 'sl', name: 'TOA net LW (OLR)',           units: 'W m⁻²', cmap: 'magma',   contour: 20 },
-    pv:   { type: 'pl', name: 'Ertel PV',                   units: 'PVU',   cmap: 'RdBu_r',  defaultLevel: 330, contour: 1, derived: true, thetaOnly: true },
+    t:    { type: 'pl', group: 'Dynamics',           name: 'Temperature',              units: 'K',       cmap: 'turbo',   defaultLevel: 500, contour: 10 },
+    u:    { type: 'pl', group: 'Dynamics',           name: 'Zonal wind (u)',           units: 'm s⁻¹',   cmap: 'RdBu_r',  defaultLevel: 200, contour: 10 },
+    v:    { type: 'pl', group: 'Dynamics',           name: 'Meridional wind (v)',      units: 'm s⁻¹',   cmap: 'RdBu_r',  defaultLevel: 200, contour: 5 },
+    wspd: { type: 'pl', group: 'Dynamics',           name: 'Wind speed (|V|)',         units: 'm s⁻¹',   cmap: 'turbo',   defaultLevel: 200, derived: true, contour: 10 },
+    vo:   { type: 'pl', group: 'Dynamics',           name: 'Relative vorticity (ζ)',   units: '10⁻⁵ s⁻¹', cmap: 'RdBu_r', defaultLevel: 500, contour: 2,  clamp: { lo: 0.01, hi: 0.99 } },
+    d:    { type: 'pl', group: 'Dynamics',           name: 'Horizontal divergence',    units: '10⁻⁵ s⁻¹', cmap: 'RdBu_r', defaultLevel: 200, contour: 1,  clamp: { lo: 0.01, hi: 0.99 } },
+    w:    { type: 'pl', group: 'Dynamics',           name: 'Vertical velocity (ω)',    units: 'Pa s⁻¹',  cmap: 'RdBu_r',  defaultLevel: 500, contour: 0.05, clamp: { lo: 0.01, hi: 0.99 } },
+    z:    { type: 'pl', group: 'Dynamics',           name: 'Geopotential height',      units: 'm',       cmap: 'viridis', defaultLevel: 500, contour: 60 },
+    q:    { type: 'pl', group: 'Moisture',           name: 'Specific humidity',        units: 'g kg⁻¹',  cmap: 'thalo',   defaultLevel: 850, contour: 2 },
+    r:    { type: 'pl', group: 'Moisture',           name: 'Relative humidity',        units: '%',       cmap: 'thalo',   defaultLevel: 700, contour: 10 },
+    pv:   { type: 'pl', group: 'Derived & PV',       name: 'Ertel PV',                 units: 'PVU',     cmap: 'RdBu_r',  defaultLevel: 330, contour: 1, derived: true, thetaOnly: true },
+    mse:  { type: 'pl', group: 'Derived & PV',       name: 'Moist static energy (h/c_p)', units: 'K',    cmap: 'magma',   defaultLevel: 850, contour: 5, derived: true },
+    t2m:  { type: 'sl', group: 'Surface',            name: '2-m temperature',          units: 'K',       cmap: 'turbo',   contour: 5 },
+    d2m:  { type: 'sl', group: 'Surface',            name: '2-m dewpoint',             units: 'K',       cmap: 'turbo',   contour: 5 },
+    sst:  { type: 'sl', group: 'Surface',            name: 'Sea surface temperature',  units: 'K',       cmap: 'turbo',   contour: 2 },
+    msl:  { type: 'sl', group: 'Surface',            name: 'Mean sea-level pressure',  units: 'hPa',     cmap: 'plasma',  contour: 4 },
+    sp:   { type: 'sl', group: 'Surface',            name: 'Surface pressure',         units: 'hPa',     cmap: 'plasma',  contour: 20 },
+    blh:  { type: 'sl', group: 'Surface',            name: 'Boundary-layer height',    units: 'm',       cmap: 'plasma',  contour: 200 },
+    tcwv: { type: 'sl', group: 'Moisture',           name: 'Precipitable water (TCWV)', units: 'kg m⁻²', cmap: 'thalo',   contour: 5 },
+    tp:   { type: 'sl', group: 'Moisture',           name: 'Total precipitation',      units: 'mm day⁻¹', cmap: 'thalo',  contour: 2,  clamp: { lo: 0.0, hi: 0.99 } },
+    sshf: { type: 'sl', group: 'Surface fluxes',     name: 'Surface sensible heat flux', units: 'W m⁻²', cmap: 'RdBu_r',  contour: 20 },
+    slhf: { type: 'sl', group: 'Surface fluxes',     name: 'Surface latent heat flux',   units: 'W m⁻²', cmap: 'RdBu_r',  contour: 25 },
+    ssr:  { type: 'sl', group: 'Surface fluxes',     name: 'Surface net SW radiation',   units: 'W m⁻²', cmap: 'plasma',  contour: 25 },
+    str:  { type: 'sl', group: 'Surface fluxes',     name: 'Surface net LW radiation',   units: 'W m⁻²', cmap: 'RdBu_r',  contour: 10 },
+    tisr: { type: 'sl', group: 'TOA',                name: 'TOA incoming solar',         units: 'W m⁻²', cmap: 'plasma',  contour: 50 },
+    ttr:  { type: 'sl', group: 'TOA',                name: 'TOA net LW (OLR)',           units: 'W m⁻²', cmap: 'magma',   contour: 20 },
 };
 
 /** Fields that only make sense on isentropic surfaces. When user picks one of
@@ -144,6 +149,36 @@ function magnitudeFromUV(u, v) {
     return { values, vmin, vmax };
 }
 
+// Moist static energy: h = c_p·T + g·z + L_v·q, displayed as h/c_p (K).
+// Pressure-coord uses cached t/z/q tiles; θ-coord interpolates each ingredient
+// to the requested isentropic surface.  q is stored in g/kg (×1000 from raw),
+// so divide back to kg/kg before applying L_v.
+const CP_DRY = 1004;          // J kg⁻¹ K⁻¹
+const G_MSE  = 9.80665;
+const L_V    = 2.501e6;       // J kg⁻¹  (latent heat of vaporisation, ~273 K)
+const _mseCache = new Map();  // `${coord}:${level|theta}:${month}` → {values, vmin, vmax}
+
+function computeMSEFromTiles(tT, tZ, tQ) {
+    const n = tT.length;
+    const out = new Float32Array(n);
+    let vmin = Infinity, vmax = -Infinity;
+    for (let i = 0; i < n; i++) {
+        const T = tT[i], Z = tZ[i], Q = tQ[i];
+        if (!Number.isFinite(T) || !Number.isFinite(Z) || !Number.isFinite(Q)) {
+            out[i] = NaN; continue;
+        }
+        // Z is geopotential HEIGHT (m) after era5.js's m²/s² → m conversion;
+        // multiply by g to recover g·z. Q is g/kg → divide by 1000 for kg/kg.
+        const h = CP_DRY * T + G_MSE * Z + L_V * (Q / 1000);
+        const hOverCp = h / CP_DRY;
+        out[i] = hOverCp;
+        if (hOverCp < vmin) vmin = hOverCp;
+        if (hOverCp > vmax) vmax = hOverCp;
+    }
+    if (!Number.isFinite(vmin)) { vmin = 250; vmax = 360; }
+    return { values: out, vmin, vmax };
+}
+
 function computeDerived(name, month, level, coord, theta) {
     if (name === 'wspd') {
         const key = `${coord}:${coord === 'theta' ? theta : level}:${month}`;
@@ -177,6 +212,51 @@ function computeDerived(name, month, level, coord, theta) {
     if (name === 'pv') {
         const theta0 = (coord === 'theta') ? theta : 330;
         return computePVOnIsentrope(month, theta0);
+    }
+    if (name === 'mse') {
+        // Opportunistically fill _mseCache for any month whose ingredients
+        // (t, z, q) are already cached — keeps the aggregate colorbar stable
+        // as the user scrubs months instead of re-shifting on each new visit.
+        if (coord !== 'theta') {
+            for (let m = 1; m <= 12; m++) {
+                const k = `pressure:${level}:${m}`;
+                if (_mseCache.has(k)) continue;
+                const t = cachedMonth('t', m, level);
+                const z = cachedMonth('z', m, level);
+                const q = cachedMonth('q', m, level);
+                if (t && z && q) {
+                    _mseCache.set(k, computeMSEFromTiles(t, z, q));
+                }
+            }
+        }
+        const key = `${coord}:${coord === 'theta' ? theta : level}:${month}`;
+        let entry = _mseCache.get(key);
+        if (!entry) {
+            let tT, tZ, tQ;
+            if (coord === 'theta') {
+                const Ti = fieldOnIsentrope('t', month, theta);
+                const Zi = fieldOnIsentrope('z', month, theta);
+                const Qi = fieldOnIsentrope('q', month, theta);
+                if (!Ti || !Zi || !Qi) return null;
+                tT = Ti.values; tZ = Zi.values; tQ = Qi.values;
+            } else {
+                const Te = requestEra5('t', { month, level });
+                const Ze = requestEra5('z', { month, level });
+                const Qe = requestEra5('q', { month, level });
+                if (!Te || !Ze || !Qe) return null;
+                tT = Te.values; tZ = Ze.values; tQ = Qe.values;
+            }
+            entry = computeMSEFromTiles(tT, tZ, tQ);
+            _mseCache.set(key, entry);
+        }
+        const prefix = `${coord}:${coord === 'theta' ? theta : level}:`;
+        const agg = aggregateRangeByPrefix(_mseCache, prefix);
+        return {
+            values: entry.values,
+            vmin: agg ? agg.vmin : entry.vmin,
+            vmax: agg ? agg.vmax : entry.vmax,
+            isReal: true,
+        };
     }
     return null;
 }
@@ -349,6 +429,7 @@ export function invalidateIsentropicCache() {
     _thetaCubeCache.clear();
     _isenFieldCache.clear();
     _wspdCache.clear();
+    _mseCache.clear();
 }
 // Legacy name kept for callers that still import it.
 export const invalidatePVCache = invalidateIsentropicCache;

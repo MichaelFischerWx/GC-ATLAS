@@ -105,12 +105,22 @@ async function fetchTile(name, group, meta, month, level) {
         const buf = await resp.arrayBuffer();
         const values = new Float32Array(buf);
         applyUnitConversions(name, values);
-        // Per-tile range so each (field, month, level) uses the full colormap.
-        let vmin = Infinity, vmax = -Infinity;
-        for (let i = 0; i < values.length; i++) {
-            const v = values[i];
-            if (v < vmin) vmin = v;
-            if (v > vmax) vmax = v;
+        // Per-tile colorbar range. For most fields we use the true min/max,
+        // but a few (vorticity, divergence, vertical velocity, precipitation)
+        // are dominated by isolated topographic / convective spikes that
+        // squash the colorbar — for those we use a percentile clamp set in
+        // the FIELDS metadata as `clamp: { lo, hi }` (fractions in [0,1]).
+        const clamp = CLAMPS.get(name);
+        let vmin, vmax;
+        if (clamp) {
+            [vmin, vmax] = percentileBounds(values, clamp.lo, clamp.hi);
+        } else {
+            vmin = Infinity; vmax = -Infinity;
+            for (let i = 0; i < values.length; i++) {
+                const v = values[i];
+                if (v < vmin) vmin = v;
+                if (v > vmax) vmax = v;
+            }
         }
         cache.set(key, { values, vmin, vmax });
         for (const fn of subscribers) fn({ name, month, level });
@@ -118,6 +128,30 @@ async function fetchTile(name, group, meta, month, level) {
         console.warn(`[era5] tile failed ${url}:`, err);
         cache.delete(key);
     }
+}
+
+// Per-field percentile clamp registry, populated lazily on first request from
+// FIELDS metadata (avoids a circular import). Set by registerClamps() below.
+const CLAMPS = new Map();
+export function registerClamps(fields) {
+    for (const [name, meta] of Object.entries(fields)) {
+        if (meta.clamp) CLAMPS.set(name, meta.clamp);
+    }
+}
+
+/** NaN-safe percentile bounds. Sorts a copy of finite values; returns
+ *  [lo-percentile, hi-percentile]. lo, hi as fractions in [0, 1]. */
+function percentileBounds(values, lo, hi) {
+    const finite = [];
+    for (let i = 0; i < values.length; i++) {
+        const v = values[i];
+        if (Number.isFinite(v)) finite.push(v);
+    }
+    if (finite.length === 0) return [0, 1];
+    finite.sort((a, b) => a - b);
+    const idxLo = Math.max(0, Math.min(finite.length - 1, Math.floor(lo * (finite.length - 1))));
+    const idxHi = Math.max(0, Math.min(finite.length - 1, Math.floor(hi * (finite.length - 1))));
+    return [finite[idxLo], finite[idxHi]];
 }
 
 export function onFieldLoaded(fn) { subscribers.add(fn); return () => subscribers.delete(fn); }
@@ -168,5 +202,11 @@ function applyUnitConversions(name, values) {
     } else if (RADIATIVE_FLUX_VARS.has(name)) {
         // Monthly means provide J m⁻² per day — convert to W m⁻².
         for (let i = 0; i < n; i++) values[i] /= DAY;
+    } else if (name === 'q') {
+        // kg/kg → g/kg (typical surface tropics ≈ 18 g/kg, stratosphere ≈ 0)
+        for (let i = 0; i < n; i++) values[i] *= 1000;
+    } else if (name === 'd' || name === 'vo') {
+        // s⁻¹ → 10⁻⁵ s⁻¹ (gen-circ teaching unit; mid-trop ζ scales ~10⁻⁵)
+        for (let i = 0; i < n; i++) values[i] *= 1e5;
     }
 }
