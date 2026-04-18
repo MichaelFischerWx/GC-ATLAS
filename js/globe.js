@@ -22,6 +22,7 @@ import { decompose, annualMeanFrom } from './decompose.js';
 import { HoverProbe } from './hover.js';
 import { computeMassStreamfunction, computeAngularMomentum } from './diagnostics.js';
 import { ParcelField } from './parcels.js';
+import { GifExporter, downloadBlob } from './gif_export.js';
 
 const PLAY_INTERVAL_MS = 900;
 
@@ -176,7 +177,7 @@ class GlobeApp {
         this.camera = new THREE.PerspectiveCamera(32, w / h, 0.1, 100);
         this.camera.position.set(...cameraFromView(DEFAULT_VIEW, AXIAL_TILT));
 
-        this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+        this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
         this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
         this.renderer.setSize(w, h);
         this.renderer.setClearColor(0x000000, 0);
@@ -1384,6 +1385,7 @@ class GlobeApp {
         document.getElementById('parcels-clear')?.addEventListener('click', () => {
             this.parcels?.clear();
         });
+        this.bindGifExport();
         const diagSel = document.getElementById('xs-diag-select');
         if (diagSel) {
             diagSel.value = this.state.xsDiag;
@@ -1453,6 +1455,76 @@ class GlobeApp {
         this.playTimer = null;
         const btn = document.getElementById('month-play');
         if (btn) { btn.textContent = '▶'; btn.classList.remove('playing'); btn.setAttribute('aria-label', 'play through months'); }
+    }
+
+    bindGifExport() {
+        const openBtn = document.getElementById('export-gif');
+        const modal   = document.getElementById('gif-modal');
+        const closeBtn = document.getElementById('gif-close');
+        const cancelBtn = document.getElementById('gif-cancel');
+        const startBtn = document.getElementById('gif-start');
+        const progress = document.getElementById('gif-progress');
+        const progressFill = document.getElementById('gif-progress-fill');
+        const progressText = document.getElementById('gif-progress-text');
+        if (!openBtn || !modal) return;
+
+        const open  = () => { modal.classList.remove('hidden'); progress.classList.add('hidden'); startBtn.disabled = false; startBtn.textContent = 'Capture'; };
+        const close = () => { modal.classList.add('hidden'); };
+
+        openBtn.addEventListener('click', open);
+        closeBtn.addEventListener('click', close);
+        cancelBtn.addEventListener('click', close);
+        modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
+
+        const exporter = new GifExporter({
+            renderer: this.renderer,
+            state: this.state,
+            setState: (p) => this.setState(p),
+            updateField: () => this.updateField(),
+            // "Ready" = the currently-rendered field came back as a real
+            // tile, not the pending placeholder.
+            getIsReady: () => {
+                const { field, level, theta, vCoord, month } = this.state;
+                return !!getField(field, { month, level, coord: vCoord, theta }).isReal;
+            },
+        });
+
+        startBtn.addEventListener('click', async () => {
+            const mode = document.querySelector('input[name="gif-mode"]:checked')?.value || 'animated';
+            startBtn.disabled = true;
+            startBtn.textContent = 'Capturing…';
+            progress.classList.remove('hidden');
+            progressFill.style.width = '0%';
+            progressText.textContent = 'Capturing 0 / 0';
+
+            // Pause monthly auto-play during capture so we don't fight it.
+            const wasPlaying = !!this.playTimer;
+            if (wasPlaying) this.stopPlay();
+
+            const onProgress = (i, n) => {
+                progressFill.style.width = (100 * i / n).toFixed(1) + '%';
+                progressText.textContent = `Capturing ${i} / ${n}`;
+            };
+
+            try {
+                const blob = mode === 'annual'
+                    ? await exporter.captureAnnual({ onProgress })
+                    : await exporter.captureAnimated({ durationMs: 5000, fps: 15, onProgress });
+                progressText.textContent = `Encoding… ${(blob.size / 1024 / 1024).toFixed(1)} MB`;
+                const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 16);
+                downloadBlob(blob, `gc-atlas-${mode}-${stamp}.gif`);
+                progressText.textContent = `Done · ${(blob.size / 1024 / 1024).toFixed(1)} MB`;
+                startBtn.textContent = 'Capture again';
+                startBtn.disabled = false;
+            } catch (err) {
+                console.error('[gif] capture failed:', err);
+                progressText.textContent = 'Capture failed — see console.';
+                startBtn.disabled = false;
+                startBtn.textContent = 'Retry';
+            }
+
+            if (wasPlaying) this.startPlay();
+        });
     }
 
     populateLevelSelect() {

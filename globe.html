@@ -546,6 +546,112 @@
         }
         @keyframes gc-spin { to { transform: rotate(360deg); } }
 
+        /* ── GIF export modal ─────────────────────────────── */
+        .gif-modal {
+            position: fixed;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: rgba(6, 18, 16, 0.7);
+            backdrop-filter: blur(4px);
+            -webkit-backdrop-filter: blur(4px);
+            z-index: 100;
+        }
+        .gif-modal.hidden { display: none; }
+        .gif-modal-card {
+            width: 360px;
+            max-width: calc(100vw - 32px);
+            background: rgba(14, 32, 28, 0.97);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            overflow: hidden;
+            color: var(--paper);
+            font-size: 0.9rem;
+        }
+        .gif-modal-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 14px 16px;
+            border-bottom: 1px solid var(--border);
+            letter-spacing: 0.05em;
+            font-weight: 600;
+        }
+        .gif-close {
+            background: none;
+            border: 0;
+            color: var(--sage);
+            font-size: 1.3rem;
+            line-height: 1;
+            cursor: pointer;
+            padding: 0 4px;
+        }
+        .gif-close:hover { color: var(--paper); }
+        .gif-modal-body { padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
+        .gif-opt {
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+            padding: 10px 12px;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            cursor: pointer;
+            transition: border-color 0.12s;
+        }
+        .gif-opt:hover { border-color: var(--emerald); }
+        .gif-opt input { margin-top: 3px; accent-color: var(--emerald-bright); }
+        .gif-opt-title { font-weight: 600; color: var(--paper); }
+        .gif-opt-sub { font-size: 0.78rem; color: var(--sage); margin-top: 2px; }
+        .gif-progress { margin-top: 4px; }
+        .gif-progress.hidden { display: none; }
+        .gif-progress-bar {
+            height: 6px;
+            background: rgba(255,255,255,0.08);
+            border-radius: 3px;
+            overflow: hidden;
+        }
+        .gif-progress-fill {
+            height: 100%;
+            width: 0%;
+            background: var(--emerald-bright);
+            transition: width 0.15s ease-out;
+        }
+        .gif-progress-text {
+            font-size: 0.78rem;
+            color: var(--sage);
+            margin-top: 6px;
+            text-align: center;
+        }
+        .gif-modal-actions {
+            display: flex;
+            gap: 8px;
+            padding: 12px 16px;
+            border-top: 1px solid var(--border);
+            justify-content: flex-end;
+        }
+        .gif-btn-secondary, .gif-btn-primary {
+            padding: 8px 14px;
+            border-radius: 6px;
+            font-size: 0.85rem;
+            cursor: pointer;
+            font-family: inherit;
+        }
+        .gif-btn-secondary {
+            background: transparent;
+            border: 1px solid var(--border);
+            color: var(--sage);
+        }
+        .gif-btn-secondary:hover { color: var(--paper); border-color: var(--emerald); }
+        .gif-btn-primary {
+            background: var(--emerald);
+            border: 1px solid var(--emerald);
+            color: var(--ink);
+            font-weight: 600;
+        }
+        .gif-btn-primary:disabled { opacity: 0.55; cursor: wait; }
+        .gif-btn-primary:hover:not(:disabled) { background: var(--emerald-bright); border-color: var(--emerald-bright); }
+
         /* ── Controls tips (bottom-right card) ─────────────── */
         .tips-panel {
             position: absolute;
@@ -805,6 +911,11 @@
             <button type="button" class="xs-reset" id="parcels-clear" style="width:100%">Clear all parcels</button>
         </section>
 
+        <section class="control-group">
+            <h4>Share</h4>
+            <button type="button" class="xs-reset" id="export-gif" style="width:100%">Export GIF…</button>
+        </section>
+
         <div class="sidebar-footer" id="sidebar-status">
             <strong>Synthetic data</strong>
             The globe is showing procedural fields shaped to look like ERA5 — a placeholder until the real climatology finishes staging. Everything you see will be replaced with observed 1991–2020 means.
@@ -869,6 +980,39 @@
     </section>
 
 </main>
+
+<div class="gif-modal hidden" id="gif-modal" aria-hidden="true">
+    <div class="gif-modal-card">
+        <div class="gif-modal-head">
+            <span>Export GIF</span>
+            <button type="button" class="gif-close" id="gif-close" aria-label="Close">&times;</button>
+        </div>
+        <div class="gif-modal-body">
+            <label class="gif-opt">
+                <input type="radio" name="gif-mode" value="animated" checked>
+                <div>
+                    <div class="gif-opt-title">Animation</div>
+                    <div class="gif-opt-sub">Current month · wind particles · 5 s loop</div>
+                </div>
+            </label>
+            <label class="gif-opt">
+                <input type="radio" name="gif-mode" value="annual">
+                <div>
+                    <div class="gif-opt-title">Annual cycle</div>
+                    <div class="gif-opt-sub">12 months · one frame each · seasonal loop</div>
+                </div>
+            </label>
+            <div class="gif-progress hidden" id="gif-progress">
+                <div class="gif-progress-bar"><div class="gif-progress-fill" id="gif-progress-fill"></div></div>
+                <div class="gif-progress-text" id="gif-progress-text">Capturing 0 / 0</div>
+            </div>
+        </div>
+        <div class="gif-modal-actions">
+            <button type="button" class="gif-btn-secondary" id="gif-cancel">Cancel</button>
+            <button type="button" class="gif-btn-primary" id="gif-start">Capture</button>
+        </div>
+    </div>
+</div>
 
 <script type="importmap">
 {
