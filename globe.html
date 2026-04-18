@@ -329,6 +329,37 @@
             border-radius: 4px;
         }
 
+        /* ── View-mode toggle (Globe | Map) ──────────────────── */
+        .view-toggle {
+            position: absolute;
+            top: 18px; right: 18px;
+            display: flex;
+            background: rgba(12, 36, 32, 0.80);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            overflow: hidden;
+            z-index: 55;
+        }
+        .view-toggle button {
+            background: none;
+            border: none;
+            color: var(--sage);
+            padding: 8px 14px;
+            font: inherit;
+            font-size: 0.8rem;
+            letter-spacing: 0.06em;
+            cursor: pointer;
+            transition: background 0.15s, color 0.15s;
+        }
+        .view-toggle button.active {
+            background: var(--emerald);
+            color: var(--deep);
+            font-weight: 600;
+        }
+        .view-toggle button:hover:not(.active) { color: var(--paper); background: rgba(255,255,255,0.05); }
+
         /* ── Loading hint (only before scene is ready) ──────── */
         .globe-hint {
             position: absolute;
@@ -431,6 +462,11 @@
     <section class="canvas-area">
         <div id="globe-mount"></div>
         <div class="globe-hint">drag to rotate · scroll to zoom</div>
+
+        <div class="view-toggle" role="group" aria-label="projection">
+            <button id="view-globe" class="active" type="button">Globe</button>
+            <button id="view-map" type="button">Map</button>
+        </div>
 
         <div class="colorbar" aria-hidden="true">
             <div class="cb-header">

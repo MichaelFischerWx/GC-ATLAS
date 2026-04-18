@@ -12,8 +12,12 @@ import { loadManifest, onFieldLoaded, isReady as era5Ready, prefetchField } from
 
 const PLAY_INTERVAL_MS = 900;
 
-const COASTLINE_URL = 'https://cdn.jsdelivr.net/gh/nvkelso/natural-earth-vector@master/geojson/ne_110m_coastline.geojson';
+const COASTLINE_URL = 'https://cdn.jsdelivr.net/gh/nvkelso/natural-earth-vector@master/geojson/ne_50m_coastline.geojson';
 const AXIAL_TILT = 23.4 * Math.PI / 180;
+
+// Equirectangular map dimensions (width 4, height 2 → lon spans [-2, 2], lat spans [-1, 1]).
+const MAP_W = 4;
+const MAP_H = 2;
 
 class GlobeApp {
     listeners = {};
@@ -25,6 +29,7 @@ class GlobeApp {
             level: 500,
             month: 1,
             cmap: FIELDS.t.cmap,
+            viewMode: 'globe',   // 'globe' | 'map'
             showCoastlines: true,
             showGraticule: true,
             showParticles: true,
@@ -115,104 +120,170 @@ class GlobeApp {
         this.camera.updateProjectionMatrix();
     }
 
-    // ── globe mesh + data texture ────────────────────────────────────
+    // ── meshes + data textures ───────────────────────────────────────
     initGlobe() {
-        this.world = new THREE.Group();
-        this.world.rotation.z = AXIAL_TILT;
-        this.scene.add(this.world);
+        // Two top-level groups. Only one is visible at a time.
+        this.globeGroup = new THREE.Group();
+        this.globeGroup.rotation.z = AXIAL_TILT;
+        this.scene.add(this.globeGroup);
 
-        // Data texture is backed by a canvas sized to the data grid.
+        this.mapGroup = new THREE.Group();
+        this.mapGroup.visible = false;
+        this.scene.add(this.mapGroup);
+
+        // Shared canvas → shared data grid.
         this.canvas = document.createElement('canvas');
         this.canvas.width = GRID.nlon;
         this.canvas.height = GRID.nlat;
         this.ctx = this.canvas.getContext('2d');
         this.imageData = this.ctx.createImageData(GRID.nlon, GRID.nlat);
 
+        // Sphere uses a texture with a +0.25 u-offset (see SphereGeometry UV note).
         this.texture = new THREE.CanvasTexture(this.canvas);
         this.texture.minFilter = THREE.LinearFilter;
         this.texture.magFilter = THREE.LinearFilter;
         this.texture.wrapS = THREE.RepeatWrapping;
         this.texture.colorSpace = THREE.SRGBColorSpace;
-        // Our data column 0 = lon -180; Three.js SphereGeometry puts u=0 at -X (lon -90
-        // in our convention). A 0.25 u-offset aligns Greenwich with +Z (camera default).
         this.texture.offset.x = 0.25;
 
-        const geom = new THREE.SphereGeometry(1, 192, 96);
-        const mat = new THREE.MeshBasicMaterial({ map: this.texture });
-        this.globe = new THREE.Mesh(geom, mat);
-        this.world.add(this.globe);
+        // Plane uses a clone of the same canvas, no offset (PlaneGeometry UVs map 0→1 naturally).
+        this.mapTexture = new THREE.CanvasTexture(this.canvas);
+        this.mapTexture.minFilter = THREE.LinearFilter;
+        this.mapTexture.magFilter = THREE.LinearFilter;
+        this.mapTexture.colorSpace = THREE.SRGBColorSpace;
 
-        // Subtle atmospheric rim glow.
+        const sphereGeom = new THREE.SphereGeometry(1, 192, 96);
+        const sphereMat  = new THREE.MeshBasicMaterial({ map: this.texture });
+        this.globe = new THREE.Mesh(sphereGeom, sphereMat);
+        this.globeGroup.add(this.globe);
+
+        const planeGeom = new THREE.PlaneGeometry(MAP_W, MAP_H, GRID.nlon, GRID.nlat);
+        const planeMat  = new THREE.MeshBasicMaterial({ map: this.mapTexture, side: THREE.DoubleSide });
+        this.mapMesh = new THREE.Mesh(planeGeom, planeMat);
+        this.mapGroup.add(this.mapMesh);
+
+        // Subtle rim glow on the globe (sphere mode only).
         const glow = new THREE.Mesh(
             new THREE.SphereGeometry(1.04, 96, 48),
             new THREE.MeshBasicMaterial({
                 color: 0x2DBDA0, transparent: true, opacity: 0.07, side: THREE.BackSide,
             }),
         );
-        this.world.add(glow);
+        this.globeGroup.add(glow);
+    }
+
+    currentGroup() { return this.state.viewMode === 'globe' ? this.globeGroup : this.mapGroup; }
+
+    // Unified projection. r=1 lives on the sphere (or plane); r>1 lifts overlays.
+    project(lat, lon, r = 1) {
+        if (this.state.viewMode === 'map') {
+            return new THREE.Vector3(
+                lon * (MAP_W / 360),
+                lat * (MAP_H / 180),
+                (r - 1) * 0.25,
+            );
+        }
+        const phi = lat * Math.PI / 180;
+        const lam = lon * Math.PI / 180;
+        return new THREE.Vector3(
+            r * Math.cos(phi) * Math.sin(lam),
+            r * Math.sin(phi),
+            r * Math.cos(phi) * Math.cos(lam),
+        );
     }
 
     // ── graticule overlay ─────────────────────────────────────────────
     initGraticule() {
-        this.gratGroup = new THREE.Group();
-        this.world.add(this.gratGroup);
-
-        const main = new THREE.LineBasicMaterial({ color: 0xFFFFFF, transparent: true, opacity: 0.55 });
-        const eq   = new THREE.LineBasicMaterial({ color: 0xE8C26A, transparent: true, opacity: 0.90 });
-
-        const R = 1.006;
+        // Store raw (lat, lon) path definitions; the mesh is rebuilt per view mode.
+        this.gratPaths = [];
         const seg = 180;
         for (let lat = -60; lat <= 60; lat += 30) {
             if (lat === 0) continue;
             const pts = [];
-            for (let k = 0; k <= seg; k++) pts.push(this.latLonToXYZ(lat, -180 + 360 * k / seg, R));
-            this.gratGroup.add(new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(pts), main));
+            for (let k = 0; k <= seg; k++) pts.push([lat, -180 + 360 * k / seg]);
+            this.gratPaths.push({ kind: 'parallel', pts, style: 'main' });
         }
-        { // equator
+        {
             const pts = [];
-            for (let k = 0; k <= seg; k++) pts.push(this.latLonToXYZ(0, -180 + 360 * k / seg, R));
-            this.gratGroup.add(new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(pts), eq));
+            for (let k = 0; k <= seg; k++) pts.push([0, -180 + 360 * k / seg]);
+            this.gratPaths.push({ kind: 'equator', pts, style: 'eq' });
         }
         for (let lon = -180; lon < 180; lon += 30) {
             const pts = [];
-            for (let k = 0; k <= seg; k++) pts.push(this.latLonToXYZ(-90 + 180 * k / seg, lon, R));
-            this.gratGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), main));
+            for (let k = 0; k <= seg; k++) pts.push([-90 + 180 * k / seg, lon]);
+            this.gratPaths.push({ kind: 'meridian', pts, style: 'main' });
         }
+        this.gratGroup = new THREE.Group();
+        this.rebuildGraticule();
+    }
+
+    rebuildGraticule() {
+        this.gratGroup.parent?.remove(this.gratGroup);
+        for (const child of this.gratGroup.children) child.geometry.dispose();
+        this.gratGroup.clear();
+
+        const main = new THREE.LineBasicMaterial({ color: 0xFFFFFF, transparent: true, opacity: 0.55 });
+        const eq   = new THREE.LineBasicMaterial({ color: 0xE8C26A, transparent: true, opacity: 0.90 });
+        const R = 1.006;
+        const wrap = this.state.viewMode === 'globe';  // parallels wrap on the sphere; not on a flat map
+        for (const path of this.gratPaths) {
+            const pts = path.pts.map(([lat, lon]) => this.project(lat, lon, R));
+            const geom = new THREE.BufferGeometry().setFromPoints(pts);
+            const mat  = path.style === 'eq' ? eq : main;
+            const obj  = (wrap && (path.kind === 'parallel' || path.kind === 'equator'))
+                ? new THREE.LineLoop(geom, mat)
+                : new THREE.Line(geom, mat);
+            this.gratGroup.add(obj);
+        }
+        this.currentGroup().add(this.gratGroup);
         this.gratGroup.visible = this.state.showGraticule;
     }
 
-    // ── coastlines overlay (Natural Earth, via jsdelivr) ──────────────
+    // ── coastlines overlay (Natural Earth 50 m, via jsdelivr) ─────────
     async initCoastlines() {
         this.coastGroup = new THREE.Group();
-        this.world.add(this.coastGroup);
         try {
             const resp = await fetch(COASTLINE_URL);
             if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
             const gj = await resp.json();
-            const mat = new THREE.LineBasicMaterial({
-                color: 0x000000, transparent: true, opacity: 0.88,
-            });
+            this.coastFeatures = [];
             for (const feat of gj.features) {
                 const g = feat.geometry;
                 if (!g) continue;
                 const lines = g.type === 'LineString' ? [g.coordinates] : g.coordinates;
-                for (const ring of lines) {
-                    const pts = ring.map(([lon, lat]) => this.latLonToXYZ(lat, lon, 1.003));
-                    const geom = new THREE.BufferGeometry().setFromPoints(pts);
-                    this.coastGroup.add(new THREE.Line(geom, mat));
-                }
+                this.coastFeatures.push(...lines);
             }
+            this.rebuildCoastlines();
         } catch (err) {
             console.warn('[globe] coastlines failed to load:', err);
         }
+    }
+
+    rebuildCoastlines() {
+        if (!this.coastFeatures) return;
+        this.coastGroup.parent?.remove(this.coastGroup);
+        for (const child of this.coastGroup.children) child.geometry.dispose();
+        this.coastGroup.clear();
+
+        const mat = new THREE.LineBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.88 });
+        const R = 1.003;
+        for (const ring of this.coastFeatures) {
+            const pts = ring.map(([lon, lat]) => this.project(lat, lon, R));
+            const geom = new THREE.BufferGeometry().setFromPoints(pts);
+            this.coastGroup.add(new THREE.Line(geom, mat));
+        }
+        this.currentGroup().add(this.coastGroup);
         this.coastGroup.visible = this.state.showCoastlines;
     }
 
     // ── wind particle overlay ────────────────────────────────────────
     initParticles() {
-        this.particles = new ParticleField((lat, lon) => this.sampleWind(lat, lon));
+        this.particles = new ParticleField(
+            (lat, lon) => this.sampleWind(lat, lon),
+            (lat, lon, r) => this.project(lat, lon, r),
+        );
         this.particles.setVisible(this.state.showParticles);
-        this.world.add(this.particles.object);
+        this.currentGroup().add(this.particles.object);
     }
 
     refreshWindCache() {
@@ -246,16 +317,40 @@ class GlobeApp {
         return [uTop * (1 - fi) + uBot * fi, vTop * (1 - fi) + vBot * fi];
     }
 
-    // ── coordinate mapping ────────────────────────────────────────────
-    // Convention: lon=0 at +Z (camera default), +X is lon=+90, +Y is north pole.
-    latLonToXYZ(lat, lon, r = 1) {
-        const phi = lat * Math.PI / 180;
-        const lam = lon * Math.PI / 180;
-        return new THREE.Vector3(
-            r * Math.cos(phi) * Math.sin(lam),
-            r * Math.sin(phi),
-            r * Math.cos(phi) * Math.cos(lam),
-        );
+    // ── mode switching ───────────────────────────────────────────────
+    setViewMode(mode) {
+        if (mode === this.state.viewMode) return;
+        this.state.viewMode = mode;
+        this.globeGroup.visible = mode === 'globe';
+        this.mapGroup.visible = mode === 'map';
+
+        this.rebuildCoastlines();
+        this.rebuildGraticule();
+
+        this.particles.object.parent?.remove(this.particles.object);
+        this.currentGroup().add(this.particles.object);
+        this.particles.onProjectionChanged();
+
+        this.configureCamera();
+    }
+
+    configureCamera() {
+        if (this.state.viewMode === 'globe') {
+            this.camera.position.set(0, 0.6, 3.3);
+            this.controls.enableRotate = true;
+            this.controls.enablePan = false;
+            this.controls.minDistance = 1.4;
+            this.controls.maxDistance = 8;
+        } else {
+            this.camera.position.set(0, 0, 3.6);
+            this.controls.enableRotate = false;
+            this.controls.enablePan = true;
+            this.controls.screenSpacePanning = true;
+            this.controls.minDistance = 1.2;
+            this.controls.maxDistance = 6;
+        }
+        this.controls.target.set(0, 0, 0);
+        this.controls.update();
     }
 
     // ── state updates ─────────────────────────────────────────────────
@@ -291,6 +386,7 @@ class GlobeApp {
         fillRGBA(this.imageData.data, f.values, { vmin: f.vmin, vmax: f.vmax, cmap });
         this.ctx.putImageData(this.imageData, 0, 0);
         this.texture.needsUpdate = true;
+        if (this.mapTexture) this.mapTexture.needsUpdate = true;
         this.updateStatus(f);
         this.emit('field-updated', { field: f });
     }
@@ -380,6 +476,16 @@ class GlobeApp {
             document.getElementById('toggle-xsection').checked = false;
             this.setState({ showXSection: false });
         });
+
+        // View-mode toggle (Globe | Map)
+        const btnGlobe = document.getElementById('view-globe');
+        const btnMap   = document.getElementById('view-map');
+        const setActive = (mode) => {
+            btnGlobe.classList.toggle('active', mode === 'globe');
+            btnMap.classList.toggle('active', mode === 'map');
+        };
+        btnGlobe.addEventListener('click', () => { this.setViewMode('globe'); setActive('globe'); });
+        btnMap.addEventListener('click',   () => { this.setViewMode('map');   setActive('map'); });
 
         this.refreshLevelAvailability();
         this.on('field-updated', ({ field }) => this.updateColorbar(field));

@@ -16,8 +16,19 @@ const POLE_MASK   = 82;      // avoid seeding beyond ±82°
 const SPEED_NORM  = 38;      // m/s that maps to full particle brightness
 
 export class ParticleField {
-    constructor(getUV) {
+    constructor(getUV, projectFn) {
         this.getUV = getUV;
+        // Injected projection (globe sphere or equirectangular plane). Must
+        // return a THREE.Vector3 when given (lat, lon, radius-or-layer).
+        this.project = projectFn || ((lat, lon, r) => {
+            const phi = lat * Math.PI / 180;
+            const lam = lon * Math.PI / 180;
+            return new THREE.Vector3(
+                r * Math.cos(phi) * Math.sin(lam),
+                r * Math.sin(phi),
+                r * Math.cos(phi) * Math.cos(lam),
+            );
+        });
 
         this.state = new Float32Array(N * 3);           // lat, lon, age
         this.speed = new Float32Array(N);               // per-particle speed (m/s)
@@ -76,13 +87,22 @@ export class ParticleField {
     }
 
     latLonToXYZ(lat, lon) {
-        const phi = lat * Math.PI / 180;
-        const lam = lon * Math.PI / 180;
-        return [
-            RADIUS * Math.cos(phi) * Math.sin(lam),
-            RADIUS * Math.sin(phi),
-            RADIUS * Math.cos(phi) * Math.cos(lam),
-        ];
+        const v = this.project(lat, lon, RADIUS);
+        return [v.x, v.y, v.z];
+    }
+
+    /** Called by the host when the projection changes (globe ↔ map). */
+    onProjectionChanged() {
+        for (let i = 0; i < N; i++) {
+            const [x, y, z] = this.latLonToXYZ(this.state[i * 3], this.state[i * 3 + 1]);
+            const tx = i * TRAIL * 3;
+            for (let t = 0; t < TRAIL; t++) {
+                this.trail[tx + t * 3]     = x;
+                this.trail[tx + t * 3 + 1] = y;
+                this.trail[tx + t * 3 + 2] = z;
+            }
+        }
+        this.updateGeometry();
     }
 
     step() {
