@@ -422,6 +422,12 @@
             cursor: pointer;
         }
         #xs-diag-select:focus { outline: 1px solid var(--emerald); }
+        .field-help {
+            font-size: 0.72rem;
+            line-height: 1.45;
+            color: var(--sage);
+            margin: 0 0 8px 0;
+        }
         .xs-cb-wrap { margin: 8px 0 2px; }
         .xs-cb {
             display: block;
@@ -735,6 +741,15 @@
         <section class="control-group">
             <h4>Panels</h4>
             <label class="check"><input type="checkbox" id="toggle-xsection"> Cross-section</label>
+        </section>
+
+        <section class="control-group" id="parcels-section">
+            <h4>Parcels</h4>
+            <p class="field-help">
+                <span class="xs-kbd">⌥</span> + click globe to release parcels at 200 hPa.
+                They follow the monthly-mean 3-D wind.
+            </p>
+            <button type="button" class="xs-reset" id="parcels-clear" style="width:100%">Clear all parcels</button>
         </section>
 
         <div class="sidebar-footer" id="sidebar-status">

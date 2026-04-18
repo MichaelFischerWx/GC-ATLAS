@@ -21,6 +21,7 @@ import { loadManifest, onFieldLoaded, isReady as era5Ready, prefetchField, cache
 import { decompose, annualMeanFrom } from './decompose.js';
 import { HoverProbe } from './hover.js';
 import { computeMassStreamfunction, computeAngularMomentum } from './diagnostics.js';
+import { ParcelField, PARCEL_SEED_PRESSURE_DEFAULT } from './parcels.js';
 
 const PLAY_INTERVAL_MS = 900;
 
@@ -221,6 +222,28 @@ class GlobeApp {
             };
         };
 
+        // Alt+click: drop a cluster of Lagrangian parcels at the clicked
+        // (lat, lon), defaulting to the upper troposphere. Installed before
+        // the shift+drag listener so pointerdown-propagation order is
+        // deterministic.
+        el.addEventListener('pointerdown', (e) => {
+            if (!e.altKey) return;
+            if (this.state.viewMode !== 'globe') return;
+            const p = pointToLatLon(e);
+            if (!p) return;
+            e.preventDefault();
+            // First-time seed: kick prefetches for u, v, w at every level so
+            // the 3D wind cube fills in parallel with the first few steps.
+            if (!this.parcels.hasActive()) {
+                for (const L of LEVELS) {
+                    prefetchField('u', { level: L });
+                    prefetchField('v', { level: L });
+                    prefetchField('w', { level: L });
+                }
+            }
+            this.parcels.seed(p.lat, p.lon, PARCEL_SEED_PRESSURE_DEFAULT);
+        });
+
         el.addEventListener('pointerdown', (e) => {
             if (!e.shiftKey) return;
             if (this.state.viewMode !== 'globe') return;
@@ -310,6 +333,7 @@ class GlobeApp {
             globe: [
                 { kbd: 'drag',         desc: 'rotate the globe' },
                 { kbd: '⇧ + drag',    desc: 'draw cross-section arc' },
+                { kbd: '⌥ + click',   desc: 'release parcels' },
                 { kbd: 'scroll',       desc: 'zoom' },
             ],
             map: [
@@ -413,6 +437,10 @@ class GlobeApp {
         this.contourLabels = new ContourLabels((lat, lon, r) => this.project(lat, lon, r));
         this.globeGroup.add(this.contourLabels.group);
         this.contourLabels.setVisible(this.state.showContours);
+
+        // Lagrangian parcel field (alt-click to seed on globe view).
+        this.parcels = new ParcelField();
+        this.globeGroup.add(this.parcels.object);
 
         // Arc for the cross-section feature (shift-drag to draw). Uses Line2
         // (fat lines) so the stroke stays visible at any zoom; WebGL's
@@ -876,6 +904,7 @@ class GlobeApp {
             if (panel) panel.hidden = !patch.showXSection;
         }
         if ('level' in patch || 'month' in patch) this.windCache.stale = true;
+        if ('month' in patch && this.parcels) this.parcels.invalidateCube();
 
         // Eagerly prefetch all 12 months at this (field, level) so the
         // colorbar stabilises quickly once any tile lands.
@@ -1266,6 +1295,9 @@ class GlobeApp {
         document.getElementById('xs-reset')?.addEventListener('click', () => {
             this.setState({ xsArc: null });
         });
+        document.getElementById('parcels-clear')?.addEventListener('click', () => {
+            this.parcels?.clear();
+        });
         const diagSel = document.getElementById('xs-diag-select');
         if (diagSel) {
             diagSel.value = this.state.xsDiag;
@@ -1369,6 +1401,12 @@ class GlobeApp {
         const tick = () => {
             this.controls.update();
             if (this.state.windMode === 'particles' && this.particles) this.particles.step();
+            // Lagrangian parcels only step when there are active ones and
+            // when the globe is the active view.
+            if (this.state.viewMode === 'globe' &&
+                this.parcels && this.parcels.hasActive()) {
+                this.parcels.step(this.state.month);
+            }
             // Diurnal spin on the mini-Earth in orbit mode — purely cosmetic
             // (the data is monthly climatology, so there's no "real" time of
             // day), but the rotation sells the "this is a planet" effect.
