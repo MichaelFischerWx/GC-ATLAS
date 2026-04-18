@@ -8,7 +8,7 @@ import { Line2 } from 'three/addons/lines/Line2.js';
 import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 import { fillRGBA, fillColorbar, COLORMAPS, meanLuminance } from './colormap.js';
-import { getField, FIELDS, LEVELS, MONTHS, GRID, invalidatePVCache } from './data.js';
+import { getField, FIELDS, LEVELS, THETA_LEVELS, MONTHS, GRID, invalidateIsentropicCache, isThetaOnly } from './data.js';
 import { ParticleField } from './particles.js';
 import { BarbField } from './barbs.js';
 import { ContourField } from './contours.js';
@@ -76,6 +76,8 @@ class GlobeApp {
         this.state = {
             field: 't',
             level: 500,
+            theta: 330,              // isentropic surface (K) when vCoord='theta'
+            vCoord: 'pressure',      // 'pressure' | 'theta'
             month: 1,
             cmap: FIELDS.t.cmap,
             viewMode: 'globe',   // 'globe' | 'map'
@@ -111,18 +113,28 @@ class GlobeApp {
             const s = this.state;
             const levelMatches = (level == null || level === s.level);
             const monthMatches = (month === s.month);
+            const isenActive  = (s.vCoord === 'theta');
+            // θ-coord rendering needs T at every level (for the θ cube) plus
+            // the chosen field at every level. PV additionally needs u, v.
+            const isenNeedsName = isenActive &&
+                (name === 't' || name === s.field ||
+                 (s.field === 'wspd' && (name === 'u' || name === 'v')) ||
+                 (s.field === 'pv'   && (name === 'u' || name === 'v')));
             const feedsCurrentField =
                 (name === s.field) ||
-                (s.field === 'wspd'  && (name === 'u' || name === 'v')) ||
-                (s.field === 'pv330' && (name === 't' || name === 'u' || name === 'v'));
+                (s.field === 'wspd' && (name === 'u' || name === 'v')) ||
+                (s.field === 'pv'   && (name === 't' || name === 'u' || name === 'v')) ||
+                isenNeedsName;
 
-            // pv330 sums over every pressure level, so don't require level
-            // to match — any T or vo arrival might complete the cache.
-            const needsLevelMatch = !(s.field === 'pv330' && (name === 't' || name === 'u' || name === 'v'));
+            // PV and θ-coord fields span every pressure level, so don't
+            // require level to match — any ingredient arrival could complete
+            // the cache.
+            const needsLevelMatch = !(
+                isenNeedsName ||
+                (s.field === 'pv' && (name === 't' || name === 'u' || name === 'v'))
+            );
             if (feedsCurrentField && monthMatches && (!needsLevelMatch || levelMatches)) {
-                // Bust the PV cache when any ingredient lands so recompute
-                // uses the freshest data.
-                if (s.field === 'pv330') invalidatePVCache();
+                if (s.field === 'pv' || isenActive) invalidateIsentropicCache();
                 this.updateField();
             }
 
@@ -757,9 +769,9 @@ class GlobeApp {
     }
 
     refreshWindCache() {
-        const { month, level } = this.state;
-        const uF = getField('u', { month, level });
-        const vF = getField('v', { month, level });
+        const { month, level, theta, vCoord } = this.state;
+        const uF = getField('u', { month, level, coord: vCoord, theta });
+        const vF = getField('v', { month, level, coord: vCoord, theta });
         this.windCache.u = uF.values;
         this.windCache.v = vF.values;
         this.windCache.nlat = GRID.nlat;
@@ -903,24 +915,30 @@ class GlobeApp {
             const panel = document.getElementById('xsection-panel');
             if (panel) panel.hidden = !patch.showXSection;
         }
-        if ('level' in patch || 'month' in patch) this.windCache.stale = true;
+        if ('level' in patch || 'month' in patch || 'vCoord' in patch || 'theta' in patch) this.windCache.stale = true;
         if ('month' in patch && this.parcels) this.parcels.invalidateCube();
+        if ('vCoord' in patch || 'theta' in patch) invalidateIsentropicCache();
 
         // Eagerly prefetch all 12 months at this (field, level) so the
         // colorbar stabilises quickly once any tile lands.
-        if ('field' in patch || 'level' in patch) {
+        if ('field' in patch || 'level' in patch || 'vCoord' in patch || 'theta' in patch) {
+            const isen = this.state.vCoord === 'theta';
             prefetchField(this.state.field, { level: this.state.level });
             prefetchField('u', { level: this.state.level });
             prefetchField('v', { level: this.state.level });
-            // PV on an isentrope needs T, u, v at every pressure level —
-            // θ from T, and relative vorticity computed on the fly from u,v.
-            // Kick those here so they arrive in parallel when the user picks
-            // PV from the field dropdown.
-            if (this.state.field === 'pv330') {
+            // PV and any θ-coord rendering require T at every pressure level
+            // (for the θ cube) plus the chosen field at every level — kick
+            // those here so they arrive in parallel.
+            const needsAllLevels = (this.state.field === 'pv') || isen;
+            if (needsAllLevels) {
                 for (const L of LEVELS) {
                     prefetchField('t', { level: L });
-                    prefetchField('u', { level: L });
-                    prefetchField('v', { level: L });
+                    if (this.state.field === 'pv' || this.state.field === 'wspd') {
+                        prefetchField('u', { level: L });
+                        prefetchField('v', { level: L });
+                    } else if (FIELDS[this.state.field]?.type === 'pl') {
+                        prefetchField(this.state.field, { level: L });
+                    }
                 }
             }
         }
@@ -1069,8 +1087,8 @@ class GlobeApp {
     }
 
     updateField() {
-        const { field, level, month, cmap, decompose: mode } = this.state;
-        const f = getField(field, { month, level });
+        const { field, level, theta, vCoord, month, cmap, decompose: mode } = this.state;
+        const f = getField(field, { month, level, coord: vCoord, theta });
 
         // Apply decomposition mode (total / zonal / eddy / anomaly).
         const decomp = this.applyDecomposition(f, mode);
@@ -1111,10 +1129,13 @@ class GlobeApp {
             return decompose(f.values, GRID.nlat, GRID.nlon, 'total');
         }
         if (mode === 'anomaly') {
-            // Build the 12-month mean from whatever tiles are cached so far.
-            // If fewer than all 12 are in, the mean uses what it has and
-            // will refine itself when more arrive (each field-loaded event
-            // re-triggers updateField).
+            // Anomaly mode uses the per-month tile cache to build a 12-month
+            // mean — in θ-coord the "cached" values are re-derived per month
+            // and the component is ill-defined. Fall back to total; UI hides
+            // the anomaly option whenever vCoord='theta'.
+            if (this.state.vCoord === 'theta') {
+                return decompose(f.values, GRID.nlat, GRID.nlon, 'total');
+            }
             const meta = FIELDS[this.state.field] || {};
             const useLevel = meta.type === 'pl' ? this.state.level : null;
             const comp = meta.derived === true
@@ -1194,20 +1215,41 @@ class GlobeApp {
             const meta = FIELDS[field];
             const patch = { field };
             if (meta.cmap) patch.cmap = meta.cmap;
-            if (meta.type === 'pl' && meta.defaultLevel) patch.level = meta.defaultLevel;
+            // Fields flagged thetaOnly (e.g. PV) force θ-coord. Snap
+            // state.theta to the field's defaultLevel (interpreted as K)
+            // when we switch into θ-coord this way.
+            if (isThetaOnly(field)) {
+                patch.vCoord = 'theta';
+                if (meta.defaultLevel) patch.theta = meta.defaultLevel;
+            } else if (meta.type === 'pl' && meta.defaultLevel && this.state.vCoord === 'pressure') {
+                patch.level = meta.defaultLevel;
+            }
             this.setState(patch);
             document.getElementById('cmap-select').value = this.state.cmap;
-            document.getElementById('level-select').value = this.state.level;
-            this.refreshLevelAvailability();
+            this.refreshVCoordUI();
         });
 
-        const levelSel = document.getElementById('level-select');
-        for (const p of LEVELS) {
-            levelSel.appendChild(Object.assign(document.createElement('option'),
-                { value: p, textContent: `${p} hPa` }));
+        const vcoordGroup = document.getElementById('vcoord-toggle');
+        if (vcoordGroup) {
+            vcoordGroup.querySelectorAll('button').forEach((btn) => {
+                btn.addEventListener('click', () => {
+                    const vCoord = btn.dataset.coord;
+                    if (vCoord === this.state.vCoord) return;
+                    // Block switching away from θ if the current field demands it.
+                    if (vCoord === 'pressure' && isThetaOnly(this.state.field)) return;
+                    this.setState({ vCoord });
+                    this.refreshVCoordUI();
+                });
+            });
         }
-        levelSel.value = this.state.level;
-        levelSel.addEventListener('change', () => this.setState({ level: +levelSel.value }));
+
+        const levelSel = document.getElementById('level-select');
+        this.populateLevelSelect();
+        levelSel.addEventListener('change', () => {
+            const v = +levelSel.value;
+            if (this.state.vCoord === 'theta') this.setState({ theta: v });
+            else this.setState({ level: v });
+        });
 
         const monthSel = document.getElementById('month-select');
         MONTHS.forEach((m, i) => {
@@ -1371,14 +1413,51 @@ class GlobeApp {
         if (btn) { btn.textContent = '▶'; btn.classList.remove('playing'); btn.setAttribute('aria-label', 'play through months'); }
     }
 
-    refreshLevelAvailability() {
+    populateLevelSelect() {
+        const levelSel = document.getElementById('level-select');
+        if (!levelSel) return;
+        const isen = this.state.vCoord === 'theta';
+        const values = isen ? THETA_LEVELS : LEVELS;
+        const unit   = isen ? 'K' : 'hPa';
+        const current = isen ? this.state.theta : this.state.level;
+        levelSel.innerHTML = '';
+        for (const v of values) {
+            levelSel.appendChild(Object.assign(document.createElement('option'),
+                { value: v, textContent: `${v} ${unit}` }));
+        }
+        // Snap to the nearest legal value if the current one isn't in the menu.
+        const closest = values.reduce((best, v) =>
+            Math.abs(v - current) < Math.abs(best - current) ? v : best, values[0]);
+        levelSel.value = closest;
+        if (isen && closest !== current) this.state.theta = closest;
+        if (!isen && closest !== current) this.state.level = closest;
+    }
+
+    refreshVCoordUI() {
         const meta = FIELDS[this.state.field];
         const levelSel = document.getElementById('level-select');
         const disabled = meta.type === 'sl';
         levelSel.disabled = disabled;
         const wrap = levelSel.closest('.control-group');
         if (wrap) wrap.classList.toggle('is-disabled', disabled);
+
+        this.populateLevelSelect();
+
+        // Update the label on the level group + the segmented toggle buttons.
+        const label = document.querySelector('label[for="level-select"], #level-label');
+        if (label) label.textContent = (this.state.vCoord === 'theta') ? 'Isentropic level' : 'Pressure level';
+
+        const tgl = document.getElementById('vcoord-toggle');
+        if (tgl) {
+            tgl.querySelectorAll('button').forEach((btn) => {
+                btn.classList.toggle('active', btn.dataset.coord === this.state.vCoord);
+                btn.disabled = (btn.dataset.coord === 'pressure' && isThetaOnly(this.state.field));
+            });
+        }
     }
+
+    // Legacy alias so existing call sites keep working.
+    refreshLevelAvailability() { this.refreshVCoordUI(); }
 
     updateColorbar(field) {
         const cb = document.getElementById('colorbar-canvas');
@@ -1394,7 +1473,12 @@ class GlobeApp {
             eddy:    ' · eddy',
             anomaly: ' · anomaly',
         }[field.decomposeMode] || '';
-        set('cb-title', field.name + modeSuffix);
+        const coordSuffix = (field.type === 'pl')
+            ? (this.state.vCoord === 'theta'
+                ? ` · θ = ${this.state.theta} K`
+                : ` · ${this.state.level} hPa`)
+            : '';
+        set('cb-title', field.name + coordSuffix + modeSuffix);
         set('cb-units', field.units);
     }
 

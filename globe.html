@@ -685,7 +685,15 @@
         </section>
 
         <section class="control-group">
-            <label class="field-label" for="level-select">Pressure level</label>
+            <label class="field-label">Vertical coordinate</label>
+            <div class="segmented" id="vcoord-toggle" role="tablist" aria-label="Vertical coordinate">
+                <button type="button" data-coord="pressure" class="active">Pressure</button>
+                <button type="button" data-coord="theta">θ (isentropic)</button>
+            </div>
+        </section>
+
+        <section class="control-group">
+            <label class="field-label" for="level-select" id="level-label">Pressure level</label>
             <select id="level-select"></select>
         </section>
 

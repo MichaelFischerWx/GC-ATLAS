@@ -13,6 +13,7 @@ import { requestField as requestEra5, availableLevels } from './era5.js';
 
 export const GRID = { nlat: 181, nlon: 360 };
 export const LEVELS = [10, 50, 100, 150, 200, 250, 300, 500, 700, 850, 925, 1000];
+export const THETA_LEVELS = [280, 300, 315, 330, 350, 400, 500, 700];
 export const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 
 export const FIELDS = {
@@ -36,8 +37,12 @@ export const FIELDS = {
     str:  { type: 'sl', name: 'Surface net LW radiation',   units: 'W m⁻²', cmap: 'RdBu_r',  contour: 10 },
     tisr: { type: 'sl', name: 'TOA incoming solar',         units: 'W m⁻²', cmap: 'plasma',  contour: 50 },
     ttr:  { type: 'sl', name: 'TOA net LW (OLR)',           units: 'W m⁻²', cmap: 'magma',   contour: 20 },
-    pv330: { type: 'sl', name: 'PV on 330 K',               units: 'PVU',   cmap: 'RdBu_r',  contour: 1, derived: true, isenLevel: 330 },
+    pv:   { type: 'pl', name: 'Ertel PV',                   units: 'PVU',   cmap: 'RdBu_r',  defaultLevel: 330, contour: 1, derived: true, thetaOnly: true },
 };
+
+/** Fields that only make sense on isentropic surfaces. When user picks one of
+ *  these, the vertical-coord toggle forces θ coordinates. */
+export function isThetaOnly(name) { return !!FIELDS[name]?.thetaOnly; }
 
 // ── lat/lon axes ─────────────────────────────────────────────────────────
 const LATS = new Float32Array(GRID.nlat);
@@ -62,14 +67,21 @@ function pendingField() {
  * Prefers real ERA5 tiles when cached; returns an all-NaN placeholder while
  * the tile fetch is in flight (the ERA5 loader fires an event when it
  * arrives so the caller can re-render with real data).
+ *
+ * `coord` selects the vertical coordinate: 'pressure' (use `level`, hPa) or
+ * 'theta' (use `theta`, K). Isentropic rendering interpolates pressure-level
+ * tiles to the requested θ surface per column; tropics near low θ and the
+ * upper stratosphere near high θ return NaN where θ₀ is out of range.
  */
-export function getField(name, { month = 1, level = 500 } = {}) {
+export function getField(name, { month = 1, level = 500, coord = 'pressure', theta = 330 } = {}) {
     const meta = FIELDS[name];
     if (!meta) throw new Error(`unknown field: ${name}`);
 
-    // Derived fields (e.g. wind speed) — compute from component tiles.
+    const isenMode = (coord === 'theta') && meta.type === 'pl';
+
+    // Derived fields (e.g. wind speed, PV) — compute from component tiles.
     if (meta.derived) {
-        const d = computeDerived(name, month, level);
+        const d = computeDerived(name, month, level, coord, theta);
         if (d) {
             return {
                 values: d.values, vmin: d.vmin, vmax: d.vmax,
@@ -77,6 +89,19 @@ export function getField(name, { month = 1, level = 500 } = {}) {
                 lats: LATS, lons: LONS,
                 ...meta,
                 isReal: d.isReal,
+            };
+        }
+    } else if (isenMode) {
+        const d = fieldOnIsentrope(name, month, theta);
+        if (d) {
+            return {
+                values: d.values, vmin: d.vmin, vmax: d.vmax,
+                shape: [GRID.nlat, GRID.nlon],
+                lats: LATS, lons: LONS,
+                ...meta,
+                long_name: meta.name,
+                units: meta.units,
+                isReal: true,
             };
         }
     } else {
@@ -119,17 +144,39 @@ function magnitudeFromUV(u, v) {
     return { values, vmin, vmax };
 }
 
-function computeDerived(name, month, level) {
+function computeDerived(name, month, level, coord, theta) {
     if (name === 'wspd') {
-        const uE = requestEra5('u', { month, level });
-        const vE = requestEra5('v', { month, level });
-        if (uE && vE) {
-            return { ...magnitudeFromUV(uE.values, vE.values), shape: uE.shape, isReal: true };
+        const key = `${coord}:${coord === 'theta' ? theta : level}:${month}`;
+        let entry = _wspdCache.get(key);
+        if (!entry) {
+            let uVals, vVals;
+            if (coord === 'theta') {
+                const uI = fieldOnIsentrope('u', month, theta);
+                const vI = fieldOnIsentrope('v', month, theta);
+                if (!uI || !vI) return null;
+                uVals = uI.values; vVals = vI.values;
+            } else {
+                const uE = requestEra5('u', { month, level });
+                const vE = requestEra5('v', { month, level });
+                if (!uE || !vE) return null;
+                uVals = uE.values; vVals = vE.values;
+            }
+            entry = magnitudeFromUV(uVals, vVals);
+            _wspdCache.set(key, entry);
         }
-        return null;
+        // Aggregate colorbar range across every cached month at (coord, level/theta).
+        const prefix = `${coord}:${coord === 'theta' ? theta : level}:`;
+        const agg = aggregateRangeByPrefix(_wspdCache, prefix);
+        return {
+            values: entry.values,
+            vmin: agg ? agg.vmin : entry.vmin,
+            vmax: agg ? agg.vmax : entry.vmax,
+            isReal: true,
+        };
     }
-    if (name === 'pv330') {
-        return computePVOnIsentrope(month, 330);
+    if (name === 'pv') {
+        const theta0 = (coord === 'theta') ? theta : 330;
+        return computePVOnIsentrope(month, theta0);
     }
     return null;
 }
@@ -150,6 +197,113 @@ const KAPPA       = 0.2854;      // R / cp for dry air
 const A_EARTH_PV  = 6.371e6;     // m
 
 const _pvCache = new Map();
+const _thetaCubeCache = new Map();    // month → Array<Float32Array> (θ per level)
+const _isenFieldCache = new Map();    // `${name}:${month}:${theta0}` → {values, vmin, vmax}
+const _wspdCache = new Map();         // `${month}:${level|theta}:${coord}` → {values, vmin, vmax}
+
+/** Aggregate vmin/vmax across every cached entry whose key matches `prefix`.
+ *  Used so derived/isentropic fields keep a stable colorbar as the user
+ *  scrubs months — mirrors what era5.js does for raw tiles. */
+function aggregateRangeByPrefix(cacheMap, prefix) {
+    let vmin = Infinity, vmax = -Infinity, any = false;
+    for (const [key, val] of cacheMap) {
+        if (!key.startsWith(prefix)) continue;
+        if (!Number.isFinite(val.vmin) || !Number.isFinite(val.vmax)) continue;
+        if (val.vmin < vmin) vmin = val.vmin;
+        if (val.vmax > vmax) vmax = val.vmax;
+        any = true;
+    }
+    return any ? { vmin, vmax } : null;
+}
+
+/** Build (or reuse) the per-level θ cube for `month`. Requires T tiles at
+ *  every LEVEL; returns null if any are missing. */
+function buildThetaCube(month) {
+    const hit = _thetaCubeCache.get(month);
+    if (hit) return hit;
+    const { nlat, nlon } = GRID;
+    const N = nlat * nlon;
+    const thetas = [];
+    for (let k = 0; k < LEVELS.length; k++) {
+        const tT = requestEra5('t', { month, level: LEVELS[k] });
+        if (!tT) return null;
+        const pFactor = Math.pow(1000 / LEVELS[k], KAPPA);
+        const theta = new Float32Array(N);
+        for (let i = 0; i < N; i++) theta[i] = tT.values[i] * pFactor;
+        thetas.push(theta);
+    }
+    _thetaCubeCache.set(month, thetas);
+    return thetas;
+}
+
+/** Interpolate per-level values to the θ₀ surface, column by column. θ is
+ *  monotonically decreasing with increasing LEVELS index (higher p → lower θ
+ *  in a statically-stable atmosphere), so scan adjacent pairs for the first
+ *  bracketing the target. Returns NaN when θ₀ is out of range for a column. */
+function interpolateColumnToIsentrope(valsByLev, thetasByLev, theta0) {
+    const { nlat, nlon } = GRID;
+    const N = nlat * nlon;
+    const nlev = LEVELS.length;
+    const out = new Float32Array(N);
+    let vmin = Infinity, vmax = -Infinity;
+    for (let idx = 0; idx < N; idx++) {
+        let kHi = -1;
+        for (let k = 0; k < nlev - 1; k++) {
+            const thUp = thetasByLev[k][idx];
+            const thLo = thetasByLev[k + 1][idx];
+            if (Number.isFinite(thUp) && Number.isFinite(thLo) &&
+                thUp >= theta0 && theta0 > thLo) {
+                kHi = k; break;
+            }
+        }
+        if (kHi < 0) { out[idx] = NaN; continue; }
+        const th1 = thetasByLev[kHi][idx];
+        const th2 = thetasByLev[kHi + 1][idx];
+        const frac = (th1 - theta0) / (th1 - th2);
+        const val = valsByLev[kHi][idx] + frac * (valsByLev[kHi + 1][idx] - valsByLev[kHi][idx]);
+        out[idx] = val;
+        if (Number.isFinite(val)) {
+            if (val < vmin) vmin = val;
+            if (val > vmax) vmax = val;
+        }
+    }
+    if (!Number.isFinite(vmin)) { vmin = 0; vmax = 1; }
+    return { values: out, vmin, vmax };
+}
+
+/** Return a named pressure-level field interpolated to the θ₀ isentropic
+ *  surface. Caches the result keyed by (name, month, θ₀). Returns null if
+ *  any required T or field tile is missing. Colorbar range (vmin/vmax) is
+ *  aggregated across every cached month at the same (name, θ₀) so scrubbing
+ *  months doesn't rescale the colormap. */
+function fieldOnIsentrope(name, month, theta0) {
+    const key = `${name}:${month}:${theta0}`;
+    let entry = _isenFieldCache.get(key);
+    if (!entry) {
+        const thetas = buildThetaCube(month);
+        if (!thetas) return null;
+        const valsByLev = [];
+        for (let k = 0; k < LEVELS.length; k++) {
+            const tile = requestEra5(name, { month, level: LEVELS[k] });
+            if (!tile) return null;
+            valsByLev.push(tile.values);
+        }
+        entry = interpolateColumnToIsentrope(valsByLev, thetas, theta0);
+        _isenFieldCache.set(key, entry);
+    }
+    // Aggregate range across every cached month at (name, θ₀).
+    let vmin = Infinity, vmax = -Infinity;
+    for (const [k, v] of _isenFieldCache) {
+        if (!k.startsWith(`${name}:`) || !k.endsWith(`:${theta0}`)) continue;
+        if (v.vmin < vmin) vmin = v.vmin;
+        if (v.vmax > vmax) vmax = v.vmax;
+    }
+    return {
+        values: entry.values,
+        vmin: Number.isFinite(vmin) ? vmin : entry.vmin,
+        vmax: Number.isFinite(vmax) ? vmax : entry.vmax,
+    };
+}
 
 /** Relative vorticity ζ on a 1° lat/lon grid. Centred differences; zonal
  *  wrap; forward/backward at lat boundaries; output is zero at the exact
@@ -188,40 +342,36 @@ function relativeVorticityFromUV(u, v, nlat, nlon) {
     return out;
 }
 
-/** Invalidate any cached PV results — called when a new T or vo tile lands. */
-export function invalidatePVCache() { _pvCache.clear(); }
+/** Invalidate every θ-coord cache — called when a new pressure-level tile
+ *  lands so the next render uses the freshest data. */
+export function invalidateIsentropicCache() {
+    _pvCache.clear();
+    _thetaCubeCache.clear();
+    _isenFieldCache.clear();
+    _wspdCache.clear();
+}
+// Legacy name kept for callers that still import it.
+export const invalidatePVCache = invalidateIsentropicCache;
 
 function computePVOnIsentrope(month, theta0) {
     const cacheKey = `${month}:${theta0}`;
     const cached = _pvCache.get(cacheKey);
     if (cached?.ready) return cached;
 
+    const thetas = buildThetaCube(month);
+    if (!thetas) return null;
+
     const { nlat, nlon } = GRID;
     const N = nlat * nlon;
     const nlev = LEVELS.length;
 
-    // Fetch every T, u, v tile at the current month; bail if any are
-    // missing so the caller can retry when tiles land. Relative vorticity
-    // is computed on the fly from u, v (ERA5 doesn't publish `vo` in our
-    // tile set).
-    const Ts  = [];
+    // Fetch u, v tiles on every pressure level (for ζ).
     const vos = [];
     for (let k = 0; k < nlev; k++) {
-        const tT = requestEra5('t', { month, level: LEVELS[k] });
         const tU = requestEra5('u', { month, level: LEVELS[k] });
         const tV = requestEra5('v', { month, level: LEVELS[k] });
-        if (!tT || !tU || !tV) return null;
-        Ts.push(tT.values);
+        if (!tU || !tV) return null;
         vos.push(relativeVorticityFromUV(tU.values, tV.values, nlat, nlon));
-    }
-
-    // θ at each level (index same as LEVELS).
-    const thetas = [];
-    for (let k = 0; k < nlev; k++) {
-        const pFactor = Math.pow(1000 / LEVELS[k], KAPPA);
-        const theta = new Float32Array(N);
-        for (let i = 0; i < N; i++) theta[i] = Ts[k][i] * pFactor;
-        thetas.push(theta);
     }
 
     // Coriolis parameter (1D by latitude).
@@ -238,7 +388,6 @@ function computePVOnIsentrope(month, theta0) {
         for (let idx = 0; idx < N; idx++) {
             const i = (idx / nlon) | 0;
             const absVort = vos[k][idx] + fCor[i];
-            // ∂θ/∂p via centred differences (forward at top, backward at bottom).
             let dthdp;
             if (k === 0) {
                 const dp = (LEVELS[1] - LEVELS[0]) * 100;
@@ -254,47 +403,32 @@ function computePVOnIsentrope(month, theta0) {
         }
     }
 
-    // Interpolate PV to θ = θ₀ at every column. θ is monotonically
-    // decreasing with pressure (ascending index in LEVELS), so scan for
-    // the first pair bracketing θ₀.
-    const out = new Float32Array(N);
-    let vmin = Infinity, vmax = -Infinity;
-    for (let idx = 0; idx < N; idx++) {
-        let kHi = -1;
-        for (let k = 0; k < nlev - 1; k++) {
-            const thUp = thetas[k][idx];
-            const thLo = thetas[k + 1][idx];
-            if (Number.isFinite(thUp) && Number.isFinite(thLo) &&
-                thUp >= theta0 && theta0 > thLo) {
-                kHi = k; break;
-            }
-        }
-        if (kHi < 0) { out[idx] = NaN; continue; }
-        const th1 = thetas[kHi][idx];
-        const th2 = thetas[kHi + 1][idx];
-        const frac = (th1 - theta0) / (th1 - th2);
-        const pv = pvLevs[kHi][idx] + frac * (pvLevs[kHi + 1][idx] - pvLevs[kHi][idx]);
-        out[idx] = pv;
-        if (Number.isFinite(pv)) {
-            if (pv < vmin) vmin = pv;
-            if (pv > vmax) vmax = pv;
-        }
-    }
-    if (!Number.isFinite(vmin)) { vmin = 0; vmax = 1; }
+    const interp = interpolateColumnToIsentrope(pvLevs, thetas, theta0);
 
     // Clamp display range for readability — stratospheric intrusions can
     // blow up the limits to hundreds of PVU; cap around ±10 so the
     // tropospheric ribbon keeps its contrast.
     const DISPLAY_CAP = 10;
-    vmin = Math.max(vmin, -DISPLAY_CAP);
-    vmax = Math.min(vmax,  DISPLAY_CAP);
-
     const result = {
-        values: out, vmin, vmax,
+        values: interp.values,
+        vmin: Math.max(interp.vmin, -DISPLAY_CAP),
+        vmax: Math.min(interp.vmax,  DISPLAY_CAP),
         shape: [nlat, nlon], isReal: true, ready: true,
     };
     _pvCache.set(cacheKey, result);
-    return result;
+
+    // Aggregate range across every cached month at this θ₀.
+    let vmin = Infinity, vmax = -Infinity;
+    for (const [k, v] of _pvCache) {
+        if (!k.endsWith(`:${theta0}`)) continue;
+        if (v.vmin < vmin) vmin = v.vmin;
+        if (v.vmax > vmax) vmax = v.vmax;
+    }
+    return {
+        ...result,
+        vmin: Number.isFinite(vmin) ? vmin : result.vmin,
+        vmax: Number.isFinite(vmax) ? vmax : result.vmax,
+    };
 }
 
 /** True if ERA5 has the listed level (or sl fields w/ no level required). */
