@@ -122,6 +122,12 @@ class GlobeApp {
         });
         // Prime: ask for the current field, which triggers a fetch.
         this.updateField();
+        // The wind overlay (particles / barbs) needs u and v at the current
+        // level. The main field isn't necessarily u/v/wspd on first load, so
+        // kick those fetches explicitly here — otherwise particles respawn
+        // every frame on NaN winds until the user changes level or field.
+        prefetchField('u', { level: this.state.level });
+        prefetchField('v', { level: this.state.level });
     }
 
     // ── scene / camera / controls ────────────────────────────────────

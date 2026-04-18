@@ -1,10 +1,13 @@
-// GC-ATLAS — zonal-mean cross-section panel.
-// For pressure-level fields: lat × pressure heatmap (log-p axis, pole-to-pole).
-// For surface fields: lat line plot.
+// GC-ATLAS — cross-section panel.
+// Two modes:
+//   zonal:  zonal-mean over all longitudes at each latitude (the original
+//           "lat × pressure" heatmap, pole-to-pole).
+//   arc:    vertical section along a user-drawn great circle on the globe.
 // Renders into a plain <canvas> — no D3 dependency.
 
 import { getField, LEVELS, GRID, FIELDS } from './data.js';
 import { sample } from './colormap.js';
+import { gcDistanceKm } from './arc.js';
 
 const LAT_TICKS = [-90, -60, -30, 0, 30, 60, 90];
 const P_TICKS   = [1000, 500, 200, 100, 50, 10];
