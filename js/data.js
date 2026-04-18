@@ -283,8 +283,10 @@ export function getField(name, { month = 1, level = 500 } = {}) {
                 shape: era.shape ?? [GRID.nlat, GRID.nlon],
                 lats: LATS, lons: LONS,
                 ...meta,
-                long_name: era.long_name || meta.name,
-                units: era.units || meta.units,
+                // Prefer our human-friendly labels over the raw ERA5 strings
+                // ("m" > "m**2 s**-2", "hPa" > "Pa", etc.).
+                long_name: meta.name,
+                units: meta.units,
                 isReal: true,
             };
         }
