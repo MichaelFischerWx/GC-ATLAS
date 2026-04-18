@@ -422,6 +422,24 @@
             cursor: pointer;
         }
         #xs-diag-select:focus { outline: 1px solid var(--emerald); }
+        .xs-cb-wrap { margin: 8px 0 2px; }
+        .xs-cb {
+            display: block;
+            width: 380px;
+            height: 10px;
+            border-radius: 3px;
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+        .xs-cb-labels {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.7rem;
+            color: var(--sage);
+            margin-top: 3px;
+        }
+        #xs-cb-units { color: var(--emerald-bright); letter-spacing: 0.04em; }
         .xs-footer {
             margin-top: 8px;
             font-size: 0.72rem;
@@ -767,6 +785,14 @@
                 </select>
             </div>
             <canvas id="xs-canvas" width="380" height="200"></canvas>
+            <div class="xs-cb-wrap">
+                <canvas id="xs-cb-canvas" class="xs-cb"></canvas>
+                <div class="xs-cb-labels">
+                    <span id="xs-cb-min">—</span>
+                    <span id="xs-cb-units">—</span>
+                    <span id="xs-cb-max">—</span>
+                </div>
+            </div>
             <div class="xs-footer">
                 <span id="xs-hint"><span class="xs-kbd">⇧</span> + drag globe to draw an arc</span>
                 <button class="xs-reset" id="xs-reset" type="button" hidden>Reset to zonal mean</button>

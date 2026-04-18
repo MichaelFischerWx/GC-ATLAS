@@ -929,6 +929,7 @@ class GlobeApp {
             zm.contourInterval = FIELDS[field]?.contour || 0;
         }
         renderCrossSection(canvas, zm, effCmap);
+        this.updateXSectionColorbar(zm, effCmap);
         const title = document.getElementById('xs-title');
         const hint  = document.getElementById('xs-hint');
         const reset = document.getElementById('xs-reset');
@@ -960,6 +961,28 @@ class GlobeApp {
         }
         if (reset) reset.hidden = zm.kind !== 'arc';
         this.updateArcLine();
+    }
+
+    updateXSectionColorbar(zm, cmap) {
+        const cb = document.getElementById('xs-cb-canvas');
+        if (cb) {
+            // Retina-crisp mini bar, same DPR logic as the main canvas.
+            const DPR = Math.min(window.devicePixelRatio || 1, 2);
+            const cssW = cb.clientWidth || 380;
+            const cssH = cb.clientHeight || 10;
+            if (cb.width !== cssW * DPR || cb.height !== cssH * DPR) {
+                cb.width  = cssW * DPR;
+                cb.height = cssH * DPR;
+            }
+            fillColorbar(cb, cmap);
+        }
+        const setTxt = (id, text) => {
+            const el = document.getElementById(id);
+            if (el) el.textContent = text;
+        };
+        setTxt('xs-cb-min',   fmtValue(zm.vmin));
+        setTxt('xs-cb-max',   fmtValue(zm.vmax));
+        setTxt('xs-cb-units', zm.units || '');
     }
 
     updateArcLine() {
