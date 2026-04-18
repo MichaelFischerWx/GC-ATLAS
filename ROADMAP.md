@@ -19,7 +19,7 @@ Last update: 2026-04-18
 - 12-month climatology, month slider + play button, aggregated colorbar across months
 - Cross-section panel (zonal mean on log-pressure axis)
 - Coastlines (Natural Earth 1:50 m, black @ 0.88) and graticule (white @ 0.55, amber equator)
-- Wind overlay modes: Off / Particles (12 k GPU-lit, nullschool-ish) / Streamlines (1.6 k, Line2 polylines, directional arrow glyphs along each)
+- Wind overlay modes: Off / Particles (12 k GPU-lit, nullschool-ish) / Barbs (WMO-standard with feathers & pennants at every 8°)
 - Proper unit conversions: geopotential (m² s⁻² → m), pressure (Pa → hPa), precip (m day⁻¹ → mm day⁻¹), radiative fluxes (J m⁻² day⁻¹ → W m⁻²)
 
 ---
@@ -55,7 +55,7 @@ Radio group: `Total | Zonal-mean | Eddy | Anomaly`.
 
 ## Phase-3 features (next-session candidates)
 
-- **Wind barbs overlay** — third mode in the Wind segmented control. Glyph per coarse grid cell (every ~8°); feathers = 10 kt, flags = 50 kt; oriented in the local tangent plane. More work than streamlines (needs custom glyph geometry per orientation) but completes the windy.com trio.
+- ~~Wind barbs overlay~~ — shipped 2026-04-18; replaced streamlines as the third Wind mode.
 - **Click-to-draw cross-section** — drag a great-circle arc on the globe; panel shows vertical cross-section along that arc (not just zonal). Requires projecting screen-space click to (lat, lon) and sampling the field at all 12 levels along a parametrised path.
 - **Hover readout** — show lat / lon / field value under cursor. Needs raycasting against the sphere/plane and bilinear sampling of the current tile.
 - **Dark coastline on dark colormap fallback** — black coastlines disappear over viridis purple. Auto-switch to white (or half-tone) when the colormap is dark.

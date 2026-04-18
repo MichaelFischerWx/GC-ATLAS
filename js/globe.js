@@ -7,7 +7,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { fillRGBA, fillColorbar, COLORMAPS, meanLuminance } from './colormap.js';
 import { getField, FIELDS, LEVELS, MONTHS, GRID } from './data.js';
 import { ParticleField } from './particles.js';
-import { StreamlineField } from './streamlines.js';
+import { BarbField } from './barbs.js';
 import { ContourField } from './contours.js';
 import { ContourLabels } from './contour_labels.js';
 import { SunLight } from './sun.js';
@@ -76,7 +76,7 @@ class GlobeApp {
             showGraticule: true,
             showContours: false,
             showSun: true,
-            windMode: 'particles',   // 'off' | 'particles' | 'streamlines'
+            windMode: 'particles',   // 'off' | 'particles' | 'barbs'
             decompose: 'total',      // 'total' | 'zonal' | 'eddy' | 'anomaly'
             mapCenterLon: 0,         // central meridian for the flat map (-180..180)
             showXSection: false,
@@ -148,18 +148,76 @@ class GlobeApp {
         this.controls.enablePan = false;
 
         // Fade the on-canvas hint on first interaction (drag or scroll).
-        const hint = document.querySelector('.globe-hint');
-        if (hint) {
+        this.hint = document.querySelector('.globe-hint');
+        if (this.hint) {
             const fade = () => {
-                hint.classList.add('hidden');
+                this.hint.classList.add('hidden');
                 this.controls.removeEventListener('start', fade);
+                this.renderer.domElement.removeEventListener('pointerdown', fade);
             };
             this.controls.addEventListener('start', fade);
+            this.renderer.domElement.addEventListener('pointerdown', fade);
             // Also auto-fade after 8 s if the user never touches it.
             setTimeout(fade, 8000);
         }
 
+        // Map-mode drag handler — shifts the central meridian instead of
+        // panning the camera (OrbitControls.enablePan = false in map mode).
+        this.installMapDrag();
+
         window.addEventListener('resize', () => this.onResize());
+    }
+
+    installMapDrag() {
+        const el = this.renderer.domElement;
+        let dragging = false;
+        let lastX = 0;
+        el.addEventListener('pointerdown', (e) => {
+            if (this.state.viewMode !== 'map') return;
+            dragging = true;
+            lastX = e.clientX;
+            el.setPointerCapture(e.pointerId);
+        });
+        el.addEventListener('pointermove', (e) => {
+            if (!dragging) return;
+            const dx = e.clientX - lastX;
+            lastX = e.clientX;
+            // How many degrees of longitude does one CSS pixel correspond to
+            // in world space? At the current camera distance/FOV, the visible
+            // world width is  2·dist·tan(fov/2)·aspect.  One world-unit of
+            // plane equals (360 / MAP_W)° of longitude.
+            const dist = this.camera.position.length();
+            const fovY = this.camera.fov * Math.PI / 180;
+            const visibleW = 2 * dist * Math.tan(fovY / 2) * this.camera.aspect;
+            const lonPerPx = (visibleW / el.clientWidth) * (360 / MAP_W);
+            let lon = this.state.mapCenterLon - dx * lonPerPx;
+            // Wrap into [-180, 180].
+            lon = ((lon + 180) % 360 + 360) % 360 - 180;
+            this.setState({ mapCenterLon: lon });
+            // Keep the slider and label in sync.
+            const slider = document.getElementById('map-center-slider');
+            const label  = document.getElementById('map-center-value');
+            if (slider) slider.value = lon.toFixed(0);
+            if (label)  label.textContent = `${Math.round(lon)}°`;
+        });
+        const endDrag = (e) => {
+            if (!dragging) return;
+            dragging = false;
+            try { el.releasePointerCapture(e.pointerId); } catch { /* ignore */ }
+        };
+        el.addEventListener('pointerup', endDrag);
+        el.addEventListener('pointercancel', endDrag);
+        el.addEventListener('pointerleave', endDrag);
+    }
+
+    updateHintForViewMode() {
+        if (!this.hint) return;
+        const txt = {
+            globe: 'drag to rotate · scroll to zoom',
+            map:   'drag to pan · scroll to zoom',
+            orbit: 'drag to orbit · scroll to zoom',
+        }[this.state.viewMode] || '';
+        this.hint.textContent = txt;
     }
 
     size() {
@@ -172,7 +230,7 @@ class GlobeApp {
         this.renderer.setSize(w, h);
         this.camera.aspect = w / h;
         this.camera.updateProjectionMatrix();
-        if (this.streamlines) this.streamlines.updateResolution(w, h);
+        if (this.barbs) this.barbs.updateResolution(w, h);
     }
 
     // ── meshes + data textures ───────────────────────────────────────
@@ -402,21 +460,18 @@ class GlobeApp {
         this.coastGroup.visible = this.state.showCoastlines;
     }
 
-    // ── wind overlays (particles + streamlines) ──────────────────────
+    // ── wind overlays (particles + barbs) ────────────────────────────
     initParticles() {
         const getUV = (lat, lon) => this.sampleWind(lat, lon);
         const proj  = (lat, lon, r) => this.project(lat, lon, r);
 
         this.particles = new ParticleField(getUV, proj);
-        this.streamlines = new StreamlineField(getUV, proj);
-
-        const { w, h } = this.size();
-        this.streamlines.updateResolution(w, h);
+        this.barbs = new BarbField(getUV, proj);
 
         this.applyWindMode();
         this.applyParticleContrast();
         this.currentGroup().add(this.particles.object);
-        this.currentGroup().add(this.streamlines.object);
+        this.currentGroup().add(this.barbs.object);
     }
 
     applyMapCenterLon() {
@@ -463,7 +518,7 @@ class GlobeApp {
     applyWindMode() {
         const m = this.state.windMode;
         if (this.particles)   this.particles.setVisible(m === 'particles');
-        if (this.streamlines) this.streamlines.setVisible(m === 'streamlines');
+        if (this.barbs) this.barbs.setVisible(m === 'barbs');
     }
 
     refreshWindCache() {
@@ -508,6 +563,7 @@ class GlobeApp {
         // Map-specific controls only meaningful in map view.
         const mcg = document.getElementById('map-center-group');
         if (mcg) mcg.hidden = mode !== 'map';
+        this.updateHintForViewMode();
 
         this.rebuildCoastlines();
         this.rebuildGraticule();
@@ -518,11 +574,11 @@ class GlobeApp {
         const overlayParent = mode === 'orbit' ? this.globeGroup : this.currentGroup();
 
         this.particles.object.parent?.remove(this.particles.object);
-        this.streamlines.object.parent?.remove(this.streamlines.object);
+        this.barbs.object.parent?.remove(this.barbs.object);
         overlayParent.add(this.particles.object);
-        overlayParent.add(this.streamlines.object);
+        overlayParent.add(this.barbs.object);
         this.particles.onProjectionChanged();
-        this.streamlines.onProjectionChanged();
+        if (this.state.windMode === 'barbs') this.barbs.rebuild(mode);
 
         if (this.contourLabels) {
             this.contourLabels.group.parent?.remove(this.contourLabels.group);
@@ -542,6 +598,15 @@ class GlobeApp {
             this.controls.enablePan = false;
             this.controls.minDistance = 1.4;
             this.controls.maxDistance = 8;
+        } else if (this.state.viewMode === 'map') {
+            this.camera.position.set(0, 0, 3.6);
+            this.controls.enableRotate = false;
+            this.controls.enablePan = false;      // custom drag handler shifts centre meridian instead
+            this.controls.minDistance = 1.2;
+            this.controls.maxDistance = 6;
+            this.controls.target.set(0, 0, 0);
+            this.controls.update();
+            return;
         } else if (this.state.viewMode === 'orbit') {
             // Camera above the ecliptic, looking down-and-inward so the
             // student sees the orbit plane, the sun, and Earth's tilted axis
@@ -597,10 +662,11 @@ class GlobeApp {
             prefetchField('v', { level: this.state.level });
         }
 
-        // Streamlines are static — rebuild when the wind field changes.
-        if (this.streamlines && this.state.windMode === 'streamlines' &&
-            ('level' in patch || 'month' in patch || 'windMode' in patch)) {
-            this.streamlines.refresh();
+        // Barbs are static — rebuild when the wind field (or map centering)
+        // changes, or when the user switches INTO barbs mode.
+        if (this.barbs && this.state.windMode === 'barbs' &&
+            ('level' in patch || 'month' in patch || 'windMode' in patch || 'mapCenterLon' in patch)) {
+            this.barbs.rebuild(this.state.viewMode);
         }
 
         this.updateField();
@@ -805,7 +871,7 @@ class GlobeApp {
         document.getElementById('toggle-sun').addEventListener('change', (e) => {
             this.setState({ showSun: e.target.checked });
         });
-        // Wind overlay mode: segmented control (Off / Particles / Streamlines)
+        // Wind overlay mode: segmented control (Off / Particles / Barbs)
         document.querySelectorAll('[data-wind-mode]').forEach((btn) => {
             btn.addEventListener('click', () => {
                 const mode = btn.getAttribute('data-wind-mode');
