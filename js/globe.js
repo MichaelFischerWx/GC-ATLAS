@@ -8,7 +8,7 @@ import { Line2 } from 'three/addons/lines/Line2.js';
 import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 import { fillRGBA, fillColorbar, COLORMAPS, meanLuminance } from './colormap.js';
-import { getField, FIELDS, LEVELS, MONTHS, GRID } from './data.js';
+import { getField, FIELDS, LEVELS, MONTHS, GRID, invalidatePVCache } from './data.js';
 import { ParticleField } from './particles.js';
 import { BarbField } from './barbs.js';
 import { ContourField } from './contours.js';
@@ -112,9 +112,18 @@ class GlobeApp {
             const monthMatches = (month === s.month);
             const feedsCurrentField =
                 (name === s.field) ||
-                (s.field === 'wspd' && (name === 'u' || name === 'v'));
+                (s.field === 'wspd'  && (name === 'u' || name === 'v')) ||
+                (s.field === 'pv330' && (name === 't' || name === 'vo'));
 
-            if (feedsCurrentField && monthMatches && levelMatches) this.updateField();
+            // pv330 sums over every pressure level, so don't require level
+            // to match — any T or vo arrival might complete the cache.
+            const needsLevelMatch = !(s.field === 'pv330' && (name === 't' || name === 'vo'));
+            if (feedsCurrentField && monthMatches && (!needsLevelMatch || levelMatches)) {
+                // Bust the PV cache when any ingredient lands so recompute
+                // uses the freshest data.
+                if (s.field === 'pv330') invalidatePVCache();
+                this.updateField();
+            }
 
             // Anomaly mode needs all 12 months to compute an accurate annual
             // mean; re-render whenever any month of the current field lands
@@ -874,6 +883,15 @@ class GlobeApp {
             prefetchField(this.state.field, { level: this.state.level });
             prefetchField('u', { level: this.state.level });
             prefetchField('v', { level: this.state.level });
+            // PV on an isentrope needs T and vo at every pressure level to
+            // compute θ and ∂θ/∂p. Kick those here so they arrive in
+            // parallel when the user picks PV from the field dropdown.
+            if (this.state.field === 'pv330') {
+                for (const L of LEVELS) {
+                    prefetchField('t',  { level: L });
+                    prefetchField('vo', { level: L });
+                }
+            }
         }
 
         // Barbs are static — rebuild when the wind field (or map centering)

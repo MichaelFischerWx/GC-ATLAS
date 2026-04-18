@@ -36,6 +36,7 @@ export const FIELDS = {
     str:  { type: 'sl', name: 'Surface net LW radiation',   units: 'W m⁻²', cmap: 'RdBu_r',  contour: 10 },
     tisr: { type: 'sl', name: 'TOA incoming solar',         units: 'W m⁻²', cmap: 'plasma',  contour: 50 },
     ttr:  { type: 'sl', name: 'TOA net LW (OLR)',           units: 'W m⁻²', cmap: 'magma',   contour: 20 },
+    pv330: { type: 'sl', name: 'PV on 330 K',               units: 'PVU',   cmap: 'RdBu_r',  contour: 1, derived: true, isenLevel: 330 },
 };
 
 // ── lat/lon axes ─────────────────────────────────────────────────────────
@@ -127,7 +128,130 @@ function computeDerived(name, month, level) {
         }
         return null;
     }
+    if (name === 'pv330') {
+        return computePVOnIsentrope(month, 330);
+    }
     return null;
+}
+
+// ── PV on an isentropic surface ──────────────────────────────────────────
+// Ertel PV in pressure coordinates:
+//     PV = -g · (ζ + f) · ∂θ/∂p
+// where ζ is relative vorticity (we have the ERA5 `vo` tile at every
+// pressure level), f = 2Ω sin φ, and θ = T·(1000/p)^(R/cp) is potential
+// temperature. We compute PV at every (lat, lon, p) level, then for each
+// column linearly interpolate (in p) to the surface where θ = θ₀.
+
+const OMEGA_EARTH = 7.2921e-5;
+const G_EARTH     = 9.80665;
+const KAPPA       = 0.2854;      // R / cp for dry air
+
+const _pvCache = new Map();
+
+/** Invalidate any cached PV results — called when a new T or vo tile lands. */
+export function invalidatePVCache() { _pvCache.clear(); }
+
+function computePVOnIsentrope(month, theta0) {
+    const cacheKey = `${month}:${theta0}`;
+    const cached = _pvCache.get(cacheKey);
+    if (cached?.ready) return cached;
+
+    const { nlat, nlon } = GRID;
+    const N = nlat * nlon;
+    const nlev = LEVELS.length;
+
+    // Fetch every T and vo tile at the current month; bail if any are
+    // missing so the caller can retry when tiles land.
+    const Ts  = [];
+    const vos = [];
+    for (let k = 0; k < nlev; k++) {
+        const tT  = requestEra5('t',  { month, level: LEVELS[k] });
+        const tVo = requestEra5('vo', { month, level: LEVELS[k] });
+        if (!tT || !tVo) return null;
+        Ts.push(tT.values);
+        vos.push(tVo.values);
+    }
+
+    // θ at each level (index same as LEVELS).
+    const thetas = [];
+    for (let k = 0; k < nlev; k++) {
+        const pFactor = Math.pow(1000 / LEVELS[k], KAPPA);
+        const theta = new Float32Array(N);
+        for (let i = 0; i < N; i++) theta[i] = Ts[k][i] * pFactor;
+        thetas.push(theta);
+    }
+
+    // Coriolis parameter (1D by latitude).
+    const fCor = new Float32Array(nlat);
+    for (let i = 0; i < nlat; i++) {
+        fCor[i] = 2 * OMEGA_EARTH * Math.sin((90 - i) * Math.PI / 180);
+    }
+
+    // PV on every pressure level. Units: 1 PVU = 10⁻⁶ K m² kg⁻¹ s⁻¹ ⇒
+    // multiply SI result by 1e6.
+    const pvLevs = new Array(nlev);
+    for (let k = 0; k < nlev; k++) pvLevs[k] = new Float32Array(N);
+    for (let k = 0; k < nlev; k++) {
+        for (let idx = 0; idx < N; idx++) {
+            const i = (idx / nlon) | 0;
+            const absVort = vos[k][idx] + fCor[i];
+            // ∂θ/∂p via centred differences (forward at top, backward at bottom).
+            let dthdp;
+            if (k === 0) {
+                const dp = (LEVELS[1] - LEVELS[0]) * 100;
+                dthdp = (thetas[1][idx] - thetas[0][idx]) / dp;
+            } else if (k === nlev - 1) {
+                const dp = (LEVELS[nlev - 1] - LEVELS[nlev - 2]) * 100;
+                dthdp = (thetas[nlev - 1][idx] - thetas[nlev - 2][idx]) / dp;
+            } else {
+                const dp = (LEVELS[k + 1] - LEVELS[k - 1]) * 100;
+                dthdp = (thetas[k + 1][idx] - thetas[k - 1][idx]) / dp;
+            }
+            pvLevs[k][idx] = -G_EARTH * absVort * dthdp * 1e6;
+        }
+    }
+
+    // Interpolate PV to θ = θ₀ at every column. θ is monotonically
+    // decreasing with pressure (ascending index in LEVELS), so scan for
+    // the first pair bracketing θ₀.
+    const out = new Float32Array(N);
+    let vmin = Infinity, vmax = -Infinity;
+    for (let idx = 0; idx < N; idx++) {
+        let kHi = -1;
+        for (let k = 0; k < nlev - 1; k++) {
+            const thUp = thetas[k][idx];
+            const thLo = thetas[k + 1][idx];
+            if (Number.isFinite(thUp) && Number.isFinite(thLo) &&
+                thUp >= theta0 && theta0 > thLo) {
+                kHi = k; break;
+            }
+        }
+        if (kHi < 0) { out[idx] = NaN; continue; }
+        const th1 = thetas[kHi][idx];
+        const th2 = thetas[kHi + 1][idx];
+        const frac = (th1 - theta0) / (th1 - th2);
+        const pv = pvLevs[kHi][idx] + frac * (pvLevs[kHi + 1][idx] - pvLevs[kHi][idx]);
+        out[idx] = pv;
+        if (Number.isFinite(pv)) {
+            if (pv < vmin) vmin = pv;
+            if (pv > vmax) vmax = pv;
+        }
+    }
+    if (!Number.isFinite(vmin)) { vmin = 0; vmax = 1; }
+
+    // Clamp display range for readability — stratospheric intrusions can
+    // blow up the limits to hundreds of PVU; cap around ±10 so the
+    // tropospheric ribbon keeps its contrast.
+    const DISPLAY_CAP = 10;
+    vmin = Math.max(vmin, -DISPLAY_CAP);
+    vmax = Math.min(vmax,  DISPLAY_CAP);
+
+    const result = {
+        values: out, vmin, vmax,
+        shape: [nlat, nlon], isReal: true, ready: true,
+    };
+    _pvCache.set(cacheKey, result);
+    return result;
 }
 
 /** True if ERA5 has the listed level (or sl fields w/ no level required). */
