@@ -10,15 +10,17 @@ import { Line2 } from 'three/addons/lines/Line2.js';
 import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 
-const N_SEEDS    = 1600;
-const STEPS      = 90;
-const STEP_SIZE  = 0.004;
-const RADIUS     = 1.006;
-const POLE_MASK  = 83;
-const LINE_WIDTH = 2.4;    // pixels
-const OPACITY    = 0.92;
-const ARROW_LEN  = 0.022;  // arrow-head length (world units, globe radius = 1)
-const ARROW_RAD  = 0.007;  // arrow-head base radius
+const N_SEEDS       = 1600;
+const STEPS         = 90;
+const STEP_SIZE     = 0.004;
+const RADIUS        = 1.006;
+const POLE_MASK     = 83;
+const LINE_WIDTH    = 3.0;     // CSS pixels
+const OPACITY       = 0.95;
+const ARROW_LEN     = 0.028;   // arrow-head length (world units, globe radius = 1)
+const ARROW_RAD     = 0.009;   // arrow-head base radius
+const ARROW_EVERY_N = 22;      // place an arrow every N trace points
+const MAX_ARROWS    = 7000;
 
 const D2R = Math.PI / 180;
 
@@ -44,10 +46,9 @@ export class StreamlineField {
             transparent: true,
             opacity: OPACITY,
             depthWrite: false,
-            resolution: new THREE.Vector2(
-                window.innerWidth * (window.devicePixelRatio || 1),
-                window.innerHeight * (window.devicePixelRatio || 1),
-            ),
+            // LineMaterial's linewidth is in CSS pixels — use CSS resolution
+            // (not physical) so the shader's scale factor matches.
+            resolution: new THREE.Vector2(window.innerWidth, window.innerHeight),
         });
 
         // Arrow heads: a single InstancedMesh of tiny cones, one per
@@ -61,7 +62,7 @@ export class StreamlineField {
             opacity: 0.95,
             depthWrite: false,
         });
-        this.arrows = new THREE.InstancedMesh(coneGeom, coneMat, N_SEEDS);
+        this.arrows = new THREE.InstancedMesh(coneGeom, coneMat, MAX_ARROWS);
         this.arrows.count = 0;
         this.arrows.frustumCulled = false;
         this.object.add(this.arrows);
@@ -149,7 +150,6 @@ export class StreamlineField {
             if (trace.length < 2) continue;
 
             const subTraces = this.splitOnDateline(trace);
-            let longest = null;
             for (const sub of subTraces) {
                 const positions = [];
                 for (const [lat, lon] of sub) {
@@ -162,22 +162,24 @@ export class StreamlineField {
                 line.computeLineDistances();
                 line.frustumCulled = false;
                 this.object.add(line);
-                if (!longest || sub.length > longest.length) longest = sub;
-            }
 
-            // Drop one arrow head at the midpoint of the longest sub-trace.
-            if (longest && longest.length >= 4 && arrowIdx < N_SEEDS) {
-                const mid = Math.floor(longest.length / 2);
-                const [aLat, aLon] = longest[mid];
-                const [bLat, bLon] = longest[mid + 1];
-                const pA = this.project(aLat, aLon, RADIUS + 0.003);
-                const pB = this.project(bLat, bLon, RADIUS + 0.003);
-                dir.subVectors(pB, pA);
-                if (dir.lengthSq() > 1e-8) {
-                    dir.normalize();
-                    q.setFromUnitVectors(up, dir);
-                    mat.compose(pA, q, scl);
-                    this.arrows.setMatrixAt(arrowIdx++, mat);
+                // Drop an arrow every ARROW_EVERY_N points — fast streamlines
+                // (which cover more distance per step) get multiple arrows
+                // along their length so the flow direction stays visible.
+                for (let j = Math.floor(ARROW_EVERY_N / 2);
+                     j < sub.length - 1 && arrowIdx < MAX_ARROWS;
+                     j += ARROW_EVERY_N) {
+                    const [aLat, aLon] = sub[j];
+                    const [bLat, bLon] = sub[j + 1];
+                    const pA = this.project(aLat, aLon, RADIUS + 0.003);
+                    const pB = this.project(bLat, bLon, RADIUS + 0.003);
+                    dir.subVectors(pB, pA);
+                    if (dir.lengthSq() > 1e-8) {
+                        dir.normalize();
+                        q.setFromUnitVectors(up, dir);
+                        mat.compose(pA, q, scl);
+                        this.arrows.setMatrixAt(arrowIdx++, mat);
+                    }
                 }
             }
         }

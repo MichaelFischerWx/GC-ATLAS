@@ -119,10 +119,7 @@ class GlobeApp {
         this.renderer.setSize(w, h);
         this.camera.aspect = w / h;
         this.camera.updateProjectionMatrix();
-        if (this.streamlines) {
-            const px = window.devicePixelRatio || 1;
-            this.streamlines.updateResolution(w * px, h * px);
-        }
+        if (this.streamlines) this.streamlines.updateResolution(w, h);
     }
 
     // ── meshes + data textures ───────────────────────────────────────
@@ -290,8 +287,7 @@ class GlobeApp {
         this.streamlines = new StreamlineField(getUV, proj);
 
         const { w, h } = this.size();
-        const px = window.devicePixelRatio || 1;
-        this.streamlines.updateResolution(w * px, h * px);
+        this.streamlines.updateResolution(w, h);
 
         this.applyWindMode();
         this.currentGroup().add(this.particles.object);
