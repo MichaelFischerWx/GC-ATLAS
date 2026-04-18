@@ -186,7 +186,7 @@ class GlobeApp {
             if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
             const gj = await resp.json();
             const mat = new THREE.LineBasicMaterial({
-                color: 0xF3EEDC, transparent: true, opacity: 0.55,
+                color: 0xFFF8E7, transparent: true, opacity: 0.92,
             });
             for (const feat of gj.features) {
                 const g = feat.geometry;

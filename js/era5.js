@@ -66,8 +66,8 @@ export function requestField(name, { month, level } = {}) {
     if (hit && hit !== 'pending') {
         return {
             values: hit.values,
-            vmin: r.meta.vmin,
-            vmax: r.meta.vmax,
+            vmin: hit.vmin,
+            vmax: hit.vmax,
             shape: r.meta.shape,
             units: r.meta.units,
             long_name: r.meta.long_name,
@@ -89,7 +89,15 @@ async function fetchTile(name, group, meta, month, level) {
         const resp = await fetch(url);
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         const buf = await resp.arrayBuffer();
-        cache.set(key, { values: new Float32Array(buf) });
+        const values = new Float32Array(buf);
+        // Per-tile range so each (field, month, level) uses the full colormap.
+        let vmin = Infinity, vmax = -Infinity;
+        for (let i = 0; i < values.length; i++) {
+            const v = values[i];
+            if (v < vmin) vmin = v;
+            if (v > vmax) vmax = v;
+        }
+        cache.set(key, { values, vmin, vmax });
         for (const fn of subscribers) fn({ name, month, level });
     } catch (err) {
         console.warn(`[era5] tile failed ${url}:`, err);
