@@ -11,6 +11,7 @@ import { StreamlineField } from './streamlines.js';
 import { ContourField } from './contours.js';
 import { ContourLabels } from './contour_labels.js';
 import { SunLight } from './sun.js';
+import { OrbitScene, ORBIT_RADIUS } from './orbit.js';
 import { computeZonalMean, renderCrossSection } from './cross_section.js';
 import { loadManifest, onFieldLoaded, isReady as era5Ready, prefetchField } from './era5.js';
 
@@ -155,6 +156,10 @@ class GlobeApp {
         this.mapGroup.visible = false;
         this.scene.add(this.mapGroup);
 
+        this.orbitGroup = new THREE.Group();
+        this.orbitGroup.visible = false;
+        this.scene.add(this.orbitGroup);
+
         // Shared canvas → shared data grid.
         this.canvas = document.createElement('canvas');
         this.canvas.width = GRID.nlon;
@@ -175,6 +180,16 @@ class GlobeApp {
         this.mapTexture.minFilter = THREE.LinearFilter;
         this.mapTexture.magFilter = THREE.LinearFilter;
         this.mapTexture.colorSpace = THREE.SRGBColorSpace;
+
+        // Mini-Earth in orbit view shares the same shaded canvas but needs
+        // its own texture instance so the +0.25 sphere offset doesn't bleed
+        // into the flat map plane.
+        this.earthTexture = new THREE.CanvasTexture(this.canvas);
+        this.earthTexture.minFilter = THREE.LinearFilter;
+        this.earthTexture.magFilter = THREE.LinearFilter;
+        this.earthTexture.wrapS = THREE.RepeatWrapping;
+        this.earthTexture.colorSpace = THREE.SRGBColorSpace;
+        this.earthTexture.offset.x = 0.25;
 
         const sphereGeom = new THREE.SphereGeometry(1, 192, 96);
         const sphereMat  = new THREE.MeshBasicMaterial({ map: this.texture });
@@ -217,6 +232,15 @@ class GlobeApp {
             }),
         );
         this.globeGroup.add(glow);
+
+        // Orbit view: heliocentric scene with a mini-Earth tied to the same
+        // shaded canvas texture. Lives in its own group and toggles via the
+        // view-mode segmented control.
+        this.orbit = new OrbitScene(() => this.earthTexture);
+        this.orbitGroup.add(this.orbit.group);
+        this.orbit.group.visible = true;   // group already parented; outer group handles visibility
+        this.orbit.update(this.state.month);
+        this.spinAngle = 0;                 // cumulative diurnal rotation (rad)
     }
 
     currentGroup() { return this.state.viewMode === 'globe' ? this.globeGroup : this.mapGroup; }
@@ -398,21 +422,27 @@ class GlobeApp {
         if (mode === this.state.viewMode) return;
         this.state.viewMode = mode;
         this.globeGroup.visible = mode === 'globe';
-        this.mapGroup.visible = mode === 'map';
+        this.mapGroup.visible   = mode === 'map';
+        this.orbitGroup.visible = mode === 'orbit';
 
         this.rebuildCoastlines();
         this.rebuildGraticule();
 
+        // Wind overlays + contour labels only attach to globe or map groups;
+        // in orbit mode they're hidden (orbit view is too zoomed-out for them
+        // to read). Parent them to globeGroup as a no-op when in orbit.
+        const overlayParent = mode === 'orbit' ? this.globeGroup : this.currentGroup();
+
         this.particles.object.parent?.remove(this.particles.object);
         this.streamlines.object.parent?.remove(this.streamlines.object);
-        this.currentGroup().add(this.particles.object);
-        this.currentGroup().add(this.streamlines.object);
+        overlayParent.add(this.particles.object);
+        overlayParent.add(this.streamlines.object);
         this.particles.onProjectionChanged();
         this.streamlines.onProjectionChanged();
 
         if (this.contourLabels) {
             this.contourLabels.group.parent?.remove(this.contourLabels.group);
-            this.currentGroup().add(this.contourLabels.group);
+            overlayParent.add(this.contourLabels.group);
             this.contourLabels.setProjection((lat, lon, r) => this.project(lat, lon, r));
             this.updateField();  // regenerate labels for new projection
         }
@@ -428,6 +458,15 @@ class GlobeApp {
             this.controls.enablePan = false;
             this.controls.minDistance = 1.4;
             this.controls.maxDistance = 8;
+        } else if (this.state.viewMode === 'orbit') {
+            // Camera above the ecliptic, looking down-and-inward so the
+            // student sees the orbit plane, the sun, and Earth's tilted axis
+            // all at once.
+            this.camera.position.set(ORBIT_RADIUS * 1.4, ORBIT_RADIUS * 1.1, ORBIT_RADIUS * 1.4);
+            this.controls.enableRotate = true;
+            this.controls.enablePan = false;
+            this.controls.minDistance = 2.0;
+            this.controls.maxDistance = 14;
         } else {
             this.camera.position.set(0, 0, 3.6);
             this.controls.enableRotate = false;
@@ -448,6 +487,7 @@ class GlobeApp {
         if ('showContours' in patch && this.contours)     this.contours.setVisible(!!patch.showContours);
         if ('showSun' in patch || 'viewMode' in patch)    this.applySunVisibility();
         if ('month' in patch && this.sun)                 this.sun.update(this.state.month);
+        if ('month' in patch && this.orbit)               this.orbit.update(this.state.month, this.spinAngle);
         if ('windMode' in patch) this.applyWindMode();
         if ('cmap' in patch) this.applyParticleContrast();
         if ('showXSection' in patch) {
@@ -493,6 +533,7 @@ class GlobeApp {
         this.ctx.putImageData(this.imageData, 0, 0);
         this.texture.needsUpdate = true;
         if (this.mapTexture) this.mapTexture.needsUpdate = true;
+        if (this.earthTexture) this.earthTexture.needsUpdate = true;
         this.updateContours(f);
         this.updateStatus(f);
         this.emit('field-updated', { field: f });
@@ -645,15 +686,18 @@ class GlobeApp {
             this.setState({ showXSection: false });
         });
 
-        // View-mode toggle (Globe | Map)
+        // View-mode toggle (Globe | Map | Orbit)
         const btnGlobe = document.getElementById('view-globe');
         const btnMap   = document.getElementById('view-map');
+        const btnOrbit = document.getElementById('view-orbit');
         const setActive = (mode) => {
             btnGlobe.classList.toggle('active', mode === 'globe');
-            btnMap.classList.toggle('active', mode === 'map');
+            btnMap.classList.toggle('active',   mode === 'map');
+            btnOrbit.classList.toggle('active', mode === 'orbit');
         };
         btnGlobe.addEventListener('click', () => { this.setViewMode('globe'); setActive('globe'); });
         btnMap.addEventListener('click',   () => { this.setViewMode('map');   setActive('map'); });
+        btnOrbit.addEventListener('click', () => { this.setViewMode('orbit'); setActive('orbit'); });
 
         this.refreshLevelAvailability();
         this.on('field-updated', ({ field }) => this.updateColorbar(field));
@@ -707,6 +751,13 @@ class GlobeApp {
         const tick = () => {
             this.controls.update();
             if (this.state.windMode === 'particles' && this.particles) this.particles.step();
+            // Diurnal spin on the mini-Earth in orbit mode — purely cosmetic
+            // (the data is monthly climatology, so there's no "real" time of
+            // day), but the rotation sells the "this is a planet" effect.
+            if (this.state.viewMode === 'orbit' && this.orbit) {
+                this.spinAngle = (this.spinAngle + 0.012) % (Math.PI * 2);
+                this.orbit.update(this.state.month, this.spinAngle);
+            }
             this.renderer.render(this.scene, this.camera);
             requestAnimationFrame(tick);
         };
