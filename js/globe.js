@@ -8,7 +8,9 @@ import { fillRGBA, fillColorbar, COLORMAPS } from './colormap.js';
 import { getField, FIELDS, LEVELS, MONTHS, GRID } from './data.js';
 import { ParticleField } from './particles.js';
 import { computeZonalMean, renderCrossSection } from './cross_section.js';
-import { loadManifest, onFieldLoaded, isReady as era5Ready } from './era5.js';
+import { loadManifest, onFieldLoaded, isReady as era5Ready, prefetchField } from './era5.js';
+
+const PLAY_INTERVAL_MS = 900;
 
 const COASTLINE_URL = 'https://cdn.jsdelivr.net/gh/nvkelso/natural-earth-vector@master/geojson/ne_110m_coastline.geojson';
 const AXIAL_TILT = 23.4 * Math.PI / 180;
@@ -47,15 +49,17 @@ class GlobeApp {
         if (!ok) return;
         onFieldLoaded(({ name, month, level }) => {
             const s = this.state;
-            const matches = (name === s.field) && (month === s.month) &&
-                (level == null || level === s.level);
-            if (matches) this.updateField();
-            if (name === 'u' || name === 'v') {
-                this.windCache.stale = true;
-            }
-            if (s.showXSection && name === s.field && month === s.month) {
-                this.updateXSection();
-            }
+            const levelMatches = (level == null || level === s.level);
+            const monthMatches = (month === s.month);
+            const feedsCurrentField =
+                (name === s.field) ||
+                (s.field === 'wspd' && (name === 'u' || name === 'v'));
+
+            if (feedsCurrentField && monthMatches && levelMatches) this.updateField();
+
+            if (name === 'u' || name === 'v') this.windCache.stale = true;
+
+            if (s.showXSection && feedsCurrentField && monthMatches) this.updateXSection();
         });
         // Prime: ask for the current field, which triggers a fetch.
         this.updateField();
@@ -341,7 +345,16 @@ class GlobeApp {
                 { value: i + 1, textContent: m }));
         });
         monthSel.value = this.state.month;
-        monthSel.addEventListener('change', () => this.setState({ month: +monthSel.value }));
+        monthSel.addEventListener('change', () => {
+            this.stopPlay();
+            this.setState({ month: +monthSel.value });
+        });
+
+        const playBtn = document.getElementById('month-play');
+        playBtn.addEventListener('click', () => {
+            if (this.playTimer) this.stopPlay();
+            else                this.startPlay();
+        });
 
         const cmapSel = document.getElementById('cmap-select');
         for (const c of COLORMAPS) {
@@ -370,6 +383,30 @@ class GlobeApp {
 
         this.refreshLevelAvailability();
         this.on('field-updated', ({ field }) => this.updateColorbar(field));
+    }
+
+    startPlay() {
+        const btn = document.getElementById('month-play');
+        const monthSel = document.getElementById('month-select');
+        if (btn) { btn.textContent = '⏸'; btn.classList.add('playing'); btn.setAttribute('aria-label', 'pause'); }
+        // Prefetch the whole seasonal cycle for the current field (and for u/v so
+        // the wind particles stay smooth as months advance).
+        prefetchField(this.state.field, { level: this.state.level });
+        prefetchField('u', { level: this.state.level });
+        prefetchField('v', { level: this.state.level });
+        this.playTimer = setInterval(() => {
+            const next = this.state.month === 12 ? 1 : this.state.month + 1;
+            if (monthSel) monthSel.value = next;
+            this.setState({ month: next });
+        }, PLAY_INTERVAL_MS);
+    }
+
+    stopPlay() {
+        if (!this.playTimer) return;
+        clearInterval(this.playTimer);
+        this.playTimer = null;
+        const btn = document.getElementById('month-play');
+        if (btn) { btn.textContent = '▶'; btn.classList.remove('playing'); btn.setAttribute('aria-label', 'play through months'); }
     }
 
     refreshLevelAvailability() {

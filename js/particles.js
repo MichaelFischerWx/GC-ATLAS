@@ -7,18 +7,20 @@
 
 import * as THREE from 'three';
 
-const N         = 3500;    // particle count
-const TRAIL     = 14;      // trail length (positions per particle)
-const MAX_AGE   = 140;     // frames before a particle respawns
-const SPEED     = 0.0045;  // deg per (m/s · frame) — tune for visual legibility
-const RADIUS    = 1.006;   // lift slightly above data texture
-const POLE_MASK = 82;      // avoid seeding or advecting beyond ±82°
+const N           = 5000;    // particle count
+const TRAIL       = 16;      // trail length (positions per particle)
+const MAX_AGE     = 160;     // frames before a particle respawns
+const SPEED       = 0.0042;  // deg per (m/s · frame)
+const RADIUS      = 1.006;   // lift slightly above data texture
+const POLE_MASK   = 82;      // avoid seeding beyond ±82°
+const SPEED_NORM  = 38;      // m/s that maps to full particle brightness
 
 export class ParticleField {
     constructor(getUV) {
         this.getUV = getUV;
 
         this.state = new Float32Array(N * 3);           // lat, lon, age
+        this.speed = new Float32Array(N);               // per-particle speed (m/s)
         this.trail = new Float32Array(N * TRAIL * 3);   // xyz per trail step
 
         const segs = N * (TRAIL - 1);
@@ -34,7 +36,8 @@ export class ParticleField {
         const mat = new THREE.ShaderMaterial({
             transparent: true,
             depthWrite: false,
-            uniforms: { uColor: { value: new THREE.Color(0xEEF5EE) } },
+            blending: THREE.AdditiveBlending,   // bright particles punch through saturated backgrounds
+            uniforms: { uColor: { value: new THREE.Color(0xFFFFFF) } },
             vertexShader: `
                 attribute float alpha;
                 varying float vAlpha;
@@ -99,6 +102,7 @@ export class ParticleField {
             lat += dlat;
             lon += dlon;
             age += 1;
+            this.speed[i] = Math.sqrt(u * u + v * v);
 
             if (Math.abs(lat) > POLE_MASK + 3 || age > MAX_AGE) {
                 this.respawn(i);
@@ -130,6 +134,9 @@ export class ParticleField {
         const pos = this.positions, al = this.alphas;
         const tailMax = TRAIL - 1;
         for (let i = 0; i < N; i++) {
+            // Brightness scales with local wind speed (up to SPEED_NORM),
+            // floored so slow flow still hints at streamlines.
+            const brightness = 0.15 + 0.85 * Math.min(1, this.speed[i] / SPEED_NORM);
             const tx = i * TRAIL * 3;
             const ox = i * tailMax * 6;
             const ax = i * tailMax * 2;
@@ -142,8 +149,8 @@ export class ParticleField {
                 pos[k + 3] = this.trail[tx + (t + 1) * 3];
                 pos[k + 4] = this.trail[tx + (t + 1) * 3 + 1];
                 pos[k + 5] = this.trail[tx + (t + 1) * 3 + 2];
-                al[ak]     = 0.9  * (1 - t / tailMax);
-                al[ak + 1] = 0.9  * (1 - (t + 1) / tailMax);
+                al[ak]     = brightness * (1 - t / tailMax);
+                al[ak + 1] = brightness * (1 - (t + 1) / tailMax);
             }
         }
         this.geom.attributes.position.needsUpdate = true;

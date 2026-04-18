@@ -108,6 +108,17 @@ async function fetchTile(name, group, meta, month, level) {
 
 export function onFieldLoaded(fn) { subscribers.add(fn); return () => subscribers.delete(fn); }
 
+/** Kick off fetches for many months in parallel (for the "play" seasonal cycle). */
+export function prefetchField(name, { level = null, months = [1,2,3,4,5,6,7,8,9,10,11,12] } = {}) {
+    const r = resolveField(name);
+    if (!r) return;
+    const useLevel = r.meta.levels ? level : null;
+    for (const m of months) {
+        const key = keyOf(name, m, useLevel);
+        if (!cache.has(key)) fetchTile(name, r.group, r.meta, m, useLevel);
+    }
+}
+
 // ── per-variable unit normalisations ─────────────────────────────────────
 // Applied once at tile load, before caching, so all downstream code sees
 // values in the units advertised in data.js FIELDS metadata.

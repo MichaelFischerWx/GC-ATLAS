@@ -158,6 +158,31 @@
         select:focus  { outline: none; border-color: var(--emerald-bright); box-shadow: 0 0 0 3px var(--emerald-glow); }
         select:disabled { cursor: not-allowed; }
 
+        .row-controls { display: flex; gap: 8px; }
+        .row-controls select { flex: 1; }
+        .icon-btn {
+            flex-shrink: 0;
+            width: 40px;
+            height: auto;
+            font-size: 0.85rem;
+            font-family: inherit;
+            background: var(--thalo-raised);
+            border: 1px solid var(--thalo-line);
+            color: var(--paper);
+            border-radius: var(--radius);
+            cursor: pointer;
+            display: grid;
+            place-items: center;
+            transition: border-color 0.15s, background 0.15s, color 0.15s, box-shadow 0.15s;
+        }
+        .icon-btn:hover  { border-color: var(--emerald); }
+        .icon-btn:focus  { outline: none; border-color: var(--emerald-bright); box-shadow: 0 0 0 3px var(--emerald-glow); }
+        .icon-btn.playing {
+            background: var(--emerald);
+            border-color: var(--emerald-bright);
+            color: var(--deep);
+        }
+
         .check {
             display: flex;
             align-items: center;
@@ -374,7 +399,10 @@
 
         <section class="control-group">
             <label class="field-label" for="month-select">Month</label>
-            <select id="month-select"></select>
+            <div class="row-controls">
+                <select id="month-select"></select>
+                <button id="month-play" class="icon-btn" type="button" aria-label="play through months" title="Play through the seasonal cycle">▶</button>
+            </div>
         </section>
 
         <section class="control-group">

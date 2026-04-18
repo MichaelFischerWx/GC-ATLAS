@@ -16,13 +16,14 @@ export const LEVELS = [10, 50, 100, 150, 200, 250, 300, 500, 700, 850, 925, 1000
 export const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 
 export const FIELDS = {
-    t:   { type: 'pl', name: 'Temperature',             units: 'K',       cmap: 'turbo',   defaultLevel: 500 },
-    u:   { type: 'pl', name: 'Zonal wind (u)',          units: 'm s⁻¹',   cmap: 'RdBu_r',  defaultLevel: 200 },
-    v:   { type: 'pl', name: 'Meridional wind (v)',     units: 'm s⁻¹',   cmap: 'RdBu_r',  defaultLevel: 200 },
-    w:   { type: 'pl', name: 'Vertical velocity (ω)',   units: 'Pa s⁻¹',  cmap: 'RdBu_r',  defaultLevel: 500 },
-    z:   { type: 'pl', name: 'Geopotential height',     units: 'm',       cmap: 'viridis', defaultLevel: 500 },
-    msl: { type: 'sl', name: 'Mean sea-level pressure', units: 'hPa',     cmap: 'plasma' },
-    t2m: { type: 'sl', name: '2-m temperature',         units: 'K',       cmap: 'turbo' },
+    t:    { type: 'pl', name: 'Temperature',             units: 'K',       cmap: 'turbo',   defaultLevel: 500 },
+    u:    { type: 'pl', name: 'Zonal wind (u)',          units: 'm s⁻¹',   cmap: 'RdBu_r',  defaultLevel: 200 },
+    v:    { type: 'pl', name: 'Meridional wind (v)',     units: 'm s⁻¹',   cmap: 'RdBu_r',  defaultLevel: 200 },
+    wspd: { type: 'pl', name: 'Wind speed (|V|)',        units: 'm s⁻¹',   cmap: 'turbo',   defaultLevel: 200, derived: true },
+    w:    { type: 'pl', name: 'Vertical velocity (ω)',   units: 'Pa s⁻¹',  cmap: 'RdBu_r',  defaultLevel: 500 },
+    z:    { type: 'pl', name: 'Geopotential height',     units: 'm',       cmap: 'viridis', defaultLevel: 500 },
+    msl:  { type: 'sl', name: 'Mean sea-level pressure', units: 'hPa',     cmap: 'plasma' },
+    t2m:  { type: 'sl', name: '2-m temperature',         units: 'K',       cmap: 'turbo' },
 };
 
 // ── lat/lon axes ─────────────────────────────────────────────────────────
@@ -178,6 +179,7 @@ function fieldT2M(month) {
 // ── public API ───────────────────────────────────────────────────────────
 
 function syntheticField(name, month, level) {
+    if (FIELDS[name]?.derived) return syntheticDerived(name, month, level);
     switch (name) {
         case 't':   return fieldT(month, level);
         case 'u':   return fieldU(month, level);
@@ -216,18 +218,32 @@ export function getField(name, { month = 1, level = 500 } = {}) {
     const meta = FIELDS[name];
     if (!meta) throw new Error(`unknown field: ${name}`);
 
-    const era = requestEra5(name, { month, level });
-    if (era) {
-        return {
-            values: era.values,
-            vmin: era.vmin, vmax: era.vmax,
-            shape: era.shape ?? [GRID.nlat, GRID.nlon],
-            lats: LATS, lons: LONS,
-            ...meta,
-            long_name: era.long_name || meta.name,
-            units: era.units || meta.units,
-            isReal: true,
-        };
+    // Derived fields (e.g. wind speed) — compute from component tiles.
+    if (meta.derived) {
+        const d = computeDerived(name, month, level);
+        if (d) {
+            return {
+                values: d.values, vmin: d.vmin, vmax: d.vmax,
+                shape: d.shape ?? [GRID.nlat, GRID.nlon],
+                lats: LATS, lons: LONS,
+                ...meta,
+                isReal: d.isReal,
+            };
+        }
+    } else {
+        const era = requestEra5(name, { month, level });
+        if (era) {
+            return {
+                values: era.values,
+                vmin: era.vmin, vmax: era.vmax,
+                shape: era.shape ?? [GRID.nlat, GRID.nlon],
+                lats: LATS, lons: LONS,
+                ...meta,
+                long_name: era.long_name || meta.name,
+                units: era.units || meta.units,
+                isReal: true,
+            };
+        }
     }
 
     const data = syntheticField(name, month, level);
@@ -238,6 +254,41 @@ export function getField(name, { month = 1, level = 500 } = {}) {
         ...meta,
         isReal: false,
     };
+}
+
+function magnitudeFromUV(u, v) {
+    const n = u.length;
+    const values = new Float32Array(n);
+    let vmin = Infinity, vmax = -Infinity;
+    for (let i = 0; i < n; i++) {
+        const s = Math.hypot(u[i], v[i]);
+        values[i] = s;
+        if (s < vmin) vmin = s;
+        if (s > vmax) vmax = s;
+    }
+    return { values, vmin, vmax };
+}
+
+function computeDerived(name, month, level) {
+    if (name === 'wspd') {
+        const uE = requestEra5('u', { month, level });
+        const vE = requestEra5('v', { month, level });
+        if (uE && vE) {
+            return { ...magnitudeFromUV(uE.values, vE.values), shape: uE.shape, isReal: true };
+        }
+        // Falls through to synthetic below.
+        return null;
+    }
+    return null;
+}
+
+function syntheticDerived(name, month, level) {
+    if (name === 'wspd') {
+        const uS = fieldU(month, level);
+        const vS = fieldV(month, level);
+        return magnitudeFromUV(uS.values, vS.values);
+    }
+    return null;
 }
 
 /** True if ERA5 has the listed level (or sl fields w/ no level required). */
