@@ -9,7 +9,9 @@ import * as THREE from 'three';
 
 const N           = 12000;   // particle count — dense cover (≈ nullschool feel)
 const TRAIL       = 12;      // trail length (positions per particle)
-const MAX_AGE     = 160;     // frames before a particle respawns
+const MAX_AGE     = 220;     // frames before a particle respawns (~3.7 s @ 60 fps)
+const FADE_IN     = 15;      // frames over which alpha ramps from 0 on birth
+const FADE_OUT    = 20;      // frames over which alpha fades back to 0 before death
 const SPEED       = 0.0042;  // deg per (m/s · frame)
 const RADIUS      = 1.006;   // lift slightly above data texture
 const POLE_MASK   = 82;      // avoid seeding beyond ±82°
@@ -109,16 +111,20 @@ export class ParticleField {
         this.object.add(this.trailMesh);
         this.object.add(this.headMesh);
 
-        for (let i = 0; i < N; i++) this.respawn(i);
+        // On initial construction, stagger ages across the full lifetime so
+        // respawn events are spread evenly over the first MAX_AGE frames.
+        for (let i = 0; i < N; i++) this.respawn(i, true);
         this.updateGeometry();
     }
 
-    respawn(i) {
+    respawn(i, initial = false) {
         const lat = (Math.random() * 2 - 1) * POLE_MASK;
         const lon = Math.random() * 360 - 180;
         this.state[i * 3]     = lat;
         this.state[i * 3 + 1] = lon;
-        this.state[i * 3 + 2] = Math.floor(Math.random() * MAX_AGE);
+        // Initial spawn: random age so deaths are staggered. Mid-run respawn:
+        // age 0 so the new particle fades in gracefully from nothing.
+        this.state[i * 3 + 2] = initial ? Math.floor(Math.random() * MAX_AGE) : 0;
         const [x, y, z] = this.latLonToXYZ(lat, lon);
         const tx = i * TRAIL * 3;
         for (let t = 0; t < TRAIL; t++) {
@@ -223,10 +229,20 @@ export class ParticleField {
         const hpos = this.headPositions, hal = this.headAlphas;
         const tailMax = TRAIL - 1;
         for (let i = 0; i < N; i++) {
-            // Head opacity scales with local wind speed — fast flow punches
-            // through bright colormaps, slow flow lingers as faint streaks.
-            const headAlpha = ALPHA_FLOOR +
+            // Head opacity = speed ramp × age envelope. The age envelope
+            // fades each particle in over FADE_IN frames and out over
+            // FADE_OUT frames before respawn, so births and deaths don't
+            // look like abrupt pops in the jet axis.
+            const age = this.state[i * 3 + 2];
+            let ageFade = 1;
+            if (age < FADE_IN) {
+                ageFade = age / FADE_IN;
+            } else if (age > MAX_AGE - FADE_OUT) {
+                ageFade = Math.max(0, (MAX_AGE - age) / FADE_OUT);
+            }
+            const speedAlpha = ALPHA_FLOOR +
                 (ALPHA_PEAK - ALPHA_FLOOR) * Math.min(1, this.speed[i] / SPEED_NORM);
+            const headAlpha = speedAlpha * ageFade;
             const tx = i * TRAIL * 3;
             const ox = i * tailMax * 6;
             const ax = i * tailMax * 2;
