@@ -194,4 +194,6 @@ export class ParticleField {
     }
 
     setVisible(v) { this.object.visible = v; }
+
+    setColor(hex) { this.object.material.uniforms.uColor.value.setHex(hex); }
 }

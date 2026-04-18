@@ -4,10 +4,11 @@
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { fillRGBA, fillColorbar, COLORMAPS } from './colormap.js';
+import { fillRGBA, fillColorbar, COLORMAPS, meanLuminance } from './colormap.js';
 import { getField, FIELDS, LEVELS, MONTHS, GRID } from './data.js';
 import { ParticleField } from './particles.js';
 import { StreamlineField } from './streamlines.js';
+import { ContourField } from './contours.js';
 import { computeZonalMean, renderCrossSection } from './cross_section.js';
 import { loadManifest, onFieldLoaded, isReady as era5Ready, prefetchField } from './era5.js';
 
@@ -16,9 +17,26 @@ const PLAY_INTERVAL_MS = 900;
 const COASTLINE_URL = 'https://cdn.jsdelivr.net/gh/nvkelso/natural-earth-vector@master/geojson/ne_50m_coastline.geojson';
 const AXIAL_TILT = 23.4 * Math.PI / 180;
 
+// Default globe viewpoint: centred on North America so the opening frame shows
+// continents and the mid-latitude jet, not empty ocean.
+const DEFAULT_VIEW = { lat: 35, lon: -95, distance: 3.35 };
+
 // Equirectangular map dimensions (width 4, height 2 → lon spans [-2, 2], lat spans [-1, 1]).
 const MAP_W = 4;
 const MAP_H = 2;
+
+function cameraFromView({ lat, lon, distance }, tilt = 0) {
+    const phi = lat * Math.PI / 180;
+    const lam = lon * Math.PI / 180;
+    const x0 = distance * Math.cos(phi) * Math.sin(lam);
+    const y0 = distance * Math.sin(phi);
+    const z0 = distance * Math.cos(phi) * Math.cos(lam);
+    // globeGroup is rotated by `tilt` about +Z; apply the same rotation to the
+    // camera target vector so the requested (lat, lon) actually ends up facing
+    // the camera in world space.
+    const c = Math.cos(tilt), s = Math.sin(tilt);
+    return [x0 * c - y0 * s, x0 * s + y0 * c, z0];
+}
 
 class GlobeApp {
     listeners = {};
@@ -33,6 +51,7 @@ class GlobeApp {
             viewMode: 'globe',   // 'globe' | 'map'
             showCoastlines: true,
             showGraticule: true,
+            showContours: true,
             windMode: 'particles',   // 'off' | 'particles' | 'streamlines'
             showXSection: false,
         };
@@ -76,7 +95,7 @@ class GlobeApp {
         const { w, h } = this.size();
         this.scene = new THREE.Scene();
         this.camera = new THREE.PerspectiveCamera(32, w / h, 0.1, 100);
-        this.camera.position.set(0, 0.6, 3.3);
+        this.camera.position.set(...cameraFromView(DEFAULT_VIEW, AXIAL_TILT));
 
         this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
         this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -163,6 +182,14 @@ class GlobeApp {
         const planeMat  = new THREE.MeshBasicMaterial({ map: this.mapTexture, side: THREE.DoubleSide });
         this.mapMesh = new THREE.Mesh(planeGeom, planeMat);
         this.mapGroup.add(this.mapMesh);
+
+        // Contour overlay: isolines drawn on top of the shaded field.
+        this.contours = new ContourField({
+            nlon: GRID.nlon, nlat: GRID.nlat, mapW: MAP_W, mapH: MAP_H,
+        });
+        this.globeGroup.add(this.contours.sphereMesh);
+        this.mapGroup.add(this.contours.planeMesh);
+        this.contours.setVisible(this.state.showContours);
 
         // Subtle rim glow on the globe (sphere mode only).
         const glow = new THREE.Mesh(
@@ -290,8 +317,19 @@ class GlobeApp {
         this.streamlines.updateResolution(w, h);
 
         this.applyWindMode();
+        this.applyParticleContrast();
         this.currentGroup().add(this.particles.object);
         this.currentGroup().add(this.streamlines.object);
+    }
+
+    applyParticleContrast() {
+        if (!this.particles) return;
+        // Ink a dark near-black on bright colormaps (turbo, wind, plasma end)
+        // and white on dark ones (viridis, magma). Threshold tuned so magma
+        // stays white and turbo flips to dark.
+        const darkInk = 0x0b1a14;   // near-black with faint emerald
+        const lightInk = 0xffffff;
+        this.particles.setColor(meanLuminance(this.state.cmap) > 0.52 ? darkInk : lightInk);
     }
 
     applyWindMode() {
@@ -353,7 +391,7 @@ class GlobeApp {
 
     configureCamera() {
         if (this.state.viewMode === 'globe') {
-            this.camera.position.set(0, 0.6, 3.3);
+            this.camera.position.set(...cameraFromView(DEFAULT_VIEW, AXIAL_TILT));
             this.controls.enableRotate = true;
             this.controls.enablePan = false;
             this.controls.minDistance = 1.4;
@@ -375,7 +413,9 @@ class GlobeApp {
         Object.assign(this.state, patch);
         if ('showCoastlines' in patch && this.coastGroup) this.coastGroup.visible = !!patch.showCoastlines;
         if ('showGraticule' in patch && this.gratGroup)   this.gratGroup.visible   = !!patch.showGraticule;
+        if ('showContours' in patch && this.contours)     this.contours.setVisible(!!patch.showContours);
         if ('windMode' in patch) this.applyWindMode();
+        if ('cmap' in patch) this.applyParticleContrast();
         if ('showXSection' in patch) {
             const panel = document.getElementById('xsection-panel');
             if (panel) panel.hidden = !patch.showXSection;
@@ -419,8 +459,26 @@ class GlobeApp {
         this.ctx.putImageData(this.imageData, 0, 0);
         this.texture.needsUpdate = true;
         if (this.mapTexture) this.mapTexture.needsUpdate = true;
+        this.updateContours(f);
         this.updateStatus(f);
         this.emit('field-updated', { field: f });
+    }
+
+    updateContours(f) {
+        if (!this.contours) return;
+        const meta = FIELDS[this.state.field] || {};
+        const interval = meta.contour;
+        if (!interval) { this.contours.setVisible(false); return; }
+        this.contours.setData(f.values);
+        this.contours.setInterval(interval);
+        // Divergent colormaps → emphasise the zero line.
+        const divergent = meta.cmap === 'RdBu_r';
+        this.contours.setEmphasis(0, divergent);
+        // Ink tracks colormap luminance so contours stay legible on any cmap.
+        const darkBg = meanLuminance(this.state.cmap) < 0.45;
+        this.contours.setInk(darkBg ? 0xf4faf7 : 0x0a1712);
+        this.contours.setOpacity(darkBg ? 0.70 : 0.85);
+        this.contours.setVisible(this.state.showContours);
     }
 
     updateStatus(f) {
@@ -516,6 +574,9 @@ class GlobeApp {
         });
         document.getElementById('toggle-graticule').addEventListener('change', (e) => {
             this.setState({ showGraticule: e.target.checked });
+        });
+        document.getElementById('toggle-contours').addEventListener('change', (e) => {
+            this.setState({ showContours: e.target.checked });
         });
         // Wind overlay mode: segmented control (Off / Particles / Streamlines)
         document.querySelectorAll('[data-wind-mode]').forEach((btn) => {

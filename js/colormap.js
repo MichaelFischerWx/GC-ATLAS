@@ -59,6 +59,15 @@ const LUT = {
 
 export const COLORMAPS = Object.keys(LUT);
 
+/** Rec. 709 luminance of the colormap, averaged over its stops. Used to
+ * decide whether an overlay should be drawn in a dark or light ink. */
+export function meanLuminance(name) {
+    const lut = LUT[name] ?? LUT.viridis;
+    let sum = 0;
+    for (const [r, g, b] of lut) sum += 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    return sum / lut.length;
+}
+
 /** Sample a colormap. t ∈ [0,1]. Returns [r,g,b] in [0,1]. */
 export function sample(name, t) {
     const lut = LUT[name] ?? LUT.viridis;
