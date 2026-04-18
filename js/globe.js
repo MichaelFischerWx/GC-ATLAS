@@ -868,7 +868,7 @@ class GlobeApp {
     updateXSection() {
         const canvas = document.getElementById('xs-canvas');
         if (!canvas) return;
-        const { field, month, xsArc, cmap } = this.state;
+        const { field, month, xsArc, cmap, showContours } = this.state;
         let zm;
         if (xsArc) {
             const arc = greatCircleArc(
@@ -881,6 +881,10 @@ class GlobeApp {
         } else {
             zm = computeZonalMean(field, month);
         }
+        // Propagate display options into the renderer: gridlines always on,
+        // contours gated by the main Contours toggle.
+        zm.showContours = !!showContours;
+        zm.contourInterval = FIELDS[field]?.contour || 0;
         renderCrossSection(canvas, zm, cmap);
         const title = document.getElementById('xs-title');
         const hint  = document.getElementById('xs-hint');

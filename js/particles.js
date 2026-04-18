@@ -66,7 +66,48 @@ export class ParticleField {
                 }
             `,
         });
-        this.object = new THREE.LineSegments(this.geom, mat);
+        this.trailMesh = new THREE.LineSegments(this.geom, mat);
+
+        // Head-dot pass — a THREE.Points object with one vertex per particle
+        // at the trail head. WebGL's built-in line stroke is clamped to 1 px,
+        // which makes slow-wind particles almost invisible because their
+        // trails collapse into sub-pixel segments. gl_PointSize lets us draw
+        // a 2.5-px disk that always stays visible regardless of trail length.
+        this.headPositions = new Float32Array(N * 3);
+        this.headAlphas    = new Float32Array(N);
+        this.headGeom = new THREE.BufferGeometry();
+        this.headGeom.setAttribute('position',
+            new THREE.BufferAttribute(this.headPositions, 3).setUsage(THREE.DynamicDrawUsage));
+        this.headGeom.setAttribute('alpha',
+            new THREE.BufferAttribute(this.headAlphas, 1).setUsage(THREE.DynamicDrawUsage));
+        const headMat = new THREE.ShaderMaterial({
+            transparent: true,
+            depthWrite: false,
+            uniforms: { uColor: { value: new THREE.Color(0xFFFFFF) } },
+            vertexShader: `
+                attribute float alpha;
+                varying float vAlpha;
+                void main() {
+                    vAlpha = alpha;
+                    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+                    gl_PointSize = 2.5;
+                }
+            `,
+            fragmentShader: `
+                uniform vec3 uColor;
+                varying float vAlpha;
+                void main() {
+                    vec2 c = gl_PointCoord - 0.5;
+                    if (dot(c, c) > 0.25) discard;   // circular dot
+                    gl_FragColor = vec4(uColor, vAlpha);
+                }
+            `,
+        });
+        this.headMesh = new THREE.Points(this.headGeom, headMat);
+
+        this.object = new THREE.Group();
+        this.object.add(this.trailMesh);
+        this.object.add(this.headMesh);
 
         for (let i = 0; i < N; i++) this.respawn(i);
         this.updateGeometry();
@@ -179,6 +220,7 @@ export class ParticleField {
 
     updateGeometry() {
         const pos = this.positions, al = this.alphas;
+        const hpos = this.headPositions, hal = this.headAlphas;
         const tailMax = TRAIL - 1;
         for (let i = 0; i < N; i++) {
             // Head opacity scales with local wind speed — fast flow punches
@@ -200,12 +242,23 @@ export class ParticleField {
                 al[ak]     = headAlpha * (1 - t / tailMax);
                 al[ak + 1] = headAlpha * (1 - (t + 1) / tailMax);
             }
+            // Head dot at trail[0] (newest position). Alpha a bit brighter
+            // than the segment head so the dot is the clear focal point.
+            hpos[i * 3]     = this.trail[tx];
+            hpos[i * 3 + 1] = this.trail[tx + 1];
+            hpos[i * 3 + 2] = this.trail[tx + 2];
+            hal[i] = Math.min(1, headAlpha * 1.15);
         }
         this.geom.attributes.position.needsUpdate = true;
         this.geom.attributes.alpha.needsUpdate = true;
+        this.headGeom.attributes.position.needsUpdate = true;
+        this.headGeom.attributes.alpha.needsUpdate = true;
     }
 
     setVisible(v) { this.object.visible = v; }
 
-    setColor(hex) { this.object.material.uniforms.uColor.value.setHex(hex); }
+    setColor(hex) {
+        this.trailMesh.material.uniforms.uColor.value.setHex(hex);
+        this.headMesh.material.uniforms.uColor.value.setHex(hex);
+    }
 }

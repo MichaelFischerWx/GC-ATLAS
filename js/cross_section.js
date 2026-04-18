@@ -187,10 +187,16 @@ function drawArcHeatmap(ctx, x0, y0, w, h, zm, cmap) {
     const pMin = levels[0];
     const logSpan = Math.log(pMax / pMin);
     const span = (vmax - vmin) || 1;
+    const showContours = !!zm.showContours;
+    const interval = zm.contourInterval || 0;
 
     const iw = Math.floor(w), ih = Math.floor(h);
     const img = ctx.createImageData(iw, ih);
     const data = img.data;
+    // Cache current row + previous row's v so the contour pass can compare
+    // neighbours in one pass without re-sampling.
+    const prevRow = showContours && interval ? new Float32Array(iw) : null;
+    if (prevRow) prevRow.fill(NaN);
 
     for (let py = 0; py < ih; py++) {
         const p = pMin * Math.exp((py / (ih - 1)) * logSpan);
@@ -199,6 +205,7 @@ function drawArcHeatmap(ctx, x0, y0, w, h, zm, cmap) {
         const k1 = Math.min(nlev - 1, k0 + 1);
         const fLev = (k0 === k1) ? 0
             : Math.log(p / levels[k0]) / Math.log(levels[k1] / levels[k0]);
+        let vLeft = NaN;
         for (let px = 0; px < iw; px++) {
             const sIdx = (px / (iw - 1)) * (nSamples - 1);
             const j0 = Math.floor(sIdx);
@@ -212,6 +219,8 @@ function drawArcHeatmap(ctx, x0, y0, w, h, zm, cmap) {
             const k = (py * iw + px) * 4;
             if (!Number.isFinite(v)) {
                 data[k] = 18; data[k+1] = 26; data[k+2] = 22; data[k+3] = 255;
+                if (prevRow) prevRow[px] = NaN;
+                vLeft = NaN;
                 continue;
             }
             const t = (v - vmin) / span;
@@ -220,12 +229,55 @@ function drawArcHeatmap(ctx, x0, y0, w, h, zm, cmap) {
             data[k + 1] = g * 255;
             data[k + 2] = b * 255;
             data[k + 3] = 255;
+            // Contour overlay: paint dark where the floor(v/interval) bucket
+            // differs from the neighbour on the left or above.
+            if (prevRow) {
+                const kSelf = Math.floor(v / interval);
+                const vUp   = prevRow[px];
+                const hitX = Number.isFinite(vLeft) && Math.floor(vLeft / interval) !== kSelf;
+                const hitY = Number.isFinite(vUp)   && Math.floor(vUp   / interval) !== kSelf;
+                if (hitX || hitY) {
+                    data[k] = 10; data[k + 1] = 18; data[k + 2] = 14;
+                }
+                prevRow[px] = v;
+            }
+            vLeft = v;
         }
     }
     ctx.putImageData(img, x0, y0);
+    drawPanelGrid(ctx, x0, y0, w, h, zm);
     ctx.strokeStyle = 'rgba(255,255,255,0.22)';
     ctx.lineWidth = zm._dpr || 1;
     ctx.strokeRect(x0 + 0.5, y0 + 0.5, w, h);
+}
+
+/** Faint gridlines inside the plot area: horizontal at pressure ticks,
+ *  vertical at quarter marks along the arc / latitude. */
+function drawPanelGrid(ctx, x0, y0, w, h, zm) {
+    const dpr = zm._dpr || 1;
+    ctx.save();
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.14)';
+    ctx.lineWidth = Math.max(1, dpr * 0.75);
+    ctx.beginPath();
+    if (zm.type === 'pl') {
+        const pMax = zm.levels[zm.levels.length - 1];
+        const pMin = zm.levels[0];
+        const logSpan = Math.log(pMax / pMin);
+        for (const p of P_TICKS) {
+            if (p < pMin || p > pMax) continue;
+            const y = y0 + h * (Math.log(p / pMin) / logSpan);
+            ctx.moveTo(x0, y + 0.5);
+            ctx.lineTo(x0 + w, y + 0.5);
+        }
+    }
+    // Vertical quarter marks.
+    for (const t of [0.25, 0.5, 0.75]) {
+        const x = Math.round(x0 + t * w) + 0.5;
+        ctx.moveTo(x, y0);
+        ctx.lineTo(x, y0 + h);
+    }
+    ctx.stroke();
+    ctx.restore();
 }
 
 function drawArcLine(ctx, x0, y0, w, h, zm) {
@@ -316,10 +368,14 @@ function drawHeatmap(ctx, x0, y0, w, h, zm, cmap) {
     const pMin = levels[0];          // smallest pressure = stratosphere
     const logSpan = Math.log(pMax / pMin);
     const span = (vmax - vmin) || 1;
+    const showContours = !!zm.showContours;
+    const interval = zm.contourInterval || 0;
 
     const iw = Math.floor(w), ih = Math.floor(h);
     const img = ctx.createImageData(iw, ih);
     const data = img.data;
+    const prevRow = showContours && interval ? new Float32Array(iw) : null;
+    if (prevRow) prevRow.fill(NaN);
 
     // Atmospheric convention: py=0 (top of panel) → low pressure (stratosphere);
     // py=ih-1 (bottom) → high pressure (surface).
@@ -349,9 +405,8 @@ function drawHeatmap(ctx, x0, y0, w, h, zm, cmap) {
 
             const k = (py * iw + px) * 4;
             if (!Number.isFinite(v)) {
-                // Tile still loading → NaN; paint as no-data instead of
-                // crashing downstream sample(cmap, NaN).
                 data[k] = 18; data[k+1] = 26; data[k+2] = 22; data[k+3] = 255;
+                if (prevRow) prevRow[px] = NaN;
                 continue;
             }
             const t = (v - vmin) / span;
@@ -360,10 +415,22 @@ function drawHeatmap(ctx, x0, y0, w, h, zm, cmap) {
             data[k + 1] = g * 255;
             data[k + 2] = b * 255;
             data[k + 3] = 255;
+            if (prevRow) {
+                const kSelf = Math.floor(v / interval);
+                const vUp   = prevRow[px];
+                // vLeft: previous pixel in same row — we can read back from data via vmin/span, but
+                // cheaper to just hold a local; the neighbour-comparison cost is a few per-pixel floats.
+                // We only check the up-neighbour here; one-direction detection still looks like a grid.
+                const hit = Number.isFinite(vUp) && Math.floor(vUp / interval) !== kSelf;
+                if (hit) {
+                    data[k] = 10; data[k + 1] = 18; data[k + 2] = 14;
+                }
+                prevRow[px] = v;
+            }
         }
     }
     ctx.putImageData(img, x0, y0);
-
+    drawPanelGrid(ctx, x0, y0, w, h, zm);
     ctx.strokeStyle = 'rgba(255,255,255,0.22)';
     ctx.lineWidth = zm._dpr || 1;
     ctx.strokeRect(x0 + 0.5, y0 + 0.5, w, h);
