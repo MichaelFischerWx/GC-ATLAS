@@ -10,13 +10,15 @@ import { Line2 } from 'three/addons/lines/Line2.js';
 import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 
-const N_SEEDS    = 1800;
+const N_SEEDS    = 1600;
 const STEPS      = 90;
 const STEP_SIZE  = 0.004;
 const RADIUS     = 1.006;
 const POLE_MASK  = 83;
 const LINE_WIDTH = 2.4;    // pixels
 const OPACITY    = 0.92;
+const ARROW_LEN  = 0.022;  // arrow-head length (world units, globe radius = 1)
+const ARROW_RAD  = 0.007;  // arrow-head base radius
 
 const D2R = Math.PI / 180;
 
@@ -47,6 +49,22 @@ export class StreamlineField {
                 window.innerHeight * (window.devicePixelRatio || 1),
             ),
         });
+
+        // Arrow heads: a single InstancedMesh of tiny cones, one per
+        // streamline, placed at the midpoint oriented along the flow.
+        const coneGeom = new THREE.ConeGeometry(ARROW_RAD, ARROW_LEN, 5, 1);
+        // Shift so the base is at the origin and the tip points +Y.
+        coneGeom.translate(0, ARROW_LEN / 2, 0);
+        const coneMat = new THREE.MeshBasicMaterial({
+            color: 0xffffff,
+            transparent: true,
+            opacity: 0.95,
+            depthWrite: false,
+        });
+        this.arrows = new THREE.InstancedMesh(coneGeom, coneMat, N_SEEDS);
+        this.arrows.count = 0;
+        this.arrows.frustumCulled = false;
+        this.object.add(this.arrows);
 
         this.rebuild();
     }
@@ -111,11 +129,19 @@ export class StreamlineField {
     }
 
     rebuild() {
-        // Dispose old child geometries, clear the group.
-        for (const child of this.object.children) {
+        // Dispose old Line2 geometries; keep the InstancedMesh attached.
+        for (const child of this.object.children.slice()) {
+            if (child === this.arrows) continue;
             if (child.geometry) child.geometry.dispose();
+            this.object.remove(child);
         }
-        this.object.clear();
+
+        const mat = new THREE.Matrix4();
+        const q   = new THREE.Quaternion();
+        const up  = new THREE.Vector3(0, 1, 0);
+        const scl = new THREE.Vector3(1, 1, 1);
+        const dir = new THREE.Vector3();
+        let arrowIdx = 0;
 
         for (let s = 0; s < N_SEEDS; s++) {
             const [lat0, lon0] = this.seedPoint();
@@ -123,6 +149,7 @@ export class StreamlineField {
             if (trace.length < 2) continue;
 
             const subTraces = this.splitOnDateline(trace);
+            let longest = null;
             for (const sub of subTraces) {
                 const positions = [];
                 for (const [lat, lon] of sub) {
@@ -135,8 +162,27 @@ export class StreamlineField {
                 line.computeLineDistances();
                 line.frustumCulled = false;
                 this.object.add(line);
+                if (!longest || sub.length > longest.length) longest = sub;
+            }
+
+            // Drop one arrow head at the midpoint of the longest sub-trace.
+            if (longest && longest.length >= 4 && arrowIdx < N_SEEDS) {
+                const mid = Math.floor(longest.length / 2);
+                const [aLat, aLon] = longest[mid];
+                const [bLat, bLon] = longest[mid + 1];
+                const pA = this.project(aLat, aLon, RADIUS + 0.003);
+                const pB = this.project(bLat, bLon, RADIUS + 0.003);
+                dir.subVectors(pB, pA);
+                if (dir.lengthSq() > 1e-8) {
+                    dir.normalize();
+                    q.setFromUnitVectors(up, dir);
+                    mat.compose(pA, q, scl);
+                    this.arrows.setMatrixAt(arrowIdx++, mat);
+                }
             }
         }
+        this.arrows.count = arrowIdx;
+        this.arrows.instanceMatrix.needsUpdate = true;
     }
 
     onProjectionChanged() { this.rebuild(); }
