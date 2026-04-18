@@ -956,11 +956,15 @@ class GlobeApp {
         if (this.mapTexture) this.mapTexture.needsUpdate = true;
         if (this.earthTexture) this.earthTexture.needsUpdate = true;
 
-        // Decorated field for contour overlay + colorbar — use the transformed
-        // values and range so contours track whichever mode is showing.
+        // Decorated field for contour overlay + colorbar. The heatmap uses
+        // the decomposed values (shading the eddy / anomaly / zonal signal),
+        // but contours always track the RAW field so the overlay puts the
+        // decomposition signal in the context of the total state — standard
+        // "shade anomaly, contour total" synoptic practice.
         const fDecorated = {
             ...f,
-            values: decomp.values,
+            values: decomp.values,        // decomposed — used by the colorbar + panel
+            rawValues: f.values,          // original tile values — used by contours
             vmin: decomp.vmin,
             vmax: decomp.vmax,
             decomposeMode: mode,
@@ -1004,11 +1008,16 @@ class GlobeApp {
             this.contourLabels?.clear();
             return;
         }
-        this.contours.setData(f.values);
+        // Contour source: the RAW field values always. When a decomposition
+        // is on, this means the isolines show the total state overlaid on the
+        // shaded eddy / anomaly, which is how textbooks do it.
+        const contourValues = f.rawValues || f.values;
+        this.contours.setData(contourValues);
         this.contours.setInterval(interval);
-        // Divergent colormaps → emphasise the zero line. True for the
-        // configured cmap (e.g. RdBu_r on u/v) OR any symmetric decomposition.
-        const divergent = meta.cmap === 'RdBu_r' || f.isSymmetric;
+        // Zero-line emphasis follows the RAW field's cmap, not the effective
+        // one — we're contouring total state, so emphasis tracks u/v-style
+        // divergent cmaps specifically.
+        const divergent = meta.cmap === 'RdBu_r';
         this.contours.setEmphasis(0, divergent);
         // Ink tracks EFFECTIVE cmap luminance (eddy/anomaly forces RdBu_r).
         const effCmap = f.effCmap || this.state.cmap;
@@ -1019,7 +1028,7 @@ class GlobeApp {
 
         if (this.contourLabels) {
             this.contourLabels.update(
-                f.values, GRID.nlat, GRID.nlon, interval,
+                contourValues, GRID.nlat, GRID.nlon, interval,
                 { viewMode: this.state.viewMode },
             );
             this.contourLabels.setVisible(this.state.showContours);
