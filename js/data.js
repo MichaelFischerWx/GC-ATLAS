@@ -16,14 +16,15 @@ export const LEVELS = [10, 50, 100, 150, 200, 250, 300, 500, 700, 850, 925, 1000
 export const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 
 export const FIELDS = {
-    t:    { type: 'pl', name: 'Temperature',             units: 'K',       cmap: 'turbo',   defaultLevel: 500 },
-    u:    { type: 'pl', name: 'Zonal wind (u)',          units: 'm s⁻¹',   cmap: 'RdBu_r',  defaultLevel: 200 },
-    v:    { type: 'pl', name: 'Meridional wind (v)',     units: 'm s⁻¹',   cmap: 'RdBu_r',  defaultLevel: 200 },
-    wspd: { type: 'pl', name: 'Wind speed (|V|)',        units: 'm s⁻¹',   cmap: 'turbo',   defaultLevel: 200, derived: true },
-    w:    { type: 'pl', name: 'Vertical velocity (ω)',   units: 'Pa s⁻¹',  cmap: 'RdBu_r',  defaultLevel: 500 },
-    z:    { type: 'pl', name: 'Geopotential height',     units: 'm',       cmap: 'viridis', defaultLevel: 500 },
-    msl:  { type: 'sl', name: 'Mean sea-level pressure', units: 'hPa',     cmap: 'plasma' },
-    t2m:  { type: 'sl', name: '2-m temperature',         units: 'K',       cmap: 'turbo' },
+    t:    { type: 'pl', name: 'Temperature',              units: 'K',       cmap: 'turbo',   defaultLevel: 500 },
+    u:    { type: 'pl', name: 'Zonal wind (u)',           units: 'm s⁻¹',   cmap: 'RdBu_r',  defaultLevel: 200 },
+    v:    { type: 'pl', name: 'Meridional wind (v)',      units: 'm s⁻¹',   cmap: 'RdBu_r',  defaultLevel: 200 },
+    wspd: { type: 'pl', name: 'Wind speed (|V|)',         units: 'm s⁻¹',   cmap: 'turbo',   defaultLevel: 200, derived: true },
+    w:    { type: 'pl', name: 'Vertical velocity (ω)',    units: 'Pa s⁻¹',  cmap: 'RdBu_r',  defaultLevel: 500 },
+    z:    { type: 'pl', name: 'Geopotential height',      units: 'm',       cmap: 'viridis', defaultLevel: 500 },
+    msl:  { type: 'sl', name: 'Mean sea-level pressure',  units: 'hPa',     cmap: 'plasma' },
+    t2m:  { type: 'sl', name: '2-m temperature',          units: 'K',       cmap: 'turbo' },
+    tcwv: { type: 'sl', name: 'Precipitable water (TCWV)', units: 'kg m⁻²', cmap: 'thalo' },
 };
 
 // ── lat/lon axes ─────────────────────────────────────────────────────────
@@ -181,15 +182,37 @@ function fieldT2M(month) {
 function syntheticField(name, month, level) {
     if (FIELDS[name]?.derived) return syntheticDerived(name, month, level);
     switch (name) {
-        case 't':   return fieldT(month, level);
-        case 'u':   return fieldU(month, level);
-        case 'v':   return fieldV(month, level);
-        case 'w':   return fieldW(month, level);
-        case 'z':   return fieldZ(month, level);
-        case 'msl': return fieldMSL(month);
-        case 't2m': return fieldT2M(month);
-        default:    throw new Error(`no generator for ${name}`);
+        case 't':    return fieldT(month, level);
+        case 'u':    return fieldU(month, level);
+        case 'v':    return fieldV(month, level);
+        case 'w':    return fieldW(month, level);
+        case 'z':    return fieldZ(month, level);
+        case 'msl':  return fieldMSL(month);
+        case 't2m':  return fieldT2M(month);
+        case 'tcwv': return fieldTCWV(month);
+        default:     throw new Error(`no generator for ${name}`);
     }
+}
+
+function fieldTCWV(month) {
+    // Precipitable water (kg m⁻²): tropical maximum (~50 mm), poles dry (~2 mm).
+    // Seasonal march of the moist tropical band.
+    const s = seasonalPhase(month);
+    const values = new Float32Array(GRID.nlat * GRID.nlon);
+    for (let i = 0; i < GRID.nlat; i++) {
+        const lat = LATS[i];
+        const latR = lat * D2R;
+        const tropicalCenter = -8 * s;  // ITCZ migrates N in JJA, S in DJF
+        const gauss = Math.exp(-(((lat - tropicalCenter) / 22) ** 2));
+        const base = 2 + 48 * gauss;
+        for (let j = 0; j < GRID.nlon; j++) {
+            const lonR = LONS[j] * D2R;
+            // Drier over subtropical subsidence zones (~±25°); a touch moister over oceans
+            const zonalAsym = 3 * Math.cos(latR) * Math.cos(lonR);
+            values[i * GRID.nlon + j] = base + zonalAsym;
+        }
+    }
+    return { values, vmin: 0, vmax: 60 };
 }
 
 function fieldW(month, level) {
