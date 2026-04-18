@@ -6,15 +6,16 @@
 // comfortable at 60fps on a modern laptop.
 
 import * as THREE from 'three';
+import { sample } from './colormap.js';
 
-const N           = 5000;    // particle count
-const TRAIL       = 16;      // trail length (positions per particle)
+const N           = 8000;    // particle count — denser cover, closer to nullschool
+const TRAIL       = 12;      // trail length (positions per particle)
 const MAX_AGE     = 160;     // frames before a particle respawns
 const SPEED       = 0.0042;  // deg per (m/s · frame)
 const RADIUS      = 1.006;   // lift slightly above data texture
 const POLE_MASK   = 82;      // avoid seeding beyond ±82°
-const SPEED_NORM  = 18;      // m/s that maps to full brightness (typical mid-trop wind)
-const BRIGHT_FLOOR = 0.32;   // baseline so slow regions still show streamlines
+const SPEED_NORM  = 35;      // m/s that saturates the colormap (jet speeds)
+const ALPHA_BASE  = 0.65;    // head opacity; trail fades to near zero
 
 export class ParticleField {
     constructor(getUV, projectFn) {
@@ -38,31 +39,35 @@ export class ParticleField {
         const segs = N * (TRAIL - 1);
         this.positions = new Float32Array(segs * 2 * 3);
         this.alphas    = new Float32Array(segs * 2);
+        this.colors    = new Float32Array(segs * 2 * 3);
 
         this.geom = new THREE.BufferGeometry();
         this.geom.setAttribute('position',
             new THREE.BufferAttribute(this.positions, 3).setUsage(THREE.DynamicDrawUsage));
         this.geom.setAttribute('alpha',
             new THREE.BufferAttribute(this.alphas, 1).setUsage(THREE.DynamicDrawUsage));
+        this.geom.setAttribute('color',
+            new THREE.BufferAttribute(this.colors, 3).setUsage(THREE.DynamicDrawUsage));
 
         const mat = new THREE.ShaderMaterial({
             transparent: true,
             depthWrite: false,
-            blending: THREE.AdditiveBlending,   // bright particles punch through saturated backgrounds
-            uniforms: { uColor: { value: new THREE.Color(0xFFFFFF) } },
             vertexShader: `
                 attribute float alpha;
+                attribute vec3 color;
                 varying float vAlpha;
+                varying vec3 vColor;
                 void main() {
                     vAlpha = alpha;
+                    vColor = color;
                     gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
                 }
             `,
             fragmentShader: `
-                uniform vec3 uColor;
                 varying float vAlpha;
+                varying vec3 vColor;
                 void main() {
-                    gl_FragColor = vec4(uColor, vAlpha);
+                    gl_FragColor = vec4(vColor, vAlpha);
                 }
             `,
         });
@@ -166,30 +171,34 @@ export class ParticleField {
     }
 
     updateGeometry() {
-        const pos = this.positions, al = this.alphas;
+        const pos = this.positions, al = this.alphas, col = this.colors;
         const tailMax = TRAIL - 1;
         for (let i = 0; i < N; i++) {
-            // Brightness scales with local wind speed (up to SPEED_NORM),
-            // floored so slow flow still hints at streamlines.
-            const brightness = BRIGHT_FLOOR + (1 - BRIGHT_FLOOR) * Math.min(1, this.speed[i] / SPEED_NORM);
+            const tNorm = Math.min(1, this.speed[i] / SPEED_NORM);
+            const [r, g, b] = sample('wind', tNorm);
             const tx = i * TRAIL * 3;
             const ox = i * tailMax * 6;
             const ax = i * tailMax * 2;
+            const cx = ox;  // colors use the same stride as positions
             for (let t = 0; t < tailMax; t++) {
                 const k = ox + t * 6;
                 const ak = ax + t * 2;
+                const kc = cx + t * 6;
                 pos[k]     = this.trail[tx + t * 3];
                 pos[k + 1] = this.trail[tx + t * 3 + 1];
                 pos[k + 2] = this.trail[tx + t * 3 + 2];
                 pos[k + 3] = this.trail[tx + (t + 1) * 3];
                 pos[k + 4] = this.trail[tx + (t + 1) * 3 + 1];
                 pos[k + 5] = this.trail[tx + (t + 1) * 3 + 2];
-                al[ak]     = brightness * (1 - t / tailMax);
-                al[ak + 1] = brightness * (1 - (t + 1) / tailMax);
+                al[ak]     = ALPHA_BASE * (1 - t / tailMax);
+                al[ak + 1] = ALPHA_BASE * (1 - (t + 1) / tailMax);
+                col[kc]     = r; col[kc + 1] = g; col[kc + 2] = b;
+                col[kc + 3] = r; col[kc + 4] = g; col[kc + 5] = b;
             }
         }
         this.geom.attributes.position.needsUpdate = true;
         this.geom.attributes.alpha.needsUpdate = true;
+        this.geom.attributes.color.needsUpdate = true;
     }
 
     setVisible(v) { this.object.visible = v; }
