@@ -78,6 +78,7 @@ Radio group: `Total | Zonal-mean | Eddy | Anomaly`.
 - **Variability envelopes** — ±1σ across years. Needs re-processing from raw data (group-std in addition to group-mean).
 - **ENSO / NAO / SAM / MJO composites** — daily ERA5 regression / composite maps.
 - **Guided tours** — authored sequences that animate the globe and toggle fields while text narrates. Useful for pre-lecture assignments.
+- **Multiple base periods** — pre-bake a handful of canonical 30-year climatologies (1961-1990, 1981-2010, 1991-2020) on separate GCS path prefixes and let the user pick from a dropdown. Pair with the existing Anomaly decomposition to show the climate-change signal as a period-to-period difference. Pragmatic (~3× the existing 228 MB tile set, ~20 lines frontend). Decide which periods to bake after teaching with the current version.
 - **CMIP6 overlay** — same renderer driven by CMIP historical / SSP climatology. Anomaly mode reveals climate-change signal in every field.
 - **Paleoclimate overlay** — PMIP LGM / mid-Holocene runs for a "how different was the circulation?" unit.
 - **Observations overlay** — GPCP, CERES, OISST, ASCAT — to contrast reanalysis with obs.
