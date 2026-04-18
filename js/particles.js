@@ -9,7 +9,10 @@ import * as THREE from 'three';
 
 const N           = 12000;   // particle count — dense cover (≈ nullschool feel)
 const TRAIL       = 12;      // trail length (positions per particle)
-const MAX_AGE     = 220;     // frames before a particle respawns (~3.7 s @ 60 fps)
+const MAX_AGE     = 220;     // mean lifetime in frames (~3.7 s @ 60 fps)
+const AGE_JITTER  = 0.35;    // ± fraction: per-particle lifetime varies in
+                             // [MAX_AGE·(1-jitter), MAX_AGE·(1+jitter)] so
+                             // deaths don't re-synchronise after first cycle.
 const FADE_IN     = 15;      // frames over which alpha ramps from 0 on birth
 const FADE_OUT    = 20;      // frames over which alpha fades back to 0 before death
 const SPEED       = 0.0042;  // deg per (m/s · frame)
@@ -36,6 +39,7 @@ export class ParticleField {
 
         this.state = new Float32Array(N * 3);           // lat, lon, age
         this.speed = new Float32Array(N);               // per-particle speed (m/s)
+        this.lifetime = new Float32Array(N);            // per-particle death frame
         this.trail = new Float32Array(N * TRAIL * 3);   // xyz per trail step
 
         const segs = N * (TRAIL - 1);
@@ -122,9 +126,12 @@ export class ParticleField {
         const lon = Math.random() * 360 - 180;
         this.state[i * 3]     = lat;
         this.state[i * 3 + 1] = lon;
-        // Initial spawn: random age so deaths are staggered. Mid-run respawn:
-        // age 0 so the new particle fades in gracefully from nothing.
-        this.state[i * 3 + 2] = initial ? Math.floor(Math.random() * MAX_AGE) : 0;
+        // Fresh lifetime with jitter so respawned cohorts don't march to
+        // death together. The first construction also staggers the starting
+        // age across the (new) lifetime so the initial deaths are spread.
+        const life = MAX_AGE * (1 - AGE_JITTER + 2 * AGE_JITTER * Math.random());
+        this.lifetime[i] = life;
+        this.state[i * 3 + 2] = initial ? Math.floor(Math.random() * life) : 0;
         const [x, y, z] = this.latLonToXYZ(lat, lon);
         const tx = i * TRAIL * 3;
         for (let t = 0; t < TRAIL; t++) {
@@ -172,7 +179,7 @@ export class ParticleField {
             age += 1;
             this.speed[i] = Math.sqrt(u * u + v * v);
 
-            if (Math.abs(lat) > POLE_MASK + 3 || age > MAX_AGE) {
+            if (Math.abs(lat) > POLE_MASK + 3 || age > this.lifetime[i]) {
                 this.respawn(i);
                 continue;
             }
@@ -234,11 +241,12 @@ export class ParticleField {
             // FADE_OUT frames before respawn, so births and deaths don't
             // look like abrupt pops in the jet axis.
             const age = this.state[i * 3 + 2];
+            const life = this.lifetime[i];
             let ageFade = 1;
             if (age < FADE_IN) {
                 ageFade = age / FADE_IN;
-            } else if (age > MAX_AGE - FADE_OUT) {
-                ageFade = Math.max(0, (MAX_AGE - age) / FADE_OUT);
+            } else if (age > life - FADE_OUT) {
+                ageFade = Math.max(0, (life - age) / FADE_OUT);
             }
             const speedAlpha = ALPHA_FLOOR +
                 (ALPHA_PEAK - ALPHA_FLOOR) * Math.min(1, this.speed[i] / SPEED_NORM);
