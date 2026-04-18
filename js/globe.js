@@ -54,7 +54,7 @@ class GlobeApp {
             viewMode: 'globe',   // 'globe' | 'map'
             showCoastlines: true,
             showGraticule: true,
-            showContours: true,
+            showContours: false,
             showSun: true,
             windMode: 'particles',   // 'off' | 'particles' | 'streamlines'
             showXSection: false,
@@ -574,10 +574,10 @@ class GlobeApp {
         if (!el) return;
         if (f.isReal) {
             el.innerHTML = '<strong>ERA5 · 1991–2020</strong>' +
-                'Real monthly-mean climatology at 1° grid. Tiles served from <code>data/tiles/</code>.';
+                'Monthly-mean climatology at 1° grid, served from <code>gs://gc-atlas-era5</code>.';
         } else {
-            el.innerHTML = '<strong>Synthetic preview</strong>' +
-                'Procedural placeholder. The ERA5 tile for this field/month/level is not yet cached (or the pipeline hasn\'t produced it). Run a local HTTP server so the browser can fetch <code>data/tiles/</code>.';
+            el.innerHTML = '<strong>Loading…</strong>' +
+                'Fetching the ERA5 tile for this field. It should render in a moment.';
         }
     }
 

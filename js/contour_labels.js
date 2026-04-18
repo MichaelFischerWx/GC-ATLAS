@@ -10,7 +10,8 @@
 
 import * as THREE from 'three';
 
-const LABEL_LONS = [-120, -60, 0, 60, 120];  // meridians to drop labels on
+const LABEL_LONS = [-120, 0, 120];            // 3 meridians at 120° spacing
+const MIN_LAT_GAP = 3.0;                      // degrees — min spacing on same meridian
 const LIFT       = 1.0045;                    // above the terminator shell at 1.003
 const MAP_LIFT   = 0.0015;                    // sprite lift above map plane
 const FONT_PX    = 22;
@@ -46,17 +47,21 @@ export class ContourLabels {
             const j = lonIndex(lon);
             let prevV = NaN;
             let prevK = NaN;
+            let lastLabelLat = Infinity;
             for (let i = 0; i < nlat; i++) {
                 const v = values[i * nlon + j];
                 if (!Number.isFinite(v)) { prevV = NaN; prevK = NaN; continue; }
                 const k = Math.floor(v / interval);
                 if (Number.isFinite(prevV) && k !== prevK) {
-                    // Pick whichever side of the step is closer to a level.
                     const level = (k > prevK ? k : k + 1) * interval;
-                    // Interpolate the latitude where the field = `level`.
                     const t = (level - prevV) / (v - prevV);
                     const lat = lats[i - 1] + t * (lats[i] - lats[i - 1]);
-                    this._dropLabel(lat, lon, level, viewMode);
+                    // Skip labels too close to the previous one on this meridian
+                    // to keep high-gradient regions (ITCZ, jet core) readable.
+                    if (Math.abs(lat - lastLabelLat) >= MIN_LAT_GAP) {
+                        this._dropLabel(lat, lon, level, viewMode);
+                        lastLabelLat = lat;
+                    }
                 }
                 prevV = v; prevK = k;
             }

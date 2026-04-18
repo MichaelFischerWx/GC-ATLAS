@@ -33,15 +33,16 @@ Bucket: `gs://gc-atlas-era5` in project `tc-atlas-web`, region `us-east1`.
 - `js/era5.js` `TILE_BASE` switches to `https://storage.googleapis.com/gc-atlas-era5/tiles` on any non-localhost host.
 - Re-upload recipe: `gcloud storage cp -r data/tiles/* gs://gc-atlas-era5/tiles/ --cache-control="public,max-age=31536000,immutable"`.
 
-### 2. Verify precipitation & radiative-flux unit conversions
-Current assumption: ERA5 monthly means are per-day accumulations.
-- `tp` max is ~64 mm/day after ×1000. Plausible for deep tropics.
-- `ssr` max ~350 W/m² after /86 400. Plausible for tropical noon-time peak.
-- BUT: ECMWF docs are ambiguous for the "monthly_averaged_reanalysis" product. Confirm against a known reference (e.g. global mean precip ≈ 2.7 mm/day).
-- If wrong, the fix is one-line in `js/era5.js` `applyUnitConversions`.
+### 2. ~~Verify precipitation & radiative-flux unit conversions~~ ✓ (2026-04-18)
+Spot-checked `tp`, `ssr`, `str`, `slhf`, `tisr` across months against known global references.
+- `tp` Dec max 63.7 mm/day, tropics 2–14 mm/day, polar near-zero ✓
+- `ssr` Jul global mean 129 W/m² (ref ≈ 161 ann), max 315 ✓
+- `str` Jul net LW loss at surface, range −174…−1 W/m² ✓
+- `slhf` Jul evap peaking over subtropical oceans at −350 W/m² ✓
+- `tisr` Dec subtropical peak 544 W/m² ✓ (small raw file is just good compression on a smooth field)
 
-### 3. Orbit mode ("viewer from space", Level 3 of the sun series)
-Levels 1 + 2 ship the sun marker and terminator on the current globe view. Level 3 adds a **third view mode** (Globe / Map / Orbit) where the camera zooms out and shows Earth as a small body orbiting a central sun, with a dashed ecliptic ring. Play cycles the orbit *and* Earth's diurnal rotation, so students see axial tilt + revolution simultaneously. Needs a second camera setup, a new scene graph root, and an interpolated orbital position keyed to `state.month`. Keep current month-sync so scrubbing months moves Earth around the orbit.
+### 3. ~~Orbit mode ("viewer from space", Level 3)~~ ✓ (2026-04-18)
+Third view added with heliocentric scene: sun sprite + additive halo at origin, dashed ecliptic ring, orbit-direction arrow, solstice/equinox dot+label markers, minor month ticks, mini-Earth with fixed axial tilt, day/night terminator, latitude reference circles (equator, tropics, polar circles), subsolar-point marker, amber axis line, cosmetic diurnal spin.
 
 ### 4. Decomposition toggles (high pedagogical value, low effort)
 Radio group: `Total | Zonal-mean | Eddy | Anomaly`.
@@ -86,8 +87,8 @@ Radio group: `Total | Zonal-mean | Eddy | Anomaly`.
 ## Known issues / polish
 
 - Favicon 404 (harmless, cosmetic).
-- Synthetic placeholders are stale now that every ERA5 tile exists on disk; can be retired or kept as a dev offline-mode.
-- `tisr` raw file was unusually small (25 MB vs ~120 MB for other single-levels) — worth sanity-checking its climatology.
+- ~~Synthetic placeholders are stale~~ — retired 2026-04-18; pending-tile render is now a NaN-fill that paints as the colormap's "no-data" colour.
+- ~~`tisr` raw file unusually small~~ — verified 2026-04-18; climatology is correct, the small raw file is just compression on a smooth zonal-only field.
 - Coastlines: `ne_50m_coastline.geojson` fetched at runtime from jsdelivr on every page load (~2 MB). Consider bundling as a local file or pushing through GCS.
 - `MAX_ARROWS = 7000` may cap out for some high-wind months; safe but worth monitoring.
 
