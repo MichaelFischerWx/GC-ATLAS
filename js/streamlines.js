@@ -1,21 +1,22 @@
 // GC-ATLAS — static streamlines overlay.
-// Seeds points uniformly on the sphere and integrates each forward on the
-// (u, v) wind field using RK2. Rendered with LineSegments2 for thick strokes
-// (WebGL's built-in line width is capped at 1px in most browsers; LineSegments2
-// uses a shader trick to render real thick lines via instanced geometry).
+// Seeds points uniformly on the sphere, integrates each forward on the (u, v)
+// wind field using RK2, and renders each streamline as a single Line2 object
+// so the shader handles mitered joins between segments — the result reads as
+// one continuous curve, matching the plt.streamplot aesthetic. Thick strokes
+// via LineMaterial (WebGL's built-in gl.lineWidth is clamped to 1 px).
 
 import * as THREE from 'three';
-import { LineSegments2 } from 'three/addons/lines/LineSegments2.js';
-import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js';
+import { Line2 } from 'three/addons/lines/Line2.js';
+import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 
-const N_SEEDS    = 2800;
-const STEPS      = 80;
+const N_SEEDS    = 1800;
+const STEPS      = 90;
 const STEP_SIZE  = 0.004;
 const RADIUS     = 1.006;
 const POLE_MASK  = 83;
-const LINE_WIDTH = 1.6;     // in pixels
-const OPACITY    = 0.78;
+const LINE_WIDTH = 2.4;    // pixels
+const OPACITY    = 0.92;
 
 const D2R = Math.PI / 180;
 
@@ -31,7 +32,9 @@ export class StreamlineField {
             );
         });
 
-        this.geom = new LineSegmentsGeometry();
+        this.object = new THREE.Group();
+        this.object.frustumCulled = false;
+
         this.material = new LineMaterial({
             color: 0xffffff,
             linewidth: LINE_WIDTH,
@@ -44,8 +47,6 @@ export class StreamlineField {
                 window.innerHeight * (window.devicePixelRatio || 1),
             ),
         });
-        this.object = new LineSegments2(this.geom, this.material);
-        this.object.frustumCulled = false;
 
         this.rebuild();
     }
@@ -53,7 +54,6 @@ export class StreamlineField {
     setVisible(v) { this.object.visible = v; }
     updateResolution(w, h) { this.material.resolution.set(w, h); }
 
-    /** Uniform sphere sample; reject near-polar. */
     seedPoint() {
         while (true) {
             const u = Math.random();
@@ -92,25 +92,51 @@ export class StreamlineField {
         return trace;
     }
 
+    /** Split a (lat, lon) trace into contiguous sub-traces at dateline wraps. */
+    splitOnDateline(trace) {
+        const segments = [];
+        let current = [trace[0]];
+        for (let i = 1; i < trace.length; i++) {
+            const [aLat, aLon] = trace[i - 1];
+            const [bLat, bLon] = trace[i];
+            if (Math.abs(aLon - bLon) > 180) {
+                if (current.length >= 2) segments.push(current);
+                current = [trace[i]];
+            } else {
+                current.push(trace[i]);
+            }
+        }
+        if (current.length >= 2) segments.push(current);
+        return segments;
+    }
+
     rebuild() {
-        const segs = [];   // flat [sx, sy, sz, ex, ey, ez, ...]
+        // Dispose old child geometries, clear the group.
+        for (const child of this.object.children) {
+            if (child.geometry) child.geometry.dispose();
+        }
+        this.object.clear();
+
         for (let s = 0; s < N_SEEDS; s++) {
             const [lat0, lon0] = this.seedPoint();
             const trace = this.integrate(lat0, lon0);
             if (trace.length < 2) continue;
 
-            for (let i = 1; i < trace.length; i++) {
-                const [aLat, aLon] = trace[i - 1];
-                const [bLat, bLon] = trace[i];
-                // Skip dateline-wrap segments — they'd streak across the flat map.
-                if (Math.abs(aLon - bLon) > 180) continue;
-
-                const pa = this.project(aLat, aLon, RADIUS);
-                const pb = this.project(bLat, bLon, RADIUS);
-                segs.push(pa.x, pa.y, pa.z, pb.x, pb.y, pb.z);
+            const subTraces = this.splitOnDateline(trace);
+            for (const sub of subTraces) {
+                const positions = [];
+                for (const [lat, lon] of sub) {
+                    const p = this.project(lat, lon, RADIUS);
+                    positions.push(p.x, p.y, p.z);
+                }
+                const geom = new LineGeometry();
+                geom.setPositions(positions);
+                const line = new Line2(geom, this.material);
+                line.computeLineDistances();
+                line.frustumCulled = false;
+                this.object.add(line);
             }
         }
-        this.geom.setPositions(new Float32Array(segs));
     }
 
     onProjectionChanged() { this.rebuild(); }
