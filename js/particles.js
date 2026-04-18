@@ -140,6 +140,18 @@ export class ParticleField {
             const tx = i * TRAIL * 3;
             const [x, y, z] = this.latLonToXYZ(lat, lon);
 
+            // Screen-space wrap detection — catches the case where the map
+            // seam isn't at ±180 (central meridian slider moved). A normal
+            // one-frame step is ≪ 0.05 world units; anything above 0.5 is a
+            // seam-crossing teleport.
+            if (!wrapped) {
+                const px = this.trail[tx];
+                const py = this.trail[tx + 1];
+                const pz = this.trail[tx + 2];
+                const dx = x - px, dy = y - py, dz = z - pz;
+                if (dx * dx + dy * dy + dz * dz > 0.25) wrapped = true;
+            }
+
             if (wrapped) {
                 // Reset the trail to the new head. On the sphere this doesn't
                 // matter (old and new positions are adjacent in 3D), but on the
