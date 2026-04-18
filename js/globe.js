@@ -157,8 +157,8 @@ class GlobeApp {
         this.gratGroup = new THREE.Group();
         this.world.add(this.gratGroup);
 
-        const main = new THREE.LineBasicMaterial({ color: 0x2DBDA0, transparent: true, opacity: 0.22 });
-        const eq   = new THREE.LineBasicMaterial({ color: 0xE8C26A, transparent: true, opacity: 0.55 });
+        const main = new THREE.LineBasicMaterial({ color: 0xFFFFFF, transparent: true, opacity: 0.55 });
+        const eq   = new THREE.LineBasicMaterial({ color: 0xE8C26A, transparent: true, opacity: 0.90 });
 
         const R = 1.006;
         const seg = 180;
@@ -190,7 +190,7 @@ class GlobeApp {
             if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
             const gj = await resp.json();
             const mat = new THREE.LineBasicMaterial({
-                color: 0xFFF8E7, transparent: true, opacity: 0.92,
+                color: 0x000000, transparent: true, opacity: 0.88,
             });
             for (const feat of gj.features) {
                 const g = feat.geometry;
