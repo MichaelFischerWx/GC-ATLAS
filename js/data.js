@@ -24,6 +24,7 @@ export const FIELDS = {
     z:    { type: 'pl', name: 'Geopotential height',      units: 'm',       cmap: 'viridis', defaultLevel: 500 },
     msl:  { type: 'sl', name: 'Mean sea-level pressure',  units: 'hPa',     cmap: 'plasma' },
     t2m:  { type: 'sl', name: '2-m temperature',          units: 'K',       cmap: 'turbo' },
+    sst:  { type: 'sl', name: 'Sea surface temperature',  units: 'K',       cmap: 'turbo' },
     tcwv: { type: 'sl', name: 'Precipitable water (TCWV)', units: 'kg m⁻²', cmap: 'thalo' },
 };
 
@@ -189,9 +190,29 @@ function syntheticField(name, month, level) {
         case 'z':    return fieldZ(month, level);
         case 'msl':  return fieldMSL(month);
         case 't2m':  return fieldT2M(month);
+        case 'sst':  return fieldSST(month);
         case 'tcwv': return fieldTCWV(month);
         default:     throw new Error(`no generator for ${name}`);
     }
+}
+
+function fieldSST(month) {
+    // Oceans warm at low latitudes (~303 K), cool at high (~272 K freezing).
+    // Crude land mask is skipped (synthetic only). Real ERA5 will fill land
+    // with NaN-ish and colormap handles; good enough for a placeholder.
+    const s = seasonalPhase(month);
+    const values = new Float32Array(GRID.nlat * GRID.nlon);
+    for (let i = 0; i < GRID.nlat; i++) {
+        const lat = LATS[i];
+        const latR = lat * D2R;
+        const zonal = 302 - 30 * (1 - Math.cos(latR) ** 2);
+        const seasonal = -2.5 * s * Math.sin(latR);
+        const base = zonal + seasonal;
+        for (let j = 0; j < GRID.nlon; j++) {
+            values[i * GRID.nlon + j] = base;
+        }
+    }
+    return { values, vmin: 270, vmax: 305 };
 }
 
 function fieldTCWV(month) {
