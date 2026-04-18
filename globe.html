@@ -397,6 +397,34 @@
             height: 200px;
             border-radius: 4px;
         }
+        .xs-diag {
+            display: flex;
+            gap: 4px;
+            margin: 0 0 8px 0;
+            padding: 3px;
+            background: rgba(255,255,255,0.03);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+        }
+        .xs-diag button {
+            flex: 1;
+            background: none;
+            border: none;
+            color: var(--sage);
+            font: inherit;
+            font-size: 0.72rem;
+            letter-spacing: 0.03em;
+            padding: 4px 8px;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: background 0.15s, color 0.15s;
+        }
+        .xs-diag button.active {
+            background: var(--emerald);
+            color: var(--deep);
+            font-weight: 600;
+        }
+        .xs-diag button:hover:not(.active) { color: var(--paper); background: rgba(255,255,255,0.05); }
         .xs-footer {
             margin-top: 8px;
             font-size: 0.72rem;
@@ -732,6 +760,10 @@
             <div class="xs-header">
                 <span id="xs-title">Zonal-mean cross-section</span>
                 <button class="xs-close" id="xs-close" aria-label="Close panel">&times;</button>
+            </div>
+            <div class="xs-diag">
+                <button type="button" data-xs-diag="field" class="active">Field section</button>
+                <button type="button" data-xs-diag="psi">ψ streamfunction</button>
             </div>
             <canvas id="xs-canvas" width="380" height="200"></canvas>
             <div class="xs-footer">
