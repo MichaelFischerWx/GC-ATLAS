@@ -11,7 +11,7 @@
 import * as THREE from 'three';
 
 const LABEL_LONS = [-120, -60, 0, 60, 120];  // meridians to drop labels on
-const LIFT       = 1.0025;                    // sprite lift above sphere
+const LIFT       = 1.0045;                    // above the terminator shell at 1.003
 const MAP_LIFT   = 0.0015;                    // sprite lift above map plane
 const FONT_PX    = 22;
 const CANVAS_W   = 128;
@@ -78,6 +78,11 @@ export class ContourLabels {
             depthTest: true,
             depthWrite: false,
         }));
+        // Default frustumCulled = true culls sprites whose anchor is off-screen,
+        // even when the billboarded quad would still overlap the viewport — which
+        // makes labels near the screen edge disappear on zoom. Turn it off; the
+        // labels are cheap and we want every visible one to render.
+        sprite.frustumCulled = false;
         if (viewMode === 'map') {
             const p = this.project(lat, lon, 1);
             sprite.position.set(p.x, p.y, MAP_LIFT);
