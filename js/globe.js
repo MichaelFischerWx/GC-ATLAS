@@ -146,7 +146,8 @@ class GlobeApp {
                 this.updateField();
             }
 
-            if (name === 'u' || name === 'v') this.windCache.stale = true;
+            if (name === 'u' || name === 'v' ||
+                (isenActive && name === 't')) this.windCache.stale = true;
 
             if (s.showXSection && feedsCurrentField && monthMatches) this.updateXSection();
             // ψ needs v at every level; M needs u at every level. Refresh
@@ -772,6 +773,12 @@ class GlobeApp {
         const { month, level, theta, vCoord } = this.state;
         const uF = getField('u', { month, level, coord: vCoord, theta });
         const vF = getField('v', { month, level, coord: vCoord, theta });
+        // If the request came back pending (tiles still loading, especially
+        // in θ-coord where we need T + u + v at every pressure level), keep
+        // the previous cache so particles keep moving with the last good
+        // field instead of snapping to NaN. `stale` stays true so we retry
+        // on the next tick.
+        if (!uF.isReal || !vF.isReal) return;
         this.windCache.u = uF.values;
         this.windCache.v = vF.values;
         this.windCache.nlat = GRID.nlat;
@@ -782,6 +789,7 @@ class GlobeApp {
     sampleWind(lat, lon) {
         if (this.windCache.stale) this.refreshWindCache();
         const { u, v, nlat, nlon } = this.windCache;
+        if (!u || !v) return null;
         // Grid row 0 = lat +90, col 0 = lon −180.
         const rLat = 90 - lat;
         const rLon = ((lon + 180) % 360 + 360) % 360;
@@ -928,15 +936,21 @@ class GlobeApp {
             prefetchField('v', { level: this.state.level });
             // PV and any θ-coord rendering require T at every pressure level
             // (for the θ cube) plus the chosen field at every level — kick
-            // those here so they arrive in parallel.
+            // those here so they arrive in parallel. In θ-coord we also
+            // prefetch u and v at every level unconditionally, because the
+            // wind overlay (particles / barbs) samples isentropic u, v even
+            // when the primary field is something else.
             const needsAllLevels = (this.state.field === 'pv') || isen;
             if (needsAllLevels) {
                 for (const L of LEVELS) {
                     prefetchField('t', { level: L });
-                    if (this.state.field === 'pv' || this.state.field === 'wspd') {
+                    if (isen || this.state.field === 'pv' || this.state.field === 'wspd') {
                         prefetchField('u', { level: L });
                         prefetchField('v', { level: L });
-                    } else if (FIELDS[this.state.field]?.type === 'pl') {
+                    }
+                    if (FIELDS[this.state.field]?.type === 'pl' &&
+                        this.state.field !== 'u' && this.state.field !== 'v' &&
+                        this.state.field !== 'wspd' && this.state.field !== 'pv') {
                         prefetchField(this.state.field, { level: L });
                     }
                 }
