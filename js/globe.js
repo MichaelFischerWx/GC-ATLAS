@@ -144,17 +144,21 @@ class GlobeApp {
             const s = this.state;
             const levelMatches = (level == null || level === s.level);
             const monthMatches = (month === s.month);
-            // Tile arrival from a non-active period is only useful for the
-            // climate-change-anomaly view (which fetches the matching month
-            // from a reference period). Active-period tiles fall through to
-            // the regular display-update logic below.
+            // Tile arrival from a non-active period is useful for either
+            // the climate-change-anomaly view OR the swipe-compare overlay
+            // (both subtract / draw the same-month tile from a reference
+            // period). Active-period tiles fall through to the regular
+            // display-update logic below.
             const isActivePeriod = (period === s.climatologyPeriod) ||
                                    (!period && s.climatologyPeriod === 'default');
             if (period && !isActivePeriod) {
-                if (s.referencePeriod === period && s.decompose === 'anomaly'
-                        && name === s.field && monthMatches) {
-                    this.updateField();
-                }
+                const isRefForAnomaly = s.referencePeriod === period
+                                     && s.decompose === 'anomaly'
+                                     && name === s.field && monthMatches;
+                const isRefForCompare = s.compareMode
+                                     && s.referencePeriod === period
+                                     && name === s.field && monthMatches;
+                if (isRefForAnomaly || isRefForCompare) this.updateField();
                 return;   // don't trigger any of the active-period logic
             }
             const isenActive  = (s.vCoord === 'theta');
