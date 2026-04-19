@@ -1,6 +1,6 @@
 # GC-ATLAS — Roadmap
 
-Last update: 2026-04-18 (added q/r/d/vo fields, MSE, N² + EP-flux + Lorenz cycle diagnostics)
+Last update: 2026-04-19 (added χ/ψ, ±1σ variability, Q+H budgets, friction/mountain torques, geostrophic wind, PV refactor, multi-period scaffolding for 1961–1990 climate-change view)
 
 ## Where we are
 
@@ -9,8 +9,9 @@ Last update: 2026-04-18 (added q/r/d/vo fields, MSE, N² + EP-flux + Lorenz cycl
 GA4 wired (G-M1M3TNNJCB) on landing + globe pages.
 
 **Data on disk:**
-- `data/raw/` — all 26 ERA5 monthly-mean NetCDFs (1991–2020), ~20 GB. Gitignored.
-- `data/tiles/` — per-(var, level, month) Float32 binaries at 1° + `manifest.json`, ~228 MB. Gitignored, mirrored on GCS.
+- `data/raw/` — 26 ERA5 monthly-mean NetCDFs (1991–2020), ~20 GB. Gitignored.
+- `data/tiles/` — per-(var, level, month) Float32 binaries at 1° + std variants + `manifest.json`, ~1.3 GB. Gitignored, mirrored on GCS.
+- `data/raw_1961_1990/` — 28 NetCDFs for the second period (downloaded 2026-04-19). Awaiting tile build + GCS push.
 
 ---
 
@@ -18,51 +19,65 @@ GA4 wired (G-M1M3TNNJCB) on landing + globe pages.
 
 ### Views (three modes)
 - **Globe** (Three.js, OrbitControls, axial tilt)
-- **Map** (equirectangular, drag-to-pan, central-meridian slider)
-- **Orbit** ("viewer from space," Level 3) — heliocentric scene with sun sprite + halo, dashed ecliptic ring, orbit-direction arrow, solstice/equinox markers, mini-Earth, day/night terminator, latitude reference circles, subsolar marker, amber axis, cosmetic diurnal spin
+- **Map** (equirectangular, drag-to-pan, central-meridian slider, **shift-drag for arc cross-section**)
+- **Orbit** ("viewer from space," Level 3) — heliocentric scene with sun + halo, dashed ecliptic, orbit-direction arrow, solstice/equinox markers, mini-Earth, terminator, latitude reference circles, subsolar marker, amber axis, cosmetic diurnal spin
 
 ### Fields
-- **Pressure-level (9):** `t, u, v, w, z, q, r, vo, d` on `[10, 50, 100, 150, 200, 250, 300, 500, 700, 850, 925, 1000]` hPa
-- **Single-level (16):** `msl, sp, t2m, d2m, sst, tcwv, tp, blh, sshf, slhf, ssr, str, tisr, ttr` …
-- **Derived:** wind speed `wspd = √(u² + v²)`, Ertel PV on isentropes, **moist static energy** `MSE = c_p·T + g·z + L_v·q` (displayed as MSE/c_p in K)
-- All ERA5 unit conversions applied at load: `z` (m²/s² → m), `msl/sp` (Pa → hPa), `tp` (m/day → mm/day), radiative fluxes (J/m²/day → W/m²), `q` (kg/kg → g/kg), `vo, d` (s⁻¹ → 10⁻⁵ s⁻¹)
+- **Pressure-level (12):** `t, u, v, w, z, q, r, vo, d, pv, chi, psi`
+- **Single-level (16):** `msl, sp, t2m, d2m, sst, tcwv, tp, blh, sshf, slhf, ssr, str, tisr, ttr, ews, oro`
+- **Derived:** wind speed `wspd`, **moist static energy** `MSE = c_p·T + g·z + L_v·q` (displayed as MSE/c_p in K), Ertel PV on isentropes (refactored 2026-04-19 to use raw `pv` tiles directly — no more on-the-fly ζ-from-u,v)
+- All ERA5 unit conversions applied at load; `chi`/`psi` displayed in 10⁶ m²/s, `pv` in PVU
+- **±1σ variability tiles** for every field — cross-month inter-annual std
 
 ### Vertical coordinate toggle
 - **Pressure** (12 hPa levels) or **θ (isentropic)** on `[280, 300, 315, 330, 350, 400, 500, 700]` K
-- Per-column linear interpolation of pressure-level tiles to θ₀
-- PV is θ-only (forces θ mode when selected)
-- Loading overlay while ~24 tiles land for an isentropic surface
 
 ### Decomposition (Total / Zonal / Eddy / Anomaly)
-- Client-side per render pass on the cached tile
-- Eddy & Anomaly auto-switch to symmetric range / divergent colormap
-- Anomaly uses an annual mean built from whatever months are cached
+- Cross-month aggregated colorbar so range stays put as user scrubs months
+- **Reference-period anomaly** (when 1961-1990 tiles arrive on GCS): Anomaly mode does (current − reference) instead of (current − annual mean) → climate-change visualisation per field
+
+### Display mode (Mean / ±1σ variability)
+- Toggle in the Display group; ±1σ swaps to std tiles, forces a sequential colormap
+- Decomposition disabled in σ mode (no anomaly-of-stddev)
 
 ### Wind overlays
 - **Off / Particles / Barbs**
-- Particles: 12 k GPU-lit, per-particle lifetime jitter, fade-in/out, head dots, screen-space wrap on map seam, prefetched u/v at every level for θ mode
-- Barbs: WMO-standard at every 8°, NH-convention feather side
 
-### Cross-section panel
-- **Zonal-mean by default**, or **click-drag (Shift+drag) great-circle arc** anywhere on the globe
-- Variable selector: **Field section / ψ mass streamfunction / M angular momentum / N² Brunt–Väisälä / EP flux (stationary eddy)**
-- EP flux mode overlays Edmon–Hoskins–McIntyre arrows on a ∇·F shading (m s⁻¹ day⁻¹)
-- Own colorbar, gridlines, contours, midpoint marker, reset button
+### Cross-section panel (9 diagnostic modes)
+- **Field section** — zonal-mean or shift-drag great-circle arc
+- **ψ — Mass streamfunction**
+- **M — Angular momentum**
+- **[u_g] — Geostrophic wind**
+- **N² — Brunt–Väisälä (stability)**
+- **EP flux (stationary eddy)** — Edmon–Hoskins–McIntyre arrows on ∇·F shading
+- **Angular momentum budget** — 5-term decomposition + implied torque, with friction + mountain overlay (when ews + oro tiles present)
+- **Moisture budget** — Q-budget transport terms + E−P overlay
+- **Energy budget (MSE)** — H-budget transport terms + LH+SH+R_TOA−R_SFC overlay
+
+Each budget supports: term selector (mean/eddy × meridional/vertical, total, residual, all-terms overlay), display variable (∂u/∂t vs ∂M/∂t for M-budget), aggregation (lat-p heatmap, mass-weighted column mean, vertical integral with N/m² or W/m² units).
+
+Cross-section panel: **expand-to-fullscreen toggle**, **hover readout** (lat, p, value), info popovers for M-budget and Lorenz with formulas + literature references.
 
 ### Other diagnostics
-- **Lagrangian parcels** (Alt+click globe) — RK2 on monthly-mean (u, v, ω), trilinear in (lat, lon, log-p), trails + head dots, max 30-day lifetime, radius encodes pressure
-- **Hover readout** — floating (lat, lon, value) tooltip via raycast (globe + map)
-- **Contour overlay** (anti-aliased GLSL, fwidth-based AA, emphasised v=0 for divergent fields). Always uses the raw field (not the decomposed one).
-- **Lorenz energy cycle panel (stationary eddies)** — global mass-weighted P_M, P_E, K_M, K_E plus four conversions, computed from monthly-mean u/v/w/t. SVG 4-box schematic with live values; arrow widths encode |C|. Reservoirs in MJ/m², conversions in W/m². Reference state toggle: **Lorenz (sorted)** — adiabatic mass-resorting, Lorenz 1955 original — or **Area-mean** — simpler approximation. Leading factor R/(2g) reproduces Peixoto–Oort 1992 P_M ≈ 4 MJ/m².
+- **Lagrangian parcels** (Alt+click globe)
+- **Hover readout** on globe + map
+- **Contour overlay** (anti-aliased GLSL)
+- **Lorenz energy cycle panel** (stationary eddies) with reference-state toggle (Lorenz-sorted vs area-mean), info popover
 
 ### Sharing
-- **GIF export** — animated (5 s loop, current month) or annual cycle (12 frames). gifenc-based, palette-quantised.
+- **GIF export** — animated or annual-cycle
 
-### Polish
-- Coastlines (Natural Earth 1:50 m) + graticule + sun/terminator toggles
-- Aggregated colorbar across all cached months for a (field, level)
-- NaN-as-no-data render for pending tiles
-- Tips panel; mobile drawer / hamburger
+---
+
+## Pending / In flight
+
+### 1961–1990 second climatology (overnight 2026-04-18 → 2026-04-19)
+- ✅ Pipeline scripts updated with `--period START-END` flag (2026-04-19)
+- ✅ Frontend reference-period dropdown + climate-change-anomaly logic wired
+- ✅ Raw NetCDFs downloaded to `data/raw_1961_1990/` (28 vars including ews + oro)
+- 🟡 **Pending: tile build** (user runs `python pipeline/build_tiles.py --period 1961-1990` for both groups, then `pipeline/build_helmholtz.py --period 1961-1990`)
+- 🟡 **Pending: GCS push** (`gcloud storage cp -r data/tiles_1961_1990 gs://gc-atlas-era5/`)
+- After push + hard reload, the **Anomaly reference** dropdown's `vs. 1961–1990 (climate change)` option will work for raw fields. Derived fields (wspd, mse, pv) fall back to self-anomaly in reference mode.
 
 ---
 
@@ -70,55 +85,45 @@ GA4 wired (G-M1M3TNNJCB) on landing + globe pages.
 
 ### Small polish (can do anytime)
 
-1. **Dark coastline on dark colormap fallback** — black coastlines vanish over viridis purple. Auto-switch to white (or half-tone) when colormap is dark.
-2. **Bundle `ne_50m_coastline.geojson` locally** instead of fetching from jsdelivr on every page load (~2 MB). Push it through GCS or commit to the repo.
+1. **Dark coastline on dark colormap fallback** — black coastlines vanish over viridis/magma. Auto-switch to white (or half-tone) on dark cmaps.
+2. **Bundle `ne_50m_coastline.geojson` locally** instead of fetching from jsdelivr (~2 MB on every page load). Push through GCS or commit.
 3. **Favicon** (still 404, cosmetic).
-4. **`MAX_ARROWS = 7000` cap** — verify it doesn't truncate visibly in any month. Bump or make adaptive if so.
+4. **`MAX_ARROWS = 7000` cap** — verify no visible truncation in any month.
+5. **Wind-by-speed colour** for particle mode (alternative to fixed amber).
+6. **Anomaly mode UX** — show which months contributed when not all 12 are cached.
 
-### Medium (one focused session each)
+### Medium
 
-5. **Geostrophic wind from z** as a cross-section diagnostic.
-6. **Wind-by-speed colour** option for particle mode (alternative to fixed amber).
-7. **Anomaly mode UX** — show which months contributed when not all 12 are cached.
-   **Velocity potential χ and streamfunction ψ as derived globe fields.** Computed from u and v via Helmholtz decomposition on the sphere — ERA5 doesn't serve these directly. Pipeline would use `windspharm` (spherical harmonic transforms) to write per-(level, month) tiles. **Why valuable:** 200 hPa velocity potential is the cleanest visualisation of Walker / Hadley centres-of-action (negative χ over Maritime Continent rising branch, positive over east Pacific sinking). 850 hPa streamfunction shows surface circulation skeleton. Both are textbook tropical-meteorology diagnostics. ~30 min of pipeline work + tiles + frontend dropdown entry.
-8. **Validate Lorenz cycle numerics against published values** — Peixoto & Oort 1992 give annual-mean magnitudes (P_M ~50 MJ/m², C(P_M,P_E) ~2 W/m², etc.). Spot-check against those once tiles are pushed.
-9. **Explicit torques in the M-budget panel** — the "implied torque" we currently show is the residual of computed transport terms; it confounds true surface torque + missing transient eddies + numerical noise. Add two ERA5 fields and compute each torque directly:
-   - **Friction torque**: download `ews` (eastward turbulent surface stress, ~12 MB after tiling, single-level monthly mean). Friction torque profile: τ_f(φ) = -⟨[ews]⟩ (negative because positive stress on air = sink of atmospheric M to the surface).
-   - **Mountain torque**: download invariant `z` at surface (orography, ~3 MB) once; combine with our existing `sp` tile to compute τ_m(φ) = ⟨[p_s · ∂h/∂λ]⟩ as a latitude profile.
-   - Display: in the lat-only view, overlay friction + mountain alongside the "implied torque" line. Their sum should approximately equal the implied torque (any gap is the missing transient-eddy convergence — direct visual evidence of the stationary-only limitation).
+7. **Validate Lorenz cycle numerics against published values** — Peixoto–Oort 1992 give annual P_M ≈ 4 MJ/m², C(P_M,P_E) ≈ 2 W/m². Spot-check after the Lorenz-sorted reference state is in active use.
+8. **Validate budget signs and magnitudes** for Q-budget and H-budget once you've used them in lecture — Newell-Kidson-Vincent-Boer (1972) and Trenberth atlases are the comparison sources.
+9. **Add 1981–2010 climatology** — the WMO previous-standard normal. Same recipe as 1961–1990.
 
-### Bigger lifts
+### Bigger lift — Phase-4 daily-data unlock
 
-8. **Multiple base periods** — pre-bake 1961-1990 / 1981-2010 / 1991-2020 climatologies on separate GCS path prefixes. Pair with Anomaly decomposition to expose the climate-change signal as a period-to-period difference. ~3× tile storage (≈ 700 MB), ~20 lines of frontend. Decide which periods after teaching with current version.
-9. **Variability envelopes ±1σ** across years — needs re-processing from raw data (group-std alongside group-mean in `pipeline/build_climatology.py`).
+These five all share one data pipeline:
 
-### Needs new data
-
-10. **Storm-track diagnostics** — 2–8-day bandpass variance of z500 / v850. Requires daily ERA5.
-11. **Transient-eddy EP flux** — adds the time-covariance terms to the existing stationary-eddy diagnostic. Requires daily ERA5.
-12. **Transient-eddy Lorenz cycle** — same story; the stationary version ships from monthly means, transient needs daily.
-13. **Transient-eddy angular momentum budget** — turns the existing stationary M-budget into the full P&O Fig 11.7 / Newell-Kidson budget. Requires daily ERA5 covariances.
-14. **ENSO / NAO / SAM / MJO composites** — daily ERA5 regression / composite maps.
+10. **Storm-track diagnostics** — 2–8-day bandpass variance of z500 / v850
+11. **Transient-eddy EP flux** — adds time-covariance terms to current stationary diagnostic
+12. **Transient-eddy Lorenz cycle** — same idea
+13. **Transient-eddy M-budget** — turns stationary → full Newell-Kidson form
+14. **ENSO / NAO / SAM / MJO composites** — daily ERA5 regression / composite maps
 
 #### Daily-ERA5 acquisition plan (sketch)
 
-These five items all share the same data path. Estimated work to enable:
 - **Download:** daily means of `u, v, w, t, z, q` at the 12 standard pressure levels for 1991–2020 via CDS (`reanalysis-era5-pressure-levels` daily). ~50–80 GB raw NetCDF.
-- **Pipeline:** new `pipeline/build_transient_tiles.py` that, per-month, computes zonal-mean transient covariances `[u'v']`, `[v'T']`, `[u'ω']`, `[T'²]`, `[u'²+v'²]` from daily samples (with `'` denoting departure from the *monthly mean*), then climatologizes across 30 years. ~10–12 GB of derived covariance tiles.
-- **Frontend:** add a `Stationary | Stationary + transient | Transient only` toggle on every diagnostic that currently says "stationary only" (EP flux, Lorenz, M-budget). Total + transient paths just sum the new tiles into the existing computations.
-- **Effort:** ~one focused download pass (CDS queue can take ~hours-days), one pipeline session, ~half a session of frontend wiring per diagnostic.
-
-This is the natural Phase-4 unlock — turns three existing diagnostics from "planetary-wave only" into the canonical full-cycle diagnostics.
+- **Pipeline:** new `pipeline/build_transient_tiles.py` that computes per-month transient covariances `[u'v']`, `[v'T']`, `[u'ω']`, `[T'²]`, `[u'²+v'²]` from daily samples, then climatologizes across 30 years. ~10–12 GB of derived tiles.
+- **Frontend:** add a `Stationary | Stationary + transient | Transient only` toggle on every diagnostic currently labelled "stationary only" (EP flux, Lorenz, M-budget, Q-budget, H-budget).
+- **Effort:** one CDS download pass + one pipeline session + ~half a session of frontend wiring per diagnostic.
 
 ---
 
 ## Phase-4 / horizon
 
-- **Budget viewers** — pick a latitude band or region, show closed energy / moisture / angular-momentum budgets as numbers + schematic.
-- **Guided tours** — authored sequences that animate the globe and toggle fields while text narrates. Useful for pre-lecture assignments.
-- **CMIP6 overlay** — same renderer driven by CMIP historical / SSP climatology. Anomaly mode reveals climate-change signal in every field.
-- **Paleoclimate overlay** — PMIP LGM / mid-Holocene runs for a "how different was the circulation?" unit.
-- **Observations overlay** — GPCP, CERES, OISST, ASCAT — to contrast reanalysis with obs.
+- **Budget viewers** — pick a latitude band or region, show numerical budget closure
+- **Guided tours** — authored sequences animating the globe with narrative
+- **CMIP6 overlay** — same renderer driven by CMIP historical / SSP climatology
+- **Paleoclimate overlay** — PMIP LGM / mid-Holocene
+- **Observations overlay** — GPCP, CERES, OISST, ASCAT vs reanalysis
 
 ---
 
@@ -131,19 +136,19 @@ source .venv/bin/activate
 
 # Serve the app (new terminal):
 python3 -m http.server 8000
-
-# Open:
-# http://localhost:8000/globe.html
+# Open: http://localhost:8000/globe.html
 ```
 
-Re-upload tiles to GCS (after a tile rebuild):
+**Right now (2026-04-19), the most pressing thing:** finish the 1961–1990 build + GCS push:
 ```bash
-gcloud storage cp -r data/tiles/* gs://gc-atlas-era5/tiles/ \
+python pipeline/build_tiles.py --period 1961-1990 --group single_levels      # ~5 min
+python pipeline/build_tiles.py --period 1961-1990 --group pressure_levels    # ~1 hour
+python pipeline/build_helmholtz.py --period 1961-1990                        # ~15 min
+gcloud storage cp -r data/tiles_1961_1990 gs://gc-atlas-era5/ \
   --cache-control="public,max-age=31536000,immutable"
 ```
 
-Rebuild tiles (resolution change, new field, fix to `build_tiles.py`):
+Re-upload tiles to GCS (after a tile rebuild for default period):
 ```bash
-python pipeline/build_tiles.py --group pressure_levels --force
-python pipeline/build_tiles.py --group single_levels --force
+gcloud storage rsync --recursive data/tiles gs://gc-atlas-era5/tiles
 ```
