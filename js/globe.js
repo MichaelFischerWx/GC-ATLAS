@@ -31,12 +31,16 @@ import { GifExporter, downloadBlob } from './gif_export.js';
 
 const PLAY_INTERVAL_MS = 900;
 
-// Natural Earth 50 m coastline (~1.6 MB). Mirrored from jsdelivr so it doesn't
-// re-download on every page load and the site doesn't depend on a third-party CDN.
+// Natural Earth 50 m coastline + lakes. Mirrored on GCS so the site doesn't
+// re-fetch ~2.4 MB from a third-party CDN on every load. Lakes (Great Lakes,
+// Caspian, Victoria, Baikal, Aral, …) draw alongside coastlines using the
+// same shared material — a single Coastlines toggle controls both.
 const IS_LOCAL_HOST = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
-const COASTLINE_URL = IS_LOCAL_HOST
-    ? 'data/coastlines/ne_50m_coastline.geojson'
-    : 'https://storage.googleapis.com/gc-atlas-era5/coastlines/ne_50m_coastline.geojson';
+const COASTLINE_BASE = IS_LOCAL_HOST
+    ? 'data/coastlines'
+    : 'https://storage.googleapis.com/gc-atlas-era5/coastlines';
+const COASTLINE_URL = `${COASTLINE_BASE}/ne_50m_coastline.geojson`;
+const LAKES_URL     = `${COASTLINE_BASE}/ne_50m_lakes.geojson`;
 const AXIAL_TILT = 23.4 * Math.PI / 180;
 
 // Default globe viewpoint: centred on North America so the opening frame shows
@@ -687,24 +691,41 @@ class GlobeApp {
         this.gratGroup.visible = this.state.showGraticule;
     }
 
-    // ── coastlines overlay (Natural Earth 50 m, via jsdelivr) ─────────
+    // ── coastlines + lakes overlay (Natural Earth 50 m, mirrored on GCS) ─
     async initCoastlines() {
         this.coastGroup = new THREE.Group();
-        try {
-            const resp = await fetch(COASTLINE_URL);
-            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-            const gj = await resp.json();
-            this.coastFeatures = [];
-            for (const feat of gj.features) {
-                const g = feat.geometry;
-                if (!g) continue;
-                const lines = g.type === 'LineString' ? [g.coordinates] : g.coordinates;
-                this.coastFeatures.push(...lines);
+        // Walk a GeoJSON geometry into a list of [lon,lat] rings/lines.
+        // Coastlines are LineString / MultiLineString; lakes are Polygon /
+        // MultiPolygon (we draw the rings as outlines, not filled).
+        const ringsOf = (g) => {
+            if (!g) return [];
+            switch (g.type) {
+                case 'LineString':      return [g.coordinates];
+                case 'MultiLineString': return g.coordinates;
+                case 'Polygon':         return g.coordinates;        // [outer, hole1, …]
+                case 'MultiPolygon':    return g.coordinates.flat(); // → list of rings
+                default:                return [];
             }
-            this.rebuildCoastlines();
-        } catch (err) {
-            console.warn('[globe] coastlines failed to load:', err);
-        }
+        };
+        const fetchFeatures = async (url) => {
+            try {
+                const resp = await fetch(url);
+                if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                const gj = await resp.json();
+                const out = [];
+                for (const feat of gj.features) out.push(...ringsOf(feat.geometry));
+                return out;
+            } catch (err) {
+                console.warn(`[globe] failed to load ${url}:`, err);
+                return [];
+            }
+        };
+        const [coastRings, lakeRings] = await Promise.all([
+            fetchFeatures(COASTLINE_URL),
+            fetchFeatures(LAKES_URL),
+        ]);
+        this.coastFeatures = [...coastRings, ...lakeRings];
+        if (this.coastFeatures.length) this.rebuildCoastlines();
     }
 
     rebuildCoastlines() {
