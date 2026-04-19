@@ -176,8 +176,19 @@ export function aggregatedDecompositionRange(mode, fetchMonth, nlat, nlon, annua
     // `opts.clamp` propagates the per-field percentile clamp into per-month
     // decompose() calls for symmetric modes — keeps the pooled range from
     // being blown out by topography spikes in any single month.
+    //
+    // `annualMean` may be either a Float32Array (used for every month — the
+    // self-anomaly case where the reference is the 12-month mean) OR a
+    // function (m) => Float32Array | null (climate-change anomaly: the
+    // reference is the same month from a different period). Without the
+    // per-month variant, climate-change mode would compute month-m minus
+    // January's reference for every iteration, mixing the seasonal cycle
+    // into the colorbar.
     const { symmetric: forceSymmetric = false, clamp = null } = opts;
     if (mode === 'total' || !mode) return null;
+    const refForMonth = typeof annualMean === 'function'
+        ? annualMean
+        : (() => annualMean);
     let vmin = Infinity, vmax = -Infinity;
     let absMax = 0;
     let any = false;
@@ -186,7 +197,7 @@ export function aggregatedDecompositionRange(mode, fetchMonth, nlat, nlon, annua
     for (let m = 1; m <= 12; m++) {
         const f = fetchMonth(m);
         if (!f || !f.values) continue;
-        const d = decompose(f.values, nlat, nlon, mode, annualMean, { clamp });
+        const d = decompose(f.values, nlat, nlon, mode, refForMonth(m), { clamp });
         if (d.empty) continue;       // anomaly without annualMean
         if (d.symmetric) symmetric = true;
         if (symmetric) {

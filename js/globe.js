@@ -1564,7 +1564,11 @@ class GlobeApp {
 
         // Anomaly mode reference: either climate-change (same month from a
         // different base period) or seasonal (12-month annual mean of self).
+        // For climate-change mode the per-month aggregator needs the matching
+        // month's reference, so we keep both the current-month array (for the
+        // inline decompose call) and a per-month fetcher (for the aggregator).
         let annualMean = null;
+        let annualMeanForAgg = null;
         if (mode === 'anomaly') {
             if (this.state.vCoord === 'theta') {
                 // θ-mode doesn't support anomaly — fall back to total with the
@@ -1584,6 +1588,19 @@ class GlobeApp {
                     period: refPeriod,
                 });
                 annualMean = refField.isReal ? refField.values : null;
+                // Per-month reference for the aggregator — without this every
+                // pooled month would subtract January's reference, mixing the
+                // 30 K seasonal cycle into the climate-change colorbar range.
+                annualMeanForAgg = (m) => {
+                    const rf = getField(this.state.field, {
+                        month: m,
+                        level: this.state.level,
+                        coord: this.state.vCoord,
+                        theta: this.state.theta,
+                        period: refPeriod,
+                    });
+                    return rf.isReal ? rf.values : null;
+                };
             } else {
                 annualMean = meta.derived === true
                     ? null
@@ -1591,6 +1608,8 @@ class GlobeApp {
                         (m) => cachedMonth(this.state.field, m, useLevel),
                         GRID.nlat, GRID.nlon,
                     );
+                // Self-anomaly: same 12-month mean for every iteration.
+                annualMeanForAgg = annualMean;
             }
         }
 
@@ -1608,7 +1627,7 @@ class GlobeApp {
                 const fm = getField(field, { month: m, level, coord: vCoord, theta });
                 return fm.isReal ? fm : null;
             },
-            GRID.nlat, GRID.nlon, annualMean,
+            GRID.nlat, GRID.nlon, annualMeanForAgg,
             { symmetric: !!FIELDS[field]?.symmetric, clamp: fieldClamp },
         );
         if (range) {
