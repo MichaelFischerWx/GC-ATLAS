@@ -379,6 +379,7 @@ class GlobeApp {
         const el = this.renderer.domElement;
         let dragging = false;
         let lastX = 0;
+        let lastY = 0;
         // When compareMode is on, drag drives the swipe divider (split position)
         // instead of panning the central meridian.
         const updateSplitFromPointer = (e) => {
@@ -412,6 +413,7 @@ class GlobeApp {
             if (e.shiftKey || e.altKey) return;
             dragging = true;
             lastX = e.clientX;
+            lastY = e.clientY;
             el.setPointerCapture(e.pointerId);
             // In compare mode, the click jumps the divider to the pointer
             // (no need to grab the line first) — feels right with swipe UX.
@@ -424,7 +426,9 @@ class GlobeApp {
                 return;   // skip the pan-meridian path
             }
             const dx = e.clientX - lastX;
+            const dy = e.clientY - lastY;
             lastX = e.clientX;
+            lastY = e.clientY;
             // How many degrees of longitude does one CSS pixel correspond to
             // in world space? At the current camera distance/FOV, the visible
             // world width is  2·dist·tan(fov/2)·aspect.  One world-unit of
@@ -432,6 +436,7 @@ class GlobeApp {
             const dist = this.camera.position.length();
             const fovY = this.camera.fov * Math.PI / 180;
             const visibleW = 2 * dist * Math.tan(fovY / 2) * this.camera.aspect;
+            const visibleH = 2 * dist * Math.tan(fovY / 2);
             const lonPerPx = (visibleW / el.clientWidth) * (360 / MAP_W);
             let lon = this.state.mapCenterLon - dx * lonPerPx;
             // Wrap into [-180, 180].
@@ -442,6 +447,18 @@ class GlobeApp {
             const label  = document.getElementById('map-center-value');
             if (slider) slider.value = lon.toFixed(0);
             if (label)  label.textContent = `${Math.round(lon)}°`;
+            // Vertical drag pans the camera target Y so users can see polar
+            // regions when zoomed in (otherwise they're locked at equatorial
+            // centre because OrbitControls pan is disabled in map view).
+            // Clamped to the map plane bounds so the camera doesn't drift
+            // off into empty space.
+            const wppY = visibleH / el.clientHeight;
+            const newY = this.controls.target.y + dy * wppY;
+            const maxY = MAP_H / 2;
+            const clampedY = Math.max(-maxY, Math.min(maxY, newY));
+            this.controls.target.y = clampedY;
+            this.camera.position.y = clampedY;
+            this.controls.update();
         });
         const endDrag = (e) => {
             if (!dragging) return;
@@ -583,6 +600,27 @@ class GlobeApp {
         this.mapMeshRef.position.z = 0.001;   // win z-fight with the active plane
         this.mapMeshRef.visible = false;
         this.mapGroup.add(this.mapMeshRef);
+        // Globe-view companion: a second sphere shell at radius 1.001 with
+        // the reference texture, clipped by a vertical plane through the
+        // y-axis. As compareSplit changes, the plane rotates around y so the
+        // dividing meridian sweeps east-west across the globe.
+        this.referenceSphereTexture = new THREE.CanvasTexture(this.referenceCanvas);
+        this.referenceSphereTexture.minFilter = THREE.LinearFilter;
+        this.referenceSphereTexture.magFilter = THREE.LinearFilter;
+        this.referenceSphereTexture.wrapS = THREE.RepeatWrapping;
+        this.referenceSphereTexture.colorSpace = THREE.SRGBColorSpace;
+        this.referenceSphereTexture.offset.x = 0.25;   // match the active sphere
+        // Plane through y-axis: normal in the x-z plane. Initial (-1,0,0)
+        // keeps the western hemisphere (x < 0). applyCompareSplit rotates it.
+        this.globeSplitPlane = new THREE.Plane(new THREE.Vector3(-1, 0, 0), 0);
+        const globeRefMat = new THREE.MeshBasicMaterial({
+            map: this.referenceSphereTexture,
+            clippingPlanes: [this.globeSplitPlane], clipShadows: false,
+        });
+        this.globeRef = new THREE.Mesh(sphereGeom, globeRefMat);
+        this.globeRef.scale.setScalar(1.001);   // tiny outset to win z-fight
+        this.globeRef.visible = false;
+        this.globeGroup.add(this.globeRef);
         // Divider — amber to match the equator and cross-section arc styling
         // (same accent palette across all "lat/lon line" overlays). A wider
         // semi-transparent halo behind a bright thin core sells the line at
@@ -927,16 +965,27 @@ class GlobeApp {
         const s = Math.max(0.02, Math.min(0.98, split));
         this.state.compareSplit = s;
         const worldX = (s - 0.5) * MAP_W;
-        // Plane equation x + constant = 0 → keeps x > -constant. We want to
-        // keep the right half (x > worldX), so constant = -worldX.
+        // Map view: linear plane through worldX. Keeps x > worldX (right half).
         if (this.splitPlane) this.splitPlane.constant = -worldX;
         if (this.splitLine)  this.splitLine.position.x = worldX;
+        // Globe view: rotate the clipping plane around the y-axis so the
+        // dividing meridian sits at the longitude corresponding to compareSplit.
+        // The texture has offset.x = 0.25, so visually the s=0.5 split
+        // corresponds to the meridian at the back of the default camera view.
+        // Empirical alignment kept simple: split angle θ = (s - 0.5) * 2π.
+        if (this.globeSplitPlane) {
+            const theta = (s - 0.5) * 2 * Math.PI;
+            this.globeSplitPlane.normal.set(-Math.cos(theta), 0, Math.sin(theta));
+        }
     }
 
     applyCompareMode() {
         const on = !!this.state.compareMode;
-        if (this.mapMeshRef) this.mapMeshRef.visible = on;
-        if (this.splitLine)  this.splitLine.visible  = on;
+        const inMap   = this.state.viewMode === 'map';
+        const inGlobe = this.state.viewMode === 'globe';
+        if (this.mapMeshRef) this.mapMeshRef.visible = on && inMap;
+        if (this.splitLine)  this.splitLine.visible  = on && inMap;
+        if (this.globeRef)   this.globeRef.visible   = on && inGlobe;
         if (on) this.applyCompareSplit(this.state.compareSplit ?? 0.5);
         this.updateCompareLabels();
     }
@@ -1011,7 +1060,19 @@ class GlobeApp {
     // NaN-safe bilinear sample of the currently-displayed field (after
     // decomposition). Returns a number or null when outside the grid.
     sampleDisplayed(lat, lon) {
-        const vals = this._displayedValues;
+        // In compare mode the cursor may be over either side of the divider.
+        // Pick which painted-values array to sample from based on which side
+        // of the split this lon falls on. For map view: longitude → plane-uv.
+        // For globe view: same plane-uv mapping (the meridian split angle was
+        // derived from compareSplit using the same formula).
+        let vals = this._displayedValues;
+        if (this.state.compareMode && this._referenceValues) {
+            const planeU = ((((lon + 180) / 360) - this.state.mapCenterLon / 360) % 1 + 1) % 1;
+            const onRight = this.state.viewMode === 'globe'
+                ? (planeU > this.state.compareSplit)   // same uv split for sphere
+                : (planeU > this.state.compareSplit);
+            if (onRight) vals = this._referenceValues;
+        }
         if (!vals) return null;
         const { nlat, nlon } = GRID;
         const rLat = 90 - lat;
@@ -1036,6 +1097,17 @@ class GlobeApp {
         return vT * (1 - fi) + vB * fi;
     }
 
+    // For the hover label: which period is the cursor over right now?
+    // null = not in compare mode (no period suffix needed).
+    sampledPeriodLabel(lat, lon) {
+        if (!this.state.compareMode || !this._referenceValues) return null;
+        const planeU = ((((lon + 180) / 360) - this.state.mapCenterLon / 360) % 1 + 1) % 1;
+        const onRight = planeU > this.state.compareSplit;
+        const fmt = (p) => p === 'default' ? '1991–2020'
+                       : (p === '1961-1990' ? '1961–1990' : p);
+        return onRight ? fmt(this.compareRefPeriod()) : fmt(this.state.climatologyPeriod);
+    }
+
     formatHoverLabel(lat, lon, v) {
         const meta = FIELDS[this.state.field] || {};
         const latS = `${Math.abs(lat).toFixed(1)}°${lat >= 0 ? 'N' : 'S'}`;
@@ -1043,11 +1115,17 @@ class GlobeApp {
         const mode = this.state.decompose;
         const modeTag = (mode && mode !== 'total')
             ? `<span class="hv-mode">${mode}</span>` : '';
+        // In compare mode, append which period the cursor is over so the
+        // value is unambiguous.
+        const periodLabel = this.sampledPeriodLabel(lat, lon);
+        const periodTag = periodLabel
+            ? `<span class="hv-mode" style="color:var(--amber); border-color:rgba(232,194,106,0.4);">${periodLabel}</span>`
+            : '';
         return (
             `${latS}<span class="hv-sep">·</span>${lonS}` +
             `<span class="hv-sep">·</span>` +
             `<span class="hv-value">${fmtValue(v)}</span>` +
-            `<span class="hv-unit">${meta.units || ''}</span>${modeTag}`
+            `<span class="hv-unit">${meta.units || ''}</span>${modeTag}${periodTag}`
         );
     }
 
@@ -1183,17 +1261,6 @@ class GlobeApp {
     setViewMode(mode) {
         if (mode === this.state.viewMode) return;
         this.state.viewMode = mode;
-        // Swipe-compare is map-only — leaving Map view auto-disables it so
-        // the user doesn't end up with "compare on, but in Globe view, where
-        // is my comparison?" cognitive dissonance. They can re-enable on the
-        // way back to Map. (Globe-mode dual-sphere compare is a separate
-        // future build per ROADMAP.)
-        if (mode !== 'map' && this.state.compareMode) {
-            this.state.compareMode = false;
-            const t = document.getElementById('toggle-compare');
-            if (t) t.checked = false;
-            this.applyCompareMode();
-        }
         this.globeGroup.visible = mode === 'globe';
         this.mapGroup.visible   = mode === 'map';
         this.orbitGroup.visible = mode === 'orbit';
@@ -1230,6 +1297,10 @@ class GlobeApp {
             this.updateArcLine();
         }
         this.applySunVisibility();
+        // Compare overlay lives in different groups for each view (mapMeshRef
+        // in mapGroup, globeRef in globeGroup); refresh visibility so the
+        // right one shows after the view swap.
+        this.applyCompareMode();
 
         this.configureCamera();
     }
@@ -1880,7 +1951,14 @@ class GlobeApp {
             });
             this.referenceCtx.putImageData(this.referenceImageData, 0, 0);
             this.referenceTexture.needsUpdate = true;
+            // Both the map plane (referenceTexture) and the globe shell
+            // (referenceSphereTexture) wrap the same canvas — flag the
+            // sphere variant too so globe-view compare stays in sync.
+            if (this.referenceSphereTexture) this.referenceSphereTexture.needsUpdate = true;
         }
+        // Stash the reference values so hover lookup can return the right
+        // half's value when the cursor is over the reference period.
+        this._referenceValues = refValues;
 
         // Decorated field for contour overlay + colorbar. The heatmap uses
         // the decomposed values (shading the eddy / anomaly / zonal signal),
