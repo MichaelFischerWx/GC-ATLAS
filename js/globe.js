@@ -1722,6 +1722,7 @@ class GlobeApp {
                 const decomp = document.getElementById('decompose-group');
                 if (decomp) decomp.classList.toggle('is-disabled', kind === 'std');
                 this.setState({ kind });
+            });
         });
         // Central-meridian slider (map view only)
         const mapCenterSlider = document.getElementById('map-center-slider');
