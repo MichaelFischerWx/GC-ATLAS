@@ -1547,7 +1547,19 @@ class GlobeApp {
 
     applyDecomposition(f, mode) {
         if (mode === 'total' || !mode) {
-            return decompose(f.values, GRID.nlat, GRID.nlon, 'total');
+            // Honour the cross-month aggregated vmin/vmax that getField
+            // already computed (era5.js aggregateStats for raw fields,
+            // aggregateRangeByPrefix for derived). Recomputing per-month range
+            // via statsOf would shift the colorbar on every month-scrub.
+            // symmetric:false here so effCmap respects the user's cmap choice;
+            // the symmetric range itself is enforced upstream in getField for
+            // fields with `symmetric: true` in FIELDS metadata.
+            return {
+                values: f.values,
+                vmin: f.vmin, vmax: f.vmax,
+                symmetric: false,
+                empty: false,
+            };
         }
 
         // Anomaly mode reference: either climate-change (same month from a
@@ -1555,7 +1567,9 @@ class GlobeApp {
         let annualMean = null;
         if (mode === 'anomaly') {
             if (this.state.vCoord === 'theta') {
-                return decompose(f.values, GRID.nlat, GRID.nlon, 'total');
+                // θ-mode doesn't support anomaly — fall back to total with the
+                // same aggregated range as the explicit total path above.
+                return { values: f.values, vmin: f.vmin, vmax: f.vmax, symmetric: false, empty: false };
             }
             const meta = FIELDS[this.state.field] || {};
             const useLevel = meta.type === 'pl' ? this.state.level : null;
@@ -1594,6 +1608,7 @@ class GlobeApp {
                 return fm.isReal ? fm : null;
             },
             GRID.nlat, GRID.nlon, annualMean,
+            { symmetric: !!FIELDS[field]?.symmetric },
         );
         if (range) {
             current.vmin = range.vmin;

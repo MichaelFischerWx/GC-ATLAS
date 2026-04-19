@@ -16,34 +16,42 @@ export const LEVELS = [10, 50, 100, 150, 200, 250, 300, 500, 700, 850, 925, 1000
 export const THETA_LEVELS = [280, 300, 315, 330, 350, 400, 500, 700];
 export const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 
+// Per-field colorbar policy:
+//   symmetric: true  → vmin/vmax forced to ±max(|vmin|,|vmax|) so RdBu_r
+//                      paints zero white. Apply to fields whose physical
+//                      interpretation is "warm = +, cool = −".
+//   clamp: {lo, hi}  → per-tile percentile clamp in [0,1]. Kills outliers
+//                      from below-ground extrapolation under high terrain
+//                      (Tibet, Antarctica, Andes) at low pressure levels,
+//                      and from isolated convective spikes (precip, ω).
 export const FIELDS = {
-    t:    { type: 'pl', group: 'Dynamics',           name: 'Temperature',              units: 'K',       cmap: 'turbo',   defaultLevel: 500, contour: 10 },
-    u:    { type: 'pl', group: 'Dynamics',           name: 'Zonal wind (u)',           units: 'm s⁻¹',   cmap: 'RdBu_r',  defaultLevel: 200, contour: 10 },
-    v:    { type: 'pl', group: 'Dynamics',           name: 'Meridional wind (v)',      units: 'm s⁻¹',   cmap: 'RdBu_r',  defaultLevel: 200, contour: 5 },
+    t:    { type: 'pl', group: 'Dynamics',           name: 'Temperature',              units: 'K',       cmap: 'turbo',   defaultLevel: 500, contour: 10, clamp: { lo: 0.005, hi: 0.995 } },
+    u:    { type: 'pl', group: 'Dynamics',           name: 'Zonal wind (u)',           units: 'm s⁻¹',   cmap: 'RdBu_r',  defaultLevel: 200, contour: 10, symmetric: true },
+    v:    { type: 'pl', group: 'Dynamics',           name: 'Meridional wind (v)',      units: 'm s⁻¹',   cmap: 'RdBu_r',  defaultLevel: 200, contour: 5, symmetric: true },
     wspd: { type: 'pl', group: 'Dynamics',           name: 'Wind speed (|V|)',         units: 'm s⁻¹',   cmap: 'turbo',   defaultLevel: 200, derived: true, contour: 10 },
-    vo:   { type: 'pl', group: 'Dynamics',           name: 'Relative vorticity (ζ)',   units: '10⁻⁵ s⁻¹', cmap: 'RdBu_r', defaultLevel: 500, contour: 2,  clamp: { lo: 0.03, hi: 0.97 } },
-    d:    { type: 'pl', group: 'Dynamics',           name: 'Horizontal divergence',    units: '10⁻⁵ s⁻¹', cmap: 'RdBu_r', defaultLevel: 200, contour: 1,  clamp: { lo: 0.03, hi: 0.97 } },
-    w:    { type: 'pl', group: 'Dynamics',           name: 'Vertical velocity (ω)',    units: 'Pa s⁻¹',  cmap: 'RdBu_r',  defaultLevel: 500, contour: 0.05, clamp: { lo: 0.05, hi: 0.95 } },
-    z:    { type: 'pl', group: 'Dynamics',           name: 'Geopotential height',      units: 'm',       cmap: 'viridis', defaultLevel: 500, contour: 60 },
-    psi:  { type: 'pl', group: 'Dynamics',           name: 'Streamfunction (ψ)',       units: '10⁶ m² s⁻¹', cmap: 'RdBu_r', defaultLevel: 200, contour: 20 },
-    chi:  { type: 'pl', group: 'Dynamics',           name: 'Velocity potential (χ)',   units: '10⁶ m² s⁻¹', cmap: 'RdBu_r', defaultLevel: 200, contour: 2 },
-    q:    { type: 'pl', group: 'Moisture',           name: 'Specific humidity',        units: 'g kg⁻¹',  cmap: 'thalo',   defaultLevel: 850, contour: 2 },
-    r:    { type: 'pl', group: 'Moisture',           name: 'Relative humidity',        units: '%',       cmap: 'thalo',   defaultLevel: 700, contour: 10 },
-    pv:   { type: 'pl', group: 'Derived & PV',       name: 'Ertel PV',                 units: 'PVU',     cmap: 'RdBu_r',  defaultLevel: 330, contour: 1, derived: true, thetaOnly: true },
-    mse:  { type: 'pl', group: 'Derived & PV',       name: 'Moist static energy (h/c_p)', units: 'K',    cmap: 'magma',   defaultLevel: 850, contour: 5, derived: true },
+    vo:   { type: 'pl', group: 'Dynamics',           name: 'Relative vorticity (ζ)',   units: '10⁻⁵ s⁻¹', cmap: 'RdBu_r', defaultLevel: 500, contour: 2,  clamp: { lo: 0.03, hi: 0.97 }, symmetric: true },
+    d:    { type: 'pl', group: 'Dynamics',           name: 'Horizontal divergence',    units: '10⁻⁵ s⁻¹', cmap: 'RdBu_r', defaultLevel: 200, contour: 1,  clamp: { lo: 0.03, hi: 0.97 }, symmetric: true },
+    w:    { type: 'pl', group: 'Dynamics',           name: 'Vertical velocity (ω)',    units: 'Pa s⁻¹',  cmap: 'RdBu_r',  defaultLevel: 500, contour: 0.05, clamp: { lo: 0.05, hi: 0.95 }, symmetric: true },
+    z:    { type: 'pl', group: 'Dynamics',           name: 'Geopotential height',      units: 'm',       cmap: 'viridis', defaultLevel: 500, contour: 60, clamp: { lo: 0.005, hi: 0.995 } },
+    psi:  { type: 'pl', group: 'Dynamics',           name: 'Streamfunction (ψ)',       units: '10⁶ m² s⁻¹', cmap: 'RdBu_r', defaultLevel: 200, contour: 20, symmetric: true },
+    chi:  { type: 'pl', group: 'Dynamics',           name: 'Velocity potential (χ)',   units: '10⁶ m² s⁻¹', cmap: 'RdBu_r', defaultLevel: 200, contour: 2, symmetric: true },
+    q:    { type: 'pl', group: 'Moisture',           name: 'Specific humidity',        units: 'g kg⁻¹',  cmap: 'thalo',   defaultLevel: 850, contour: 2, clamp: { lo: 0.0, hi: 0.99 } },
+    r:    { type: 'pl', group: 'Moisture',           name: 'Relative humidity',        units: '%',       cmap: 'thalo',   defaultLevel: 700, contour: 10, clamp: { lo: 0.0, hi: 0.995 } },
+    pv:   { type: 'pl', group: 'Derived & PV',       name: 'Ertel PV',                 units: 'PVU',     cmap: 'RdBu_r',  defaultLevel: 330, contour: 1, derived: true, thetaOnly: true, symmetric: true },
+    mse:  { type: 'pl', group: 'Derived & PV',       name: 'Moist static energy (h/c_p)', units: 'K',    cmap: 'magma',   defaultLevel: 850, contour: 5, derived: true, clamp: { lo: 0.005, hi: 0.995 } },
     t2m:  { type: 'sl', group: 'Surface',            name: '2-m temperature',          units: 'K',       cmap: 'turbo',   contour: 5 },
     d2m:  { type: 'sl', group: 'Surface',            name: '2-m dewpoint',             units: 'K',       cmap: 'turbo',   contour: 5 },
     sst:  { type: 'sl', group: 'Surface',            name: 'Sea surface temperature',  units: 'K',       cmap: 'turbo',   contour: 2 },
     msl:  { type: 'sl', group: 'Surface',            name: 'Mean sea-level pressure',  units: 'hPa',     cmap: 'plasma',  contour: 4 },
-    sp:   { type: 'sl', group: 'Surface',            name: 'Surface pressure',         units: 'hPa',     cmap: 'plasma',  contour: 20 },
+    sp:   { type: 'sl', group: 'Surface',            name: 'Surface pressure',         units: 'hPa',     cmap: 'plasma',  contour: 20, clamp: { lo: 0.005, hi: 0.995 } },
     blh:  { type: 'sl', group: 'Surface',            name: 'Boundary-layer height',    units: 'm',       cmap: 'plasma',  contour: 200 },
     tcwv: { type: 'sl', group: 'Moisture',           name: 'Precipitable water (TCWV)', units: 'kg m⁻²', cmap: 'thalo',   contour: 5 },
     tp:   { type: 'sl', group: 'Moisture',           name: 'Total precipitation',      units: 'mm day⁻¹', cmap: 'thalo',  contour: 2,  clamp: { lo: 0.0, hi: 0.99 } },
-    ews:  { type: 'sl', group: 'Surface fluxes',     name: 'Eastward surface stress',  units: 'N m⁻²',  cmap: 'RdBu_r',  contour: 0.05 },
-    sshf: { type: 'sl', group: 'Surface fluxes',     name: 'Surface sensible heat flux', units: 'W m⁻²', cmap: 'RdBu_r',  contour: 20 },
-    slhf: { type: 'sl', group: 'Surface fluxes',     name: 'Surface latent heat flux',   units: 'W m⁻²', cmap: 'RdBu_r',  contour: 25 },
+    ews:  { type: 'sl', group: 'Surface fluxes',     name: 'Eastward surface stress',  units: 'N m⁻²',  cmap: 'RdBu_r',  contour: 0.05, symmetric: true },
+    sshf: { type: 'sl', group: 'Surface fluxes',     name: 'Surface sensible heat flux', units: 'W m⁻²', cmap: 'RdBu_r',  contour: 20, symmetric: true },
+    slhf: { type: 'sl', group: 'Surface fluxes',     name: 'Surface latent heat flux',   units: 'W m⁻²', cmap: 'RdBu_r',  contour: 25, symmetric: true },
     ssr:  { type: 'sl', group: 'Surface fluxes',     name: 'Surface net SW radiation',   units: 'W m⁻²', cmap: 'plasma',  contour: 25 },
-    str:  { type: 'sl', group: 'Surface fluxes',     name: 'Surface net LW radiation',   units: 'W m⁻²', cmap: 'RdBu_r',  contour: 10 },
+    str:  { type: 'sl', group: 'Surface fluxes',     name: 'Surface net LW radiation',   units: 'W m⁻²', cmap: 'RdBu_r',  contour: 10, symmetric: true },
     tisr: { type: 'sl', group: 'TOA',                name: 'TOA incoming solar',         units: 'W m⁻²', cmap: 'plasma',  contour: 50 },
     ttr:  { type: 'sl', group: 'TOA',                name: 'TOA net LW (OLR)',           units: 'W m⁻²', cmap: 'magma',   contour: 20 },
 };
@@ -68,6 +76,43 @@ PENDING_VALUES.fill(NaN);
 
 function pendingField() {
     return { values: PENDING_VALUES, vmin: 0, vmax: 1 };
+}
+
+// Force [-A, +A] when meta.symmetric so RdBu_r centres white on zero. Applied
+// at getField return so it covers raw + derived + isentropic paths uniformly.
+function symmetricRange(vmin, vmax, meta) {
+    if (!meta?.symmetric || !Number.isFinite(vmin) || !Number.isFinite(vmax)) {
+        return { vmin, vmax };
+    }
+    const a = Math.max(Math.abs(vmin), Math.abs(vmax));
+    return { vmin: -a, vmax: a };
+}
+
+// NaN-safe percentile bounds for the values array. Mirrors era5.js's clamp
+// (which runs at tile-load) — used here for derived fields whose values are
+// computed from cached tiles and so bypass the era5 path.
+function percentileBounds(values, lo, hi) {
+    const finite = [];
+    for (let i = 0; i < values.length; i++) {
+        const v = values[i];
+        if (Number.isFinite(v)) finite.push(v);
+    }
+    if (finite.length === 0) return [0, 1];
+    finite.sort((a, b) => a - b);
+    const idxLo = Math.max(0, Math.min(finite.length - 1, Math.floor(lo * (finite.length - 1))));
+    const idxHi = Math.max(0, Math.min(finite.length - 1, Math.floor(hi * (finite.length - 1))));
+    return [finite[idxLo], finite[idxHi]];
+}
+
+// Replace {vmin, vmax} on an entry with percentile-clamped bounds when meta
+// declares a clamp. Done once per cache insert so subsequent month-pools
+// see clamped per-month bounds.
+function applyClampToEntry(entry, meta) {
+    if (!meta?.clamp || !entry?.values) return entry;
+    const [vmin, vmax] = percentileBounds(entry.values, meta.clamp.lo, meta.clamp.hi);
+    entry.vmin = vmin;
+    entry.vmax = vmax;
+    return entry;
 }
 
 /**
@@ -103,8 +148,9 @@ export function getField(name, { month = 1, level = 500, coord = 'pressure', the
     if (meta.derived) {
         const d = computeDerived(name, month, level, coord, theta);
         if (d) {
+            const r = symmetricRange(d.vmin, d.vmax, meta);
             return {
-                values: d.values, vmin: d.vmin, vmax: d.vmax,
+                values: d.values, vmin: r.vmin, vmax: r.vmax,
                 shape: d.shape ?? [GRID.nlat, GRID.nlon],
                 lats: LATS, lons: LONS,
                 ...meta,
@@ -116,8 +162,9 @@ export function getField(name, { month = 1, level = 500, coord = 'pressure', the
     } else if (isenMode) {
         const d = fieldOnIsentrope(name, month, theta);
         if (d) {
+            const r = symmetricRange(d.vmin, d.vmax, meta);
             return {
-                values: d.values, vmin: d.vmin, vmax: d.vmax,
+                values: d.values, vmin: r.vmin, vmax: r.vmax,
                 shape: [GRID.nlat, GRID.nlon],
                 lats: LATS, lons: LONS,
                 ...meta,
@@ -131,9 +178,10 @@ export function getField(name, { month = 1, level = 500, coord = 'pressure', the
     } else {
         const era = requestEra5(name, { month, level, kind: effKind, period: effPeriod });
         if (era) {
+            const r = symmetricRange(era.vmin, era.vmax, meta);
             return {
                 values: era.values,
-                vmin: era.vmin, vmax: era.vmax,
+                vmin: r.vmin, vmax: r.vmax,
                 shape: era.shape ?? [GRID.nlat, GRID.nlon],
                 lats: LATS, lons: LONS,
                 ...meta,
@@ -222,7 +270,7 @@ function computeDerived(name, month, level, coord, theta) {
                 if (!u || !v) continue;
                 uVals = u; vVals = v;
             }
-            _wspdCache.set(k, magnitudeFromUV(uVals, vVals));
+            _wspdCache.set(k, applyClampToEntry(magnitudeFromUV(uVals, vVals), FIELDS.wspd));
         }
 
         const key = `${coord}:${coord === 'theta' ? theta : level}:${month}`;
@@ -241,7 +289,7 @@ function computeDerived(name, month, level, coord, theta) {
                 if (!uE || !vE) return null;
                 uVals = uE.values; vVals = vE.values;
             }
-            entry = magnitudeFromUV(uVals, vVals);
+            entry = applyClampToEntry(magnitudeFromUV(uVals, vVals), FIELDS.wspd);
             _wspdCache.set(key, entry);
         }
         // Aggregate colorbar range across every cached month at (coord, level/theta).
@@ -270,7 +318,7 @@ function computeDerived(name, month, level, coord, theta) {
                 const z = cachedMonth('z', m, level);
                 const q = cachedMonth('q', m, level);
                 if (t && z && q) {
-                    _mseCache.set(k, computeMSEFromTiles(t, z, q));
+                    _mseCache.set(k, applyClampToEntry(computeMSEFromTiles(t, z, q), FIELDS.mse));
                 }
             }
         }
@@ -291,7 +339,7 @@ function computeDerived(name, month, level, coord, theta) {
                 if (!Te || !Ze || !Qe) return null;
                 tT = Te.values; tZ = Ze.values; tQ = Qe.values;
             }
-            entry = computeMSEFromTiles(tT, tZ, tQ);
+            entry = applyClampToEntry(computeMSEFromTiles(tT, tZ, tQ), FIELDS.mse);
             _mseCache.set(key, entry);
         }
         const prefix = `${coord}:${coord === 'theta' ? theta : level}:`;

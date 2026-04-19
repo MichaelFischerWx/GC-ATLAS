@@ -145,20 +145,24 @@ export function decompose(values, nlat, nlon, mode, annualMean = null) {
  *
  * Returns { vmin, vmax, symmetric } or null if nothing cached.
  */
-export function aggregatedDecompositionRange(mode, fetchMonth, nlat, nlon, annualMean = null) {
+export function aggregatedDecompositionRange(mode, fetchMonth, nlat, nlon, annualMean = null, opts = {}) {
+    // `opts.symmetric` lets callers force ±max pooling for fields whose
+    // FIELDS metadata declares `symmetric: true` even in zonal mode (where
+    // decompose() itself wouldn't otherwise centre the range on zero).
+    const { symmetric: forceSymmetric = false } = opts;
     if (mode === 'total' || !mode) return null;
     let vmin = Infinity, vmax = -Infinity;
     let absMax = 0;
     let any = false;
-    let symmetric = false;
+    let symmetric = forceSymmetric;
 
     for (let m = 1; m <= 12; m++) {
         const f = fetchMonth(m);
         if (!f || !f.values) continue;
         const d = decompose(f.values, nlat, nlon, mode, annualMean);
         if (d.empty) continue;       // anomaly without annualMean
-        symmetric = d.symmetric;
-        if (d.symmetric) {
+        if (d.symmetric) symmetric = true;
+        if (symmetric) {
             absMax = Math.max(absMax, Math.abs(d.vmin), Math.abs(d.vmax));
         } else {
             if (d.vmin < vmin) vmin = d.vmin;
