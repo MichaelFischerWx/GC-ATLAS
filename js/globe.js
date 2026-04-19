@@ -935,6 +935,48 @@ class GlobeApp {
         if (this.mapMeshRef) this.mapMeshRef.visible = on;
         if (this.splitLine)  this.splitLine.visible  = on;
         if (on) this.applyCompareSplit(this.state.compareSplit ?? 0.5);
+        this.updateCompareLabels();
+    }
+
+    // Position the period labels above each half of the swipe-compare and
+    // refresh their text. Called from animate() so they track camera zoom /
+    // central-meridian shift / divider drag without per-event wiring.
+    updateCompareLabels() {
+        const lEl = document.getElementById('compare-label-left');
+        const rEl = document.getElementById('compare-label-right');
+        if (!lEl || !rEl) return;
+        const on = this.state.compareMode && this.state.viewMode === 'map';
+        if (!on) {
+            if (!lEl.hidden) lEl.hidden = true;
+            if (!rEl.hidden) rEl.hidden = true;
+            return;
+        }
+        const fmt = (p) => p === 'default' ? '1991–2020'
+                       : (p === '1961-1990' ? '1961–1990' : p);
+        lEl.textContent = fmt(this.state.climatologyPeriod);
+        const refP = this.compareRefPeriod();
+        rEl.textContent = refP ? fmt(refP) : '—';
+
+        // Project the divider's world position to screen coords so the
+        // labels stay centred on each visible half regardless of zoom or
+        // central-meridian shift.
+        const split = this.state.compareSplit ?? 0.5;
+        const worldPos = new THREE.Vector3((split - 0.5) * MAP_W, 0, 0);
+        const ndc = worldPos.clone().project(this.camera);
+        const canvas = this.renderer.domElement;
+        const canvasRect = canvas.getBoundingClientRect();
+        const containerRect = canvas.parentElement.getBoundingClientRect();
+        const offsetX = canvasRect.left - containerRect.left;
+        const splitX = (ndc.x + 1) * 0.5 * canvasRect.width;
+        const leftCenter  = offsetX + splitX * 0.5;
+        const rightCenter = offsetX + (splitX + canvasRect.width) * 0.5;
+        const padding = 70;   // ~half a label width
+        lEl.style.left = Math.max(offsetX + padding,
+            Math.min(offsetX + canvasRect.width - padding, leftCenter)) + 'px';
+        rEl.style.left = Math.max(offsetX + padding,
+            Math.min(offsetX + canvasRect.width - padding, rightCenter)) + 'px';
+        if (lEl.hidden) lEl.hidden = false;
+        if (rEl.hidden) rEl.hidden = false;
     }
 
     // Compare needs a genuine alternate reference period selected; otherwise
@@ -1110,6 +1152,17 @@ class GlobeApp {
     setViewMode(mode) {
         if (mode === this.state.viewMode) return;
         this.state.viewMode = mode;
+        // Swipe-compare is map-only — leaving Map view auto-disables it so
+        // the user doesn't end up with "compare on, but in Globe view, where
+        // is my comparison?" cognitive dissonance. They can re-enable on the
+        // way back to Map. (Globe-mode dual-sphere compare is a separate
+        // future build per ROADMAP.)
+        if (mode !== 'map' && this.state.compareMode) {
+            this.state.compareMode = false;
+            const t = document.getElementById('toggle-compare');
+            if (t) t.checked = false;
+            this.applyCompareMode();
+        }
         this.globeGroup.visible = mode === 'globe';
         this.mapGroup.visible   = mode === 'map';
         this.orbitGroup.visible = mode === 'orbit';
@@ -2547,6 +2600,10 @@ class GlobeApp {
                 this.orbit.update(this.state.month, this.spinAngle, this.camera);
             }
             this.renderer.render(this.scene, this.camera);
+            // Reposition swipe-compare period labels every frame so they
+            // track camera zoom / central-meridian shift / divider drag.
+            // No-op when compare is off (early return inside the helper).
+            if (this.state.compareMode) this.updateCompareLabels();
             requestAnimationFrame(tick);
         };
         tick();

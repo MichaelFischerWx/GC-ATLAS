@@ -381,6 +381,28 @@
             color: var(--paper-dim);
             gap: 6px;
         }
+        /* ── Swipe-compare period labels ──────────────────────── */
+        .compare-label {
+            position: absolute;
+            top: 14px;
+            transform: translateX(-50%);
+            background: rgba(12, 36, 32, 0.85);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            border: 1px solid rgba(232, 194, 106, 0.55);   /* amber, matches divider */
+            color: var(--amber);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.78rem;
+            font-weight: 600;
+            letter-spacing: 0.04em;
+            padding: 5px 12px;
+            border-radius: 6px;
+            pointer-events: none;
+            z-index: 70;
+            white-space: nowrap;
+            transition: left 0.05s linear;
+        }
+        .compare-label[hidden] { display: none; }
         .cb-tick-input {
             font-family: 'JetBrains Mono', monospace;
             font-size: 0.72rem;
@@ -1235,6 +1257,9 @@
         <div id="globe-mount"></div>
         <div class="hover-tooltip hidden" id="hover-tooltip"></div>
         <div class="hover-tooltip hidden" id="xs-hover"></div>
+        <!-- Swipe-compare period labels (visible only in Map view + compare on) -->
+        <div id="compare-label-left"  class="compare-label" hidden></div>
+        <div id="compare-label-right" class="compare-label compare-label--right" hidden></div>
 
         <aside class="tips-panel" id="tips-panel">
             <button class="tips-dismiss" id="tips-dismiss" aria-label="Dismiss tips">&times;</button>
