@@ -24,6 +24,8 @@ import { computeMassStreamfunction, computeAngularMomentum, computeBruntVaisala 
 import { computeEPFlux } from './ep_flux.js';
 import { computeLorenzCycle } from './lorenz.js';
 import { buildMBudgetView } from './m_budget.js';
+import { buildQBudgetView } from './q_budget.js';
+import { buildHBudgetView } from './h_budget.js';
 import { ParcelField } from './parcels.js';
 import { GifExporter, downloadBlob } from './gif_export.js';
 
@@ -174,7 +176,9 @@ class GlobeApp {
                            || (s.xsDiag === 'M'      && name === 'u')
                            || (s.xsDiag === 'N2'     && name === 't')
                            || (s.xsDiag === 'epflux' && (name === 'u' || name === 'v' || name === 'w' || name === 't'))
-                           || (s.xsDiag === 'mbudget' && (name === 'u' || name === 'v' || name === 'w'));
+                           || (s.xsDiag === 'mbudget' && (name === 'u' || name === 'v' || name === 'w'))
+                           || (s.xsDiag === 'qbudget' && (name === 'u' || name === 'v' || name === 'w' || name === 'q'))
+                           || (s.xsDiag === 'hbudget' && (name === 'u' || name === 'v' || name === 'w' || name === 't' || name === 'z' || name === 'q'));
             if (s.showXSection && diagNeeds && monthMatches) {
                 this.updateXSection();
             }
@@ -1016,14 +1020,46 @@ class GlobeApp {
                     prefetchField('v', { level: L });
                     prefetchField('w', { level: L });
                 }
+            } else if (patch.xsDiag === 'qbudget') {
+                for (const L of LEVELS) {
+                    prefetchField('u', { level: L });
+                    prefetchField('v', { level: L });
+                    prefetchField('w', { level: L });
+                    prefetchField('q', { level: L });
+                }
+                // Surface E-P overlay needs slhf + tp (single-level).
+                prefetchField('slhf', {});
+                prefetchField('tp',   {});
+            } else if (patch.xsDiag === 'hbudget') {
+                for (const L of LEVELS) {
+                    prefetchField('u', { level: L });
+                    prefetchField('v', { level: L });
+                    prefetchField('w', { level: L });
+                    prefetchField('t', { level: L });
+                    prefetchField('z', { level: L });
+                    prefetchField('q', { level: L });
+                }
+                // Surface heating overlay: turbulent fluxes + radiation.
+                for (const sl of ['slhf','sshf','ssr','str','tisr','ttr']) prefetchField(sl, {});
             }
-            // Show / hide the M-budget sub-controls + info button.
+            // Show / hide the budget sub-controls. Same panel UI is shared
+            // across all three budgets — the term labels are generic enough.
+            const isBudget = ['mbudget','qbudget','hbudget'].includes(patch.xsDiag);
             const mbCtl = document.getElementById('mb-controls');
-            if (mbCtl) mbCtl.hidden = patch.xsDiag !== 'mbudget';
+            if (mbCtl) mbCtl.hidden = !isBudget;
+            // Hide the form toggle for q/h budgets (only meaningful for M).
+            const mbFormGroup = document.querySelector('.mb-row-toggles .mb-toggle-group:first-child');
+            if (mbFormGroup) mbFormGroup.style.display = (patch.xsDiag === 'mbudget') ? '' : 'none';
+            // Re-label the residual-term option per budget context.
+            const torqueOpt = document.querySelector('#mb-term-select option[value="torque"]');
+            if (torqueOpt) {
+                torqueOpt.textContent = patch.xsDiag === 'qbudget' ? 'Implied source (E−P)'
+                                       : patch.xsDiag === 'hbudget' ? 'Implied atmospheric heating'
+                                       : 'Implied surface torque';
+            }
             const mbInfoBtn = document.getElementById('mb-info-btn');
-            if (mbInfoBtn) mbInfoBtn.hidden = patch.xsDiag !== 'mbudget';
+            if (mbInfoBtn) mbInfoBtn.hidden = patch.xsDiag !== 'mbudget';   // popover is M-specific
             const mbInfo = document.getElementById('mb-info');
-            // Auto-collapse the popover when leaving M-budget mode.
             if (mbInfo && patch.xsDiag !== 'mbudget') {
                 mbInfo.setAttribute('hidden', '');
                 mbInfoBtn?.classList.remove('active');
@@ -1219,10 +1255,31 @@ class GlobeApp {
             if (!zm) {
                 zm = computeZonalMean(field, month);
             } else {
-                effCmap = 'RdBu_r';                  // signed: westerly + / easterly −
-                // M-budget terms are residuals of larger numbers — even after
-                // smoothing, fwidth-based contour overlays would paint speckle.
-                // The shading + 1D mode (with proper y-ticks) carry the message.
+                effCmap = 'RdBu_r';
+                zm.suppressContours = true;
+            }
+        } else if (xsDiag === 'qbudget') {
+            zm = buildQBudgetView(month, {
+                term: this.state.mbTerm,
+                form: 'q',
+                mode: this.state.mbMode,
+            });
+            if (!zm) {
+                zm = computeZonalMean(field, month);
+            } else {
+                effCmap = 'RdBu_r';
+                zm.suppressContours = true;
+            }
+        } else if (xsDiag === 'hbudget') {
+            zm = buildHBudgetView(month, {
+                term: this.state.mbTerm,
+                form: 'h',
+                mode: this.state.mbMode,
+            });
+            if (!zm) {
+                zm = computeZonalMean(field, month);
+            } else {
+                effCmap = 'RdBu_r';
                 zm.suppressContours = true;
             }
         } else if (xsArc) {
