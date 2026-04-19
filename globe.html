@@ -1139,8 +1139,15 @@
         <section class="control-group">
             <div class="field-label">Display</div>
             <div class="segmented kind-seg" id="kind-toggle">
-                <button type="button" data-kind="mean" class="active" title="Climatological mean (1991–2020)">Mean</button>
-                <button type="button" data-kind="std" title="Inter-annual standard deviation across 30 years — highlights ENSO, monsoon variability, storm-track regions">±1σ variability</button>
+                <button type="button" data-kind="mean" class="active" title="Climatological mean">Mean</button>
+                <button type="button" data-kind="std" title="Inter-annual standard deviation across the 30-year window — highlights ENSO, monsoon variability, storm-track regions">±1σ variability</button>
+            </div>
+            <div style="margin-top:10px;">
+                <label class="field-label" for="climo-period-select" style="margin-bottom:4px; font-size:0.66rem;">Climatology period</label>
+                <select id="climo-period-select" title="Which 30-year window to use as the active climatology — drives the Mean tile, the ±1σ tile, and the decomposition reference. Use the Anomaly reference dropdown below to compare against a different period.">
+                    <option value="default">1991–2020 (current)</option>
+                    <option value="1961-1990">1961–1990 (previous)</option>
+                </select>
             </div>
         </section>
 

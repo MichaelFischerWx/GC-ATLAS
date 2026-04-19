@@ -26,6 +26,15 @@ const subscribers = new Set();  // fns({ name, month, level, period })
 // Keep a getter that returns the default-period manifest.
 let manifest = null;
 
+// Active climatology period — the tree that callers get when they don't
+// pass an explicit `period` (or pass the legacy 'default' sentinel). UI sets
+// this via setActivePeriod(); reference-period anomaly callers continue to
+// pass an explicit period (e.g. '1961-1990') and bypass this lookup.
+let activePeriod = 'default';
+export function setActivePeriod(p) { activePeriod = p || 'default'; }
+export function getActivePeriod() { return activePeriod; }
+function resolvePeriod(p) { return (p == null || p === 'default') ? activePeriod : p; }
+
 const pad = (n) => String(n).padStart(2, '0');
 // Cache key includes period + kind so a single field can hold mean/std and
 // multiple base periods concurrently for the same (month, level).
@@ -86,10 +95,11 @@ export function availableLevels(name) {
 
 /** Cached-only lookup — no fetch side-effect. Returns Float32Array | null. */
 export function cachedMonth(name, month, level = null, kind = 'mean', period = 'default') {
-    const r = resolveField(name, period);
+    const eff = resolvePeriod(period);
+    const r = resolveField(name, eff);
     if (!r) return null;
     const useLevel = r.meta.levels ? level : null;
-    const hit = cache.get(keyOf(name, month, useLevel, kind, period));
+    const hit = cache.get(keyOf(name, month, useLevel, kind, eff));
     return hit && hit !== 'pending' ? hit.values : null;
 }
 
@@ -98,13 +108,14 @@ export function cachedMonth(name, month, level = null, kind = 'mean', period = '
  * return null, and notify subscribers when the tile arrives.
  */
 export function requestField(name, { month, level, kind = 'mean', period = 'default' } = {}) {
-    const r = resolveField(name, period);
+    const eff = resolvePeriod(period);
+    const r = resolveField(name, eff);
     if (!r) return null;
     const useLevel = r.meta.levels ? level : null;
-    const key = keyOf(name, month, useLevel, kind, period);
+    const key = keyOf(name, month, useLevel, kind, eff);
     const hit = cache.get(key);
     if (hit && hit !== 'pending') {
-        const agg = aggregateStats(name, useLevel, kind, period);
+        const agg = aggregateStats(name, useLevel, kind, eff);
         return {
             values: hit.values,
             vmin: agg ? agg.vmin : hit.vmin,
@@ -115,10 +126,10 @@ export function requestField(name, { month, level, kind = 'mean', period = 'defa
             lat_descending: r.meta.lat_descending,
             isReal: true,
             kind,
-            period,
+            period: eff,
         };
     }
-    if (!hit) fetchTile(name, r.group, r.meta, month, useLevel, kind, period);
+    if (!hit) fetchTile(name, r.group, r.meta, month, useLevel, kind, eff);
     return null;
 }
 
@@ -210,13 +221,14 @@ function aggregateStats(name, level, kind = 'mean', period = 'default') {
 
 /** Kick off fetches for many months in parallel (for the "play" seasonal cycle). */
 export function prefetchField(name, { level = null, months = [1,2,3,4,5,6,7,8,9,10,11,12], kind = 'mean', period = 'default' } = {}) {
-    const r = resolveField(name, period);
+    const eff = resolvePeriod(period);
+    const r = resolveField(name, eff);
     if (!r) return;
     if (kind === 'std' && r.meta.has_std === false) return;
     const useLevel = r.meta.levels ? level : null;
     for (const m of months) {
-        const key = keyOf(name, m, useLevel, kind, period);
-        if (!cache.has(key)) fetchTile(name, r.group, r.meta, m, useLevel, kind, period);
+        const key = keyOf(name, m, useLevel, kind, eff);
+        if (!cache.has(key)) fetchTile(name, r.group, r.meta, m, useLevel, kind, eff);
     }
 }
 

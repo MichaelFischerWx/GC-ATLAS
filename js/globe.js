@@ -17,7 +17,7 @@ import { SunLight } from './sun.js';
 import { OrbitScene, ORBIT_RADIUS } from './orbit.js';
 import { computeZonalMean, computeArcCrossSection, renderCrossSection, samplePanel } from './cross_section.js';
 import { greatCircleArc, latLonToVec3, gcDistanceKm } from './arc.js';
-import { loadManifest, onFieldLoaded, isReady as era5Ready, prefetchField, cachedMonth, registerClamps } from './era5.js';
+import { loadManifest, onFieldLoaded, isReady as era5Ready, prefetchField, cachedMonth, registerClamps, setActivePeriod } from './era5.js';
 import { decompose, annualMeanFrom, aggregatedDecompositionRange } from './decompose.js';
 import { HoverProbe } from './hover.js';
 import { computeMassStreamfunction, computeAngularMomentum, computeBruntVaisala, computeGeostrophicWind } from './diagnostics.js';
@@ -104,6 +104,7 @@ class GlobeApp {
             decompose: 'total',      // 'total' | 'zonal' | 'eddy' | 'anomaly'
             kind: 'mean',            // 'mean' (climatology) | 'std' (inter-annual ±1σ)
             referencePeriod: 'default',  // 'default' (1991-2020) | '1961-1990' | …
+            climatologyPeriod: 'default', // active climatology — drives mean + std + decomp reference
             userVmin: null,          // manual colorbar min override; null = auto
             userVmax: null,          // manual colorbar max override; null = auto
             mapCenterLon: 0,         // central meridian for the flat map (-180..180)
@@ -141,14 +142,18 @@ class GlobeApp {
             const s = this.state;
             const levelMatches = (level == null || level === s.level);
             const monthMatches = (month === s.month);
-            // Reference-period tile arrival → only matters for the active
-            // climate-change-anomaly view at the matching field/month/level.
-            if (period && period !== 'default') {
+            // Tile arrival from a non-active period is only useful for the
+            // climate-change-anomaly view (which fetches the matching month
+            // from a reference period). Active-period tiles fall through to
+            // the regular display-update logic below.
+            const isActivePeriod = (period === s.climatologyPeriod) ||
+                                   (!period && s.climatologyPeriod === 'default');
+            if (period && !isActivePeriod) {
                 if (s.referencePeriod === period && s.decompose === 'anomaly'
                         && name === s.field && monthMatches) {
                     this.updateField();
                 }
-                return;   // don't trigger any of the default-period logic
+                return;   // don't trigger any of the active-period logic
             }
             const isenActive  = (s.vCoord === 'theta');
             // θ-coord rendering needs T at every level (for the θ cube) plus
@@ -1171,6 +1176,38 @@ class GlobeApp {
         if ('level' in patch || 'month' in patch || 'vCoord' in patch || 'theta' in patch) this.windCache.stale = true;
         if ('month' in patch && this.parcels) this.parcels.invalidateCube();
         if ('vCoord' in patch || 'theta' in patch) invalidateIsentropicCache();
+        if ('climatologyPeriod' in patch) {
+            // Switch the active tile tree. Derived / isentropic caches don't
+            // include period in their keys, so wipe them to force rebuild from
+            // the new period's underlying tiles. Wind cache + parcel cube same.
+            setActivePeriod(patch.climatologyPeriod);
+            invalidateIsentropicCache();
+            this.windCache.stale = true;
+            if (this.parcels) this.parcels.invalidateCube();
+            // Disable the climate-change-anomaly option when comparing the
+            // active period against itself would yield zero — keeps the UI
+            // consistent until we add a literal '1991-2020' name.
+            const refSel = document.getElementById('ref-period-select');
+            if (refSel) {
+                for (const opt of refSel.options) {
+                    if (opt.value !== 'default') {
+                        opt.disabled = (opt.value === patch.climatologyPeriod);
+                    }
+                }
+                if (refSel.value === patch.climatologyPeriod) {
+                    refSel.value = 'default';
+                    this.state.referencePeriod = 'default';
+                }
+            }
+            // Make sure the alternate manifest is loaded; if it isn't, kick
+            // the loader and re-render once it lands (a placeholder NaN field
+            // shows in the meantime).
+            if (patch.climatologyPeriod !== 'default') {
+                loadManifest(patch.climatologyPeriod).then((ok) => {
+                    if (ok) this.updateField();
+                });
+            }
+        }
 
         // Eagerly prefetch all 12 months at this (field, level) so the
         // colorbar stabilises quickly once any tile lands.
@@ -1904,6 +1941,15 @@ class GlobeApp {
                 this.setState({ referencePeriod: refSel.value });
             });
         }
+        // Climatology period — switches the active 30-year window for Mean,
+        // ±1σ, and decomposition references everywhere on the page.
+        const climoSel = document.getElementById('climo-period-select');
+        if (climoSel) {
+            climoSel.value = this.state.climatologyPeriod;
+            climoSel.addEventListener('change', () => {
+                this.setState({ climatologyPeriod: climoSel.value });
+            });
+        }
         // Mean | ±1σ display toggle. ±1σ disables decomposition (no anomaly
         // of stddev) and forces a sequential colormap.
         document.querySelectorAll('[data-kind]').forEach((btn) => {
@@ -2238,7 +2284,13 @@ class GlobeApp {
                 ? ` · θ = ${this.state.theta} K`
                 : ` · ${this.state.level} hPa`)
             : '';
-        set('cb-title', field.name + coordSuffix + modeSuffix);
+        // Make the active climatology period explicit in the colorbar title
+        // when it's not the default 1991–2020 — so a user can tell at a glance
+        // which 30-year window they're viewing.
+        const periodSuffix = (this.state.climatologyPeriod !== 'default')
+            ? ` · ${this.state.climatologyPeriod}`
+            : '';
+        set('cb-title', field.name + coordSuffix + periodSuffix + modeSuffix);
         set('cb-units', field.units);
     }
 
