@@ -20,7 +20,7 @@ import { greatCircleArc, latLonToVec3, gcDistanceKm } from './arc.js';
 import { loadManifest, onFieldLoaded, isReady as era5Ready, prefetchField, cachedMonth, registerClamps } from './era5.js';
 import { decompose, annualMeanFrom, aggregatedDecompositionRange } from './decompose.js';
 import { HoverProbe } from './hover.js';
-import { computeMassStreamfunction, computeAngularMomentum, computeBruntVaisala } from './diagnostics.js';
+import { computeMassStreamfunction, computeAngularMomentum, computeBruntVaisala, computeGeostrophicWind } from './diagnostics.js';
 import { computeEPFlux } from './ep_flux.js';
 import { computeLorenzCycle } from './lorenz.js';
 import { buildMBudgetView } from './m_budget.js';
@@ -185,6 +185,7 @@ class GlobeApp {
             // tile lands so the diagnostic sharpens as the cache warms up.
             const diagNeeds = (s.xsDiag === 'psi'    && name === 'v')
                            || (s.xsDiag === 'M'      && name === 'u')
+                           || (s.xsDiag === 'ug'     && name === 'z')
                            || (s.xsDiag === 'N2'     && name === 't')
                            || (s.xsDiag === 'epflux' && (name === 'u' || name === 'v' || name === 'w' || name === 't'))
                            || (s.xsDiag === 'mbudget' && (name === 'u' || name === 'v' || name === 'w'))
@@ -1037,6 +1038,8 @@ class GlobeApp {
                 for (const L of LEVELS) prefetchField('v', { level: L });
             } else if (patch.xsDiag === 'M') {
                 for (const L of LEVELS) prefetchField('u', { level: L });
+            } else if (patch.xsDiag === 'ug') {
+                for (const L of LEVELS) prefetchField('z', { level: L });
             } else if (patch.xsDiag === 'N2') {
                 for (const L of LEVELS) prefetchField('t', { level: L });
             } else if (patch.xsDiag === 'epflux') {
@@ -1286,6 +1289,14 @@ class GlobeApp {
                 effCmap = 'viridis';
                 zm.contourInterval = 0.5;            // 10⁹ m²/s
             }
+        } else if (xsDiag === 'ug') {
+            zm = computeGeostrophicWind(month);
+            if (!zm) {
+                zm = computeZonalMean(field, month);
+            } else {
+                effCmap = 'RdBu_r';                  // signed: westerly + / easterly −
+                zm.contourInterval = 10;             // m/s, matches u contour
+            }
         } else if (xsDiag === 'N2') {
             zm = computeBruntVaisala(month);
             if (!zm) {
@@ -1386,6 +1397,7 @@ class GlobeApp {
                 const desc = {
                     psi: 'ψ(φ, p) = (2π a cos φ / g) · ∫₀ᵖ [v] dp',
                     M:   'M = (Ω a cos φ + u) · a cos φ · from zonal-mean u',
+                    ug:  '[u_g] = -(g/f) · ∂[z]/∂y · masked |φ| < 5° (f → 0)',
                     N2:  'N² = -(g²p / R T θ) · ∂θ/∂p · static stability',
                     epflux: 'F = (-a cos φ [u′v′], a cos φ f [v′θ′] / ∂[θ]/∂p) — stationary eddies; shading: ∇·F (m s⁻¹ day⁻¹)',
                     mbudget: '∂[M]/∂t = -∇·([v][M]) - ∇·([v*M*]) + torque · stationary eddies only · 1° monthly clim',

@@ -155,6 +155,103 @@ export function computeAngularMomentum(month) {
 }
 
 /**
+ * Zonal-mean geostrophic zonal wind on the (lat, p) panel.
+ *
+ *   [u_g](φ, p) = -(g/f) · ∂[z]/∂y
+ *
+ * where [z] is the zonal-mean geopotential height (m) and f = 2Ω·sinφ.
+ *
+ * Pedagogically pairs with the field section of `u`: students see where the
+ * actual zonal wind matches u_g (free-troposphere mid-latitudes — beautiful
+ * geostrophy) and where it doesn't (boundary layer, jet entrance/exit
+ * regions, deep tropics where f → 0). The 200 hPa subtropical-jet maximum
+ * shows up cleanly in u_g as a closed contour package.
+ *
+ * Deep tropics (|φ| < 5°) are masked: f → 0 makes u_g singular and the
+ * geostrophic approximation fundamentally invalid there.
+ */
+export function computeGeostrophicWind(month) {
+    const { nlat, nlon } = GRID;
+    const nlev = LEVELS.length;
+
+    // Zonal-mean z(k, lat) — z tile is already in meters after era5.js's
+    // m²/s² → m unit conversion at load time, so we work directly with height.
+    const zZm = new Float32Array(nlev * nlat);
+    for (let k = 0; k < nlev; k++) {
+        const tile = cachedMonth('z', month, LEVELS[k]);
+        if (!tile) return null;
+        for (let i = 0; i < nlat; i++) {
+            let s = 0, n = 0;
+            const row = i * nlon;
+            for (let j = 0; j < nlon; j++) {
+                const v = tile[row + j];
+                if (Number.isFinite(v)) { s += v; n += 1; }
+            }
+            zZm[k * nlat + i] = n > 0 ? s / n : NaN;
+        }
+    }
+
+    // Coriolis f(lat). No clamping needed because we mask the tropical band
+    // explicitly below.
+    const fCor = new Float32Array(nlat);
+    for (let i = 0; i < nlat; i++) {
+        const lat = 90 - i;
+        fCor[i] = 2 * OMEGA * Math.sin(lat * D2R);
+    }
+
+    // u_g(k, lat) = -(g/f) · d[z]/dy via centred finite-difference in y = a·dφ.
+    const ug = new Float32Array(nlev * nlat);
+    let absMax = 0;
+    for (let k = 0; k < nlev; k++) {
+        for (let i = 0; i < nlat; i++) {
+            const lat = 90 - i;
+            // Mask the geostrophic-invalid tropical band.
+            if (Math.abs(lat) < 5) {
+                ug[k * nlat + i] = NaN;
+                continue;
+            }
+            const iN = Math.max(0, i - 1);
+            const iS = Math.min(nlat - 1, i + 1);
+            const dy_m = A_EARTH * (iS - iN) * D2R;
+            const zN = zZm[k * nlat + iN];
+            const zS = zZm[k * nlat + iS];
+            if (!Number.isFinite(zN) || !Number.isFinite(zS) || dy_m === 0) {
+                ug[k * nlat + i] = NaN;
+                continue;
+            }
+            const dz_dy = (zN - zS) / dy_m;            // m/m, positive northward
+            const u_g = -G * dz_dy / fCor[i];           // m/s
+            ug[k * nlat + i] = u_g;
+            if (Math.abs(u_g) > absMax) absMax = Math.abs(u_g);
+        }
+    }
+
+    // Symmetric range so the divergent colormap centres on zero. Cap at the
+    // 95th percentile to keep occasional polar spikes from squashing the jet
+    // signal.
+    const finite = [];
+    for (const v of ug) if (Number.isFinite(v)) finite.push(Math.abs(v));
+    finite.sort((a, b) => a - b);
+    const cap = finite.length > 0 ? finite[Math.floor(0.95 * (finite.length - 1))] : absMax;
+    let vmax = Math.min(absMax, cap);
+    if (vmax < 5)   vmax = 5;
+    if (vmax > 100) vmax = 100;
+
+    return {
+        kind: 'zonal',
+        type: 'pl',
+        values: ug,
+        vmin: -vmax,
+        vmax:  vmax,
+        levels: LEVELS.slice(),
+        name: 'Geostrophic zonal wind [u_g]',
+        units: 'm s⁻¹',
+        isSymmetric: true,
+        isDiagnostic: true,
+    };
+}
+
+/**
  * Brunt–Väisälä frequency squared on the (lat, p) zonal-mean grid.
  *
  *   N² = (g / θ) · ∂θ/∂z = -(g² p / (R T θ)) · ∂θ/∂p
