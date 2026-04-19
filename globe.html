@@ -1196,14 +1196,14 @@
         </section>
 
         <section class="control-group">
-            <div class="field-label">Display</div>
+            <h4>Climatology</h4>
             <div class="segmented kind-seg" id="kind-toggle">
                 <button type="button" data-kind="mean" class="active" title="Climatological mean">Mean</button>
                 <button type="button" data-kind="std" title="Inter-annual standard deviation across the 30-year window — highlights ENSO, monsoon variability, storm-track regions">±1σ variability</button>
             </div>
             <div style="margin-top:10px;">
-                <label class="field-label" for="climo-period-select" style="margin-bottom:4px; font-size:0.66rem;">Climatology period</label>
-                <select id="climo-period-select" title="Which 30-year window to use as the active climatology — drives the Mean tile, the ±1σ tile, and the decomposition reference. Use the Anomaly reference dropdown below to compare against a different period.">
+                <label class="field-label" for="climo-period-select" style="margin-bottom:4px; font-size:0.66rem;">Period</label>
+                <select id="climo-period-select" title="Which 30-year window to use as the active climatology — drives the Mean tile, the ±1σ tile, and the decomposition reference. Use the Reference period dropdown below to compare against a different window.">
                     <option value="default">1991–2020 (current)</option>
                     <option value="1961-1990">1961–1990 (previous)</option>
                 </select>
@@ -1211,7 +1211,7 @@
         </section>
 
         <section class="control-group" id="decompose-group">
-            <div class="field-label">Decomposition</div>
+            <h4>Decomposition</h4>
             <div class="segmented decomp-seg">
                 <button type="button" data-decompose="total" class="active">Total</button>
                 <button type="button" data-decompose="zonal">Zonal</button>
@@ -1219,8 +1219,8 @@
                 <button type="button" data-decompose="anomaly">Anomaly</button>
             </div>
             <div style="margin-top:10px;">
-                <label class="field-label" for="ref-period-select" style="margin-bottom:4px; font-size:0.66rem;">Anomaly reference</label>
-                <select id="ref-period-select" title="In Anomaly mode, compare against this period instead of the same field's annual mean. Picks up climate-change signal directly.">
+                <label class="field-label" for="ref-period-select" style="margin-bottom:4px; font-size:0.66rem;">Reference period</label>
+                <select id="ref-period-select" title="Drives three things: in Anomaly mode → climate-change anomaly (current minus reference); in ±1σ mode → Δσ (current σ minus reference σ); when Compare is on (Map view) → the period painted on the right half of the swipe.">
                     <option value="default">Self · 12-month mean</option>
                     <option value="1961-1990">vs. 1961–1990 (climate change)</option>
                 </select>
@@ -1228,23 +1228,22 @@
         </section>
 
         <section class="control-group" id="compare-group">
-            <div class="field-label">Compare periods (Map view)</div>
+            <h4>Compare <span style="color:var(--paper-dim); font-weight:400; text-transform:none; letter-spacing:0; font-size:0.7rem;">— Map view</span></h4>
             <label class="check">
                 <input type="checkbox" id="toggle-compare">
-                Swipe-compare with σ comparison / Anomaly-reference period
+                Swipe-compare against the Reference period
             </label>
             <p class="field-help" style="margin-top:6px; line-height:1.45;">
-                Drag anywhere on the map to slide the divider. Left half = active climatology, right half = the period chosen in the σ comparison / Anomaly reference dropdown. Works for Mean (raw / zonal / eddy) and ±1σ; toggling Compare suppresses the climate-change anomaly and Δσ transforms (the swipe IS the comparison).
+                Drag anywhere on the map to slide the divider. Left half = active climatology, right half = Reference period. Works for Mean (raw / zonal / eddy) and ±1σ; toggling Compare suppresses the climate-change anomaly and Δσ transforms (the swipe IS the comparison).
             </p>
-        </section>
-
-        <section class="control-group" id="map-center-group" hidden>
-            <label class="field-label" for="map-center-slider">
-                Central meridian: <span id="map-center-value">0°</span>
-            </label>
-            <input id="map-center-slider" class="slider" type="range"
-                   min="-180" max="180" step="1" value="0"
-                   aria-label="central meridian">
+            <div id="map-center-group" hidden style="margin-top:10px;">
+                <label class="field-label" for="map-center-slider" style="font-size:0.66rem; margin-bottom:4px;">
+                    Central meridian: <span id="map-center-value">0°</span>
+                </label>
+                <input id="map-center-slider" class="slider" type="range"
+                       min="-180" max="180" step="1" value="0"
+                       aria-label="central meridian">
+            </div>
         </section>
 
         <section class="control-group">
