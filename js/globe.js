@@ -1594,13 +1594,14 @@ class GlobeApp {
             }
         }
 
-        const current = decompose(f.values, GRID.nlat, GRID.nlon, mode, annualMean);
+        const { field, level, vCoord, theta } = this.state;
+        const fieldClamp = FIELDS[field]?.clamp ?? null;
+        const current = decompose(f.values, GRID.nlat, GRID.nlon, mode, annualMean, { clamp: fieldClamp });
 
         // Cross-month aggregation for stable colorbar — without this the range
         // shifts every time the user scrubs months because the local extrema
         // change. We pull from getField (uses cached tiles for raw fields,
         // existing _wspdCache/_mseCache/_pvCache entries for derived).
-        const { field, level, vCoord, theta } = this.state;
         const range = aggregatedDecompositionRange(
             mode,
             (m) => {
@@ -1608,7 +1609,7 @@ class GlobeApp {
                 return fm.isReal ? fm : null;
             },
             GRID.nlat, GRID.nlon, annualMean,
-            { symmetric: !!FIELDS[field]?.symmetric },
+            { symmetric: !!FIELDS[field]?.symmetric, clamp: fieldClamp },
         );
         if (range) {
             current.vmin = range.vmin;

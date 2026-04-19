@@ -45,6 +45,25 @@ function symStatsOf(values) {
     return { vmin: -a, vmax: a };
 }
 
+/** Symmetric range around zero, clipped at the `clamp.hi` percentile of |v|.
+ *  Mirrors the per-tile percentile clamp in era5.js but applied to anomaly /
+ *  eddy fields, where below-ground extrapolation under high terrain produces
+ *  a few extreme cells that would otherwise blow out the colorbar (e.g. T at
+ *  500 hPa anomaly running to ±29 K when the real signal is ±2 K). */
+function symStatsOfClamped(values, hi) {
+    const finite = [];
+    for (let i = 0; i < values.length; i++) {
+        const v = values[i];
+        if (Number.isFinite(v)) finite.push(Math.abs(v));
+    }
+    if (finite.length === 0) return { vmin: -1, vmax: 1 };
+    finite.sort((a, b) => a - b);
+    const idx = Math.max(0, Math.min(finite.length - 1, Math.floor(hi * (finite.length - 1))));
+    let a = finite[idx];
+    if (!Number.isFinite(a) || a < EPS) a = 1;
+    return { vmin: -a, vmax: a };
+}
+
 /** Per-latitude mean of the field (Float32Array, length nlat). NaN-safe. */
 function zonalMean(values, nlat, nlon) {
     const zm = new Float32Array(nlat);
@@ -74,7 +93,12 @@ function zonalMean(values, nlat, nlon) {
  *              called without annualMean), in which case values is the
  *              original input passed through unchanged.
  */
-export function decompose(values, nlat, nlon, mode, annualMean = null) {
+export function decompose(values, nlat, nlon, mode, annualMean = null, opts = {}) {
+    // `opts.clamp = { hi }` triggers percentile clamping on the symmetric
+    // range for eddy / anomaly modes — see symStatsOfClamped().
+    const clampHi = opts.clamp?.hi;
+    const symStats = (out) => clampHi != null ? symStatsOfClamped(out, clampHi) : symStatsOf(out);
+
     if (mode === 'total' || !mode) {
         const s = statsOf(values);
         return { values, vmin: s.vmin, vmax: s.vmax, symmetric: false, empty: false };
@@ -103,7 +127,7 @@ export function decompose(values, nlat, nlon, mode, annualMean = null) {
                 out[row + j] = Number.isFinite(v) && Number.isFinite(mean) ? (v - mean) : NaN;
             }
         }
-        const s = symStatsOf(out);
+        const s = symStats(out);
         return { values: out, vmin: s.vmin, vmax: s.vmax, symmetric: true, empty: false };
     }
 
@@ -119,7 +143,7 @@ export function decompose(values, nlat, nlon, mode, annualMean = null) {
             const m = annualMean[i];
             out[i] = Number.isFinite(v) && Number.isFinite(m) ? (v - m) : NaN;
         }
-        const s = symStatsOf(out);
+        const s = symStats(out);
         return { values: out, vmin: s.vmin, vmax: s.vmax, symmetric: true, empty: false };
     }
 
@@ -149,7 +173,10 @@ export function aggregatedDecompositionRange(mode, fetchMonth, nlat, nlon, annua
     // `opts.symmetric` lets callers force ±max pooling for fields whose
     // FIELDS metadata declares `symmetric: true` even in zonal mode (where
     // decompose() itself wouldn't otherwise centre the range on zero).
-    const { symmetric: forceSymmetric = false } = opts;
+    // `opts.clamp` propagates the per-field percentile clamp into per-month
+    // decompose() calls for symmetric modes — keeps the pooled range from
+    // being blown out by topography spikes in any single month.
+    const { symmetric: forceSymmetric = false, clamp = null } = opts;
     if (mode === 'total' || !mode) return null;
     let vmin = Infinity, vmax = -Infinity;
     let absMax = 0;
@@ -159,7 +186,7 @@ export function aggregatedDecompositionRange(mode, fetchMonth, nlat, nlon, annua
     for (let m = 1; m <= 12; m++) {
         const f = fetchMonth(m);
         if (!f || !f.values) continue;
-        const d = decompose(f.values, nlat, nlon, mode, annualMean);
+        const d = decompose(f.values, nlat, nlon, mode, annualMean, { clamp });
         if (d.empty) continue;       // anomaly without annualMean
         if (d.symmetric) symmetric = true;
         if (symmetric) {
