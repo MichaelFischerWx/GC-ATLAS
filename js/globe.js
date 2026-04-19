@@ -400,6 +400,9 @@ class GlobeApp {
                             Math.min(MAP_W / 2 - margin, hits[0].point.x));
             const split = (worldX / MAP_W) + 0.5;
             this.applyCompareSplit(split);
+            // Hide the "Drag to compare" hint after the first drag so it
+            // stops blocking data. Reset on toggle-off / -on.
+            this._compareDragged = true;
         };
         el.addEventListener('pointerdown', (e) => {
             if (this.state.viewMode !== 'map') return;
@@ -981,11 +984,17 @@ class GlobeApp {
         if (rEl.hidden) rEl.hidden = false;
         // Drag handle pinned to the divider — same screen-x as the line, plus
         // a small clamp so it stays on-canvas at extreme split positions.
+        // Hide it once the user has dragged at least once (so it stops
+        // blocking data); shows again on next toggle-off → toggle-on.
         if (hEl) {
-            const handleX = Math.max(offsetX + 56,
-                Math.min(offsetX + canvasRect.width - 56, offsetX + splitX));
-            hEl.style.left = handleX + 'px';
-            if (hEl.hidden) hEl.hidden = false;
+            if (this._compareDragged) {
+                if (!hEl.hidden) hEl.hidden = true;
+            } else {
+                const handleX = Math.max(offsetX + 56,
+                    Math.min(offsetX + canvasRect.width - 56, offsetX + splitX));
+                hEl.style.left = handleX + 'px';
+                if (hEl.hidden) hEl.hidden = false;
+            }
         }
     }
 
@@ -1264,6 +1273,20 @@ class GlobeApp {
 
     // ── state updates ─────────────────────────────────────────────────
     setState(patch) {
+        // viewMode is a heavyweight transition (re-parents overlay groups,
+        // rebuilds coastlines/graticule for the new projection, repositions
+        // wind+contour overlays). Route through setViewMode so any caller
+        // can drive a view change via state — without it the visible groups
+        // wouldn't update. Hop early so 'viewMode' isn't double-applied by
+        // the Object.assign below.
+        if ('viewMode' in patch && patch.viewMode !== this.state.viewMode) {
+            this.setViewMode(patch.viewMode);
+            // Sync the view-toggle button row.
+            const map = { globe: 'view-globe', map: 'view-map', orbit: 'view-orbit' };
+            document.querySelectorAll('.view-toggle button').forEach(b =>
+                b.classList.toggle('active', b.id === map[patch.viewMode]));
+            delete patch.viewMode;
+        }
         Object.assign(this.state, patch);
         if ('field' in patch) {
             // Manual colorbar override almost certainly doesn't apply to the
@@ -2247,9 +2270,11 @@ class GlobeApp {
                     if (!this.compareRefPeriod() && this.state.climatologyPeriod !== '1961-1990') {
                         patch.referencePeriod = '1961-1990';
                     }
+                    // Reset the "first drag" hint flag so the handle hint shows
+                    // again the next time the user toggles compare on.
+                    this._compareDragged = false;
                 }
                 this.setState(patch);
-                // Sync the reference dropdown if we auto-picked something.
                 if (patch.referencePeriod) {
                     const refSel = document.getElementById('ref-period-select');
                     if (refSel) refSel.value = patch.referencePeriod;
