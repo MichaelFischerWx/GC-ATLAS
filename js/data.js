@@ -182,9 +182,31 @@ function computeMSEFromTiles(tT, tZ, tQ) {
 
 function computeDerived(name, month, level, coord, theta) {
     if (name === 'wspd') {
+        // Opportunistically fill _wspdCache for any month whose u/v ingredients
+        // are already cached — keeps the aggregate colorbar stable as the user
+        // scrubs months instead of re-shifting per visit. Mirrors the MSE fix.
+        for (let m = 1; m <= 12; m++) {
+            const k = `${coord}:${coord === 'theta' ? theta : level}:${m}`;
+            if (_wspdCache.has(k)) continue;
+            let uVals, vVals;
+            if (coord === 'theta') {
+                const uI = fieldOnIsentrope('u', m, theta);
+                const vI = fieldOnIsentrope('v', m, theta);
+                if (!uI || !vI) continue;
+                uVals = uI.values; vVals = vI.values;
+            } else {
+                const u = cachedMonth('u', m, level);
+                const v = cachedMonth('v', m, level);
+                if (!u || !v) continue;
+                uVals = u; vVals = v;
+            }
+            _wspdCache.set(k, magnitudeFromUV(uVals, vVals));
+        }
+
         const key = `${coord}:${coord === 'theta' ? theta : level}:${month}`;
         let entry = _wspdCache.get(key);
         if (!entry) {
+            // Current month's u/v aren't cached yet → trigger fetch via requestEra5.
             let uVals, vVals;
             if (coord === 'theta') {
                 const uI = fieldOnIsentrope('u', month, theta);
@@ -358,6 +380,26 @@ function interpolateColumnToIsentrope(valsByLev, thetasByLev, theta0) {
  *  aggregated across every cached month at the same (name, θ₀) so scrubbing
  *  months doesn't rescale the colormap. */
 function fieldOnIsentrope(name, month, theta0) {
+    // Opportunistic fill across all 12 months — needed for the cross-month
+    // aggregate to be complete and the colorbar to stay stable as you scrub.
+    for (let m = 1; m <= 12; m++) {
+        const ck = `${name}:${m}:${theta0}`;
+        if (_isenFieldCache.has(ck)) continue;
+        // Need t at every level (for θ cube) AND the field tile at every level.
+        let allHere = true;
+        for (const L of LEVELS) {
+            if (!cachedMonth('t', m, L) || !cachedMonth(name, m, L)) {
+                allHere = false; break;
+            }
+        }
+        if (!allHere) continue;
+        const thetas = buildThetaCube(m);
+        if (!thetas) continue;
+        const valsByLev = [];
+        for (const L of LEVELS) valsByLev.push(cachedMonth(name, m, L));
+        _isenFieldCache.set(ck, interpolateColumnToIsentrope(valsByLev, thetas, theta0));
+    }
+
     const key = `${name}:${month}:${theta0}`;
     let entry = _isenFieldCache.get(key);
     if (!entry) {
@@ -436,10 +478,44 @@ export function invalidateIsentropicCache() {
 export const invalidatePVCache = invalidateIsentropicCache;
 
 function computePVOnIsentrope(month, theta0) {
-    const cacheKey = `${month}:${theta0}`;
-    const cached = _pvCache.get(cacheKey);
-    if (cached?.ready) return cached;
+    // Opportunistic fill: compute PV for any month whose t/u/v tiles are all
+    // already cached, so the aggregate colorbar stays stable as the user scrubs.
+    for (let m = 1; m <= 12; m++) {
+        const ck = `${m}:${theta0}`;
+        if (_pvCache.has(ck) && _pvCache.get(ck).ready) continue;
+        let allHere = true;
+        for (const L of LEVELS) {
+            if (!cachedMonth('t', m, L) || !cachedMonth('u', m, L) || !cachedMonth('v', m, L)) {
+                allHere = false; break;
+            }
+        }
+        if (!allHere) continue;
+        _pvComputeRaw(m, theta0);
+    }
 
+    const cacheKey = `${month}:${theta0}`;
+    let cached = _pvCache.get(cacheKey);
+    if (!cached?.ready) {
+        cached = _pvComputeRaw(month, theta0);
+        if (!cached) return null;
+    }
+    // Aggregate range across every cached month at this θ₀.
+    let vmin = Infinity, vmax = -Infinity;
+    for (const [k, v] of _pvCache) {
+        if (!k.endsWith(`:${theta0}`) || !v.ready) continue;
+        if (v.vmin < vmin) vmin = v.vmin;
+        if (v.vmax > vmax) vmax = v.vmax;
+    }
+    return {
+        ...cached,
+        vmin: Number.isFinite(vmin) ? vmin : cached.vmin,
+        vmax: Number.isFinite(vmax) ? vmax : cached.vmax,
+    };
+}
+
+/** PV computation for a single (month, θ₀) — returns the cached entry or null
+ *  if any required tile is missing. Caches its result. */
+function _pvComputeRaw(month, theta0) {
     const thetas = buildThetaCube(month);
     if (!thetas) return null;
 
@@ -497,20 +573,9 @@ function computePVOnIsentrope(month, theta0) {
         vmax: Math.min(interp.vmax,  DISPLAY_CAP),
         shape: [nlat, nlon], isReal: true, ready: true,
     };
-    _pvCache.set(cacheKey, result);
-
-    // Aggregate range across every cached month at this θ₀.
-    let vmin = Infinity, vmax = -Infinity;
-    for (const [k, v] of _pvCache) {
-        if (!k.endsWith(`:${theta0}`)) continue;
-        if (v.vmin < vmin) vmin = v.vmin;
-        if (v.vmax > vmax) vmax = v.vmax;
-    }
-    return {
-        ...result,
-        vmin: Number.isFinite(vmin) ? vmin : result.vmin,
-        vmax: Number.isFinite(vmax) ? vmax : result.vmax,
-    };
+    _pvCache.set(`${month}:${theta0}`, result);
+    return result;
+    // (Cross-month aggregation now happens in computePVOnIsentrope.)
 }
 
 /** True if ERA5 has the listed level (or sl fields w/ no level required). */
