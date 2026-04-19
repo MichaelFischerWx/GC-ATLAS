@@ -576,14 +576,29 @@ class GlobeApp {
         this.mapMeshRef.position.z = 0.001;   // win z-fight with the active plane
         this.mapMeshRef.visible = false;
         this.mapGroup.add(this.mapMeshRef);
-        // Divider line. Lives at z=0.002 (just in front of the reference plane)
-        // so it always reads on top. Position.x slides with the split.
+        // Divider — amber to match the equator and cross-section arc styling
+        // (same accent palette across all "lat/lon line" overlays). A wider
+        // semi-transparent halo behind a bright thin core sells the line at
+        // 1px linewidth without a Line2 dependency.
         const splitLineGeom = new THREE.BufferGeometry().setFromPoints([
             new THREE.Vector3(0, -MAP_H / 2, 0.002),
             new THREE.Vector3(0,  MAP_H / 2, 0.002),
         ]);
+        const splitLineHaloGeom = new THREE.BufferGeometry().setFromPoints([
+            new THREE.Vector3(0, -MAP_H / 2, 0.0019),
+            new THREE.Vector3(0,  MAP_H / 2, 0.0019),
+        ]);
         this.splitLine = new THREE.Line(splitLineGeom,
-            new THREE.LineBasicMaterial({ color: 0xe6efe9, transparent: true, opacity: 0.95 }));
+            new THREE.LineBasicMaterial({ color: 0xE8C26A, transparent: true, opacity: 0.95 }));
+        // Halo: a wider faint amber glow behind the core line for visibility.
+        // Two extra strokes at slight x-offsets give the look of a thicker line.
+        const haloMat = new THREE.LineBasicMaterial({ color: 0xE8C26A, transparent: true, opacity: 0.35 });
+        this.splitLineHaloA = new THREE.Line(splitLineHaloGeom.clone(), haloMat);
+        this.splitLineHaloB = new THREE.Line(splitLineHaloGeom.clone(), haloMat);
+        this.splitLineHaloA.position.x = -0.008;
+        this.splitLineHaloB.position.x =  0.008;
+        this.splitLine.add(this.splitLineHaloA);
+        this.splitLine.add(this.splitLineHaloB);
         this.splitLine.visible = false;
         this.mapGroup.add(this.splitLine);
 
@@ -814,7 +829,10 @@ class GlobeApp {
         // Single shared material so applyCoastlineContrast() can flip colour
         // without rebuilding geometry on every cmap change.
         this.coastMat = new THREE.LineBasicMaterial({ transparent: true });
-        const R = 1.003;
+        // R=1.005 → map-mode z = 0.00125, in front of the swipe-compare
+        // reference plane (z=0.001) so coastlines stay visible on the right
+        // half. Original 1.003 put them behind the overlay.
+        const R = 1.005;
         const seamJump = MAP_W / 2;  // flag if consecutive x-coords wrap the map
         const isMap = this.state.viewMode === 'map';
         for (const ring of this.coastFeatures) {
@@ -1672,44 +1690,58 @@ class GlobeApp {
         const f = getField(field, { month, level, coord: vCoord, theta, kind });
         this.setLoadingOverlay(!f.isReal);
 
-        // In ±1σ mode we usually show 'total' (decomposing a stddev field is
-        // meaningless), but if the user has chosen a non-active reference
-        // period in ±1σ, route through the anomaly path so it computes
-        // σ(active period) − σ(reference period) — the Δσ "has variability
-        // changed?" view. Skip when the underlying tile isn't actually a std
-        // (derived / θ-coord fall back to mean).
-        const isStdAnomaly = kind === 'std' && f.kind === 'std'
-                          && this.state.referencePeriod !== 'default'
-                          && this.state.referencePeriod !== this.state.climatologyPeriod;
-        const effMode = (kind === 'std')
-            ? (isStdAnomaly ? 'anomaly' : 'total')
-            : mode;
+        // Decide the effective decomposition for paint. Three transforms
+        // can override the user-selected mode:
+        //   • ±1σ + non-active reference period → 'anomaly' (Δσ display)
+        //   • compareMode → suppress Δσ AND climate-change anomaly so the
+        //     swipe IS the comparison (raw vs raw, or zonal vs zonal,
+        //     or eddy vs eddy — apples-to-apples on each side)
+        //   • ±1σ otherwise → 'total' (decomposing a stddev is meaningless)
+        const compareOn = !!this.state.compareMode;
+        const wantsStdAnomaly = kind === 'std' && f.kind === 'std'
+                             && this.state.referencePeriod !== 'default'
+                             && this.state.referencePeriod !== this.state.climatologyPeriod;
+        const isStdAnomaly = wantsStdAnomaly && !compareOn;
+        let effMode;
+        if (kind === 'std') {
+            effMode = isStdAnomaly ? 'anomaly' : 'total';
+        } else if (compareOn && mode === 'anomaly') {
+            effMode = 'total';   // compare and anomaly are alternative ways to see differences
+        } else {
+            effMode = mode;
+        }
         const decomp = this.applyDecomposition(f, effMode);
         // Δσ is a difference field → divergent palette. Plain ±1σ stays magma.
         const effCmap = (kind === 'std' && !isStdAnomaly)
             ? 'magma'
             : (decomp.symmetric ? 'RdBu_r' : cmap);
 
-        // Swipe-compare: in Mean+Total mode with a genuine alternate reference
-        // period selected, fetch the same field at that period and pool its
-        // range with the active so both halves share a colorbar (visual
-        // differences = real differences, not normalisation artefacts).
-        // Decomposition modes are intentionally restricted to Total for v1
-        // so the swipe compares like-with-like; richer per-mode compares
-        // (Eddy↔Eddy, Anomaly↔Anomaly) are an obvious follow-up.
+        // Swipe-compare: with a genuine alternate reference period selected,
+        // fetch the same field at that period and pool its range with the
+        // active so both halves share a colorbar (visual differences = real
+        // differences, not normalisation artefacts). Works in any kind
+        // (mean / std) and any effMode (total / zonal / eddy). When effMode
+        // is not 'total', the reference side independently decomposes its
+        // own data with the same mode (apples-to-apples per side).
         const compareRef = this.state.compareMode ? this.compareRefPeriod() : null;
-        const compareActive = !!(compareRef && effMode === 'total' && kind === 'mean');
+        const compareActive = !!compareRef;
         let refValues = null;
         if (compareActive) {
             const refField = getField(field, {
                 month, level, coord: vCoord, theta,
-                kind: 'mean', period: compareRef,
+                kind, period: compareRef,
             });
             if (refField.isReal) {
-                refValues = refField.values;
-                // Pool the cmap range only when the user hasn't pinned it.
-                if (this.state.userVmin == null) decomp.vmin = Math.min(decomp.vmin, refField.vmin);
-                if (this.state.userVmax == null) decomp.vmax = Math.max(decomp.vmax, refField.vmax);
+                let refDec;
+                if (effMode === 'total' || !effMode) {
+                    refDec = { values: refField.values, vmin: refField.vmin, vmax: refField.vmax };
+                } else {
+                    // Each side runs decompose() against its own data.
+                    refDec = decompose(refField.values, GRID.nlat, GRID.nlon, effMode);
+                }
+                refValues = refDec.values;
+                if (this.state.userVmin == null) decomp.vmin = Math.min(decomp.vmin, refDec.vmin);
+                if (this.state.userVmax == null) decomp.vmax = Math.max(decomp.vmax, refDec.vmax);
             }
         }
 
@@ -2114,16 +2146,27 @@ class GlobeApp {
             });
         }
         // Swipe-compare toggle (Map view) — drives the right-half overlay.
-        // Auto-switches to Map view when enabled in Globe / Orbit so the
-        // user actually sees the comparison.
+        // Auto-switches to Map view when enabled, and auto-picks 1961–1990
+        // as the reference period if the user hasn't set one, so the right
+        // half is never blank on first toggle.
         const compareToggle = document.getElementById('toggle-compare');
         if (compareToggle) {
             compareToggle.checked = this.state.compareMode;
             compareToggle.addEventListener('change', (e) => {
                 const on = !!e.target.checked;
                 const patch = { compareMode: on };
-                if (on && this.state.viewMode !== 'map') patch.viewMode = 'map';
+                if (on) {
+                    if (this.state.viewMode !== 'map') patch.viewMode = 'map';
+                    if (!this.compareRefPeriod() && this.state.climatologyPeriod !== '1961-1990') {
+                        patch.referencePeriod = '1961-1990';
+                    }
+                }
                 this.setState(patch);
+                // Sync the reference dropdown if we auto-picked something.
+                if (patch.referencePeriod) {
+                    const refSel = document.getElementById('ref-period-select');
+                    if (refSel) refSel.value = patch.referencePeriod;
+                }
             });
         }
         // Mean | ±1σ display toggle. ±1σ disables decomposition (no anomaly
