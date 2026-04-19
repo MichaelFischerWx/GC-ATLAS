@@ -72,6 +72,14 @@ datasets:
         cds_name: potential_vorticity
         long:    Potential vorticity
         units:   K m2 kg-1 s-1
+      - short: chi
+        cds_name: velocity_potential
+        long:    Velocity potential
+        units:   m2 s-1
+      - short: psi
+        cds_name: stream_function
+        long:    Stream function
+        units:   m2 s-1
 
   # ── 2D surface / single-level fields ────────────────────────
   single_levels:

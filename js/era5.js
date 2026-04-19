@@ -226,5 +226,9 @@ function applyUnitConversions(name, values) {
     } else if (name === 'd' || name === 'vo') {
         // s⁻¹ → 10⁻⁵ s⁻¹ (gen-circ teaching unit; mid-trop ζ scales ~10⁻⁵)
         for (let i = 0; i < n; i++) values[i] *= 1e5;
+    } else if (name === 'chi' || name === 'psi') {
+        // m² s⁻¹ → 10⁶ m² s⁻¹ ("Mm²/s") for readability. 200 hPa ψ peaks
+        // at ±100 Mm²/s; χ peaks ~±10 Mm²/s.
+        for (let i = 0; i < n; i++) values[i] /= 1e6;
     }
 }
