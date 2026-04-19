@@ -1091,6 +1091,14 @@
         </section>
 
         <section class="control-group">
+            <div class="field-label">Display</div>
+            <div class="segmented kind-seg" id="kind-toggle">
+                <button type="button" data-kind="mean" class="active" title="Climatological mean (1991–2020)">Mean</button>
+                <button type="button" data-kind="std" title="Inter-annual standard deviation across 30 years — highlights ENSO, monsoon variability, storm-track regions">±1σ variability</button>
+            </div>
+        </section>
+
+        <section class="control-group" id="decompose-group">
             <div class="field-label">Decomposition</div>
             <div class="segmented decomp-seg">
                 <button type="button" data-decompose="total" class="active">Total</button>

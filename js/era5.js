@@ -12,8 +12,10 @@ const cache = new Map();        // key -> { values } | 'pending'
 const subscribers = new Set();  // fns(name, month, level)
 
 const pad = (n) => String(n).padStart(2, '0');
-const keyOf = (name, month, level) =>
-    level == null ? `${name}|sl|${month}` : `${name}|${level}|${month}`;
+// Cache key includes 'std' / 'mean' kind so a single field can hold both
+// variability and climatology tiles concurrently for the same (month, level).
+const keyOf = (name, month, level, kind = 'mean') =>
+    level == null ? `${name}|sl|${month}|${kind}` : `${name}|${level}|${month}|${kind}`;
 
 /** Load the top-level manifest; returns true if it was found. */
 export async function loadManifest() {
@@ -55,12 +57,14 @@ export function availableLevels(name) {
     return r && r.meta.levels ? r.meta.levels.slice() : null;
 }
 
-/** Cached-only lookup — no fetch side-effect. Returns Float32Array | null. */
-export function cachedMonth(name, month, level = null) {
+/** Cached-only lookup — no fetch side-effect. Returns Float32Array | null.
+ *  kind defaults to 'mean'; pass 'std' for the inter-annual standard-deviation
+ *  variant (only meaningful for fields whose tile dir was built with std). */
+export function cachedMonth(name, month, level = null, kind = 'mean') {
     const r = resolveField(name);
     if (!r) return null;
     const useLevel = r.meta.levels ? level : null;
-    const hit = cache.get(keyOf(name, month, useLevel));
+    const hit = cache.get(keyOf(name, month, useLevel, kind));
     return hit && hit !== 'pending' ? hit.values : null;
 }
 
@@ -68,16 +72,14 @@ export function cachedMonth(name, month, level = null) {
  * Return the field synchronously if cached; otherwise kick off a fetch,
  * return null, and notify subscribers when the tile arrives.
  */
-export function requestField(name, { month, level } = {}) {
+export function requestField(name, { month, level, kind = 'mean' } = {}) {
     const r = resolveField(name);
     if (!r) return null;
     const useLevel = r.meta.levels ? level : null;
-    const key = keyOf(name, month, useLevel);
+    const key = keyOf(name, month, useLevel, kind);
     const hit = cache.get(key);
     if (hit && hit !== 'pending') {
-        // Aggregate range across every cached month at this (field, level) so
-        // the colorbar stays fixed while the user scrubs / auto-plays months.
-        const agg = aggregateStats(name, useLevel);
+        const agg = aggregateStats(name, useLevel, kind);
         return {
             values: hit.values,
             vmin: agg ? agg.vmin : hit.vmin,
@@ -87,23 +89,29 @@ export function requestField(name, { month, level } = {}) {
             long_name: r.meta.long_name,
             lat_descending: r.meta.lat_descending,
             isReal: true,
+            kind,
         };
     }
-    if (!hit) fetchTile(name, r.group, r.meta, month, useLevel);
+    if (!hit) fetchTile(name, r.group, r.meta, month, useLevel, kind);
     return null;
 }
 
-async function fetchTile(name, group, meta, month, level) {
-    const key = keyOf(name, month, level);
+async function fetchTile(name, group, meta, month, level, kind = 'mean') {
+    const key = keyOf(name, month, level, kind);
     cache.set(key, 'pending');
+    const stdPrefix = kind === 'std' ? 'std_' : '';
     const url = meta.levels
-        ? `${TILE_BASE}/${group}/${name}/${level}_${pad(month)}.bin`
-        : `${TILE_BASE}/${group}/${name}/${pad(month)}.bin`;
+        ? `${TILE_BASE}/${group}/${name}/${stdPrefix}${level}_${pad(month)}.bin`
+        : `${TILE_BASE}/${group}/${name}/${stdPrefix}${pad(month)}.bin`;
     try {
         const resp = await fetch(url);
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         const buf = await resp.arrayBuffer();
         const values = new Float32Array(buf);
+        // Apply the same unit conversions to std tiles — std of a linear
+        // transform is the same transform of the std (modulo abs sign), so
+        // multiplying by 1000 (q) or dividing by DAY (radiative fluxes) is
+        // valid for both mean and std variants.
         applyUnitConversions(name, values);
         // Per-tile colorbar range. For most fields we use the true min/max,
         // but a few (vorticity, divergence, vertical velocity, precipitation)
@@ -156,13 +164,15 @@ function percentileBounds(values, lo, hi) {
 
 export function onFieldLoaded(fn) { subscribers.add(fn); return () => subscribers.delete(fn); }
 
-/** Aggregate vmin/vmax across every cached month at (name, level). Returns null if none yet. */
-function aggregateStats(name, level) {
+/** Aggregate vmin/vmax across every cached month at (name, level, kind).
+ *  Returns null if none cached yet. */
+function aggregateStats(name, level, kind = 'mean') {
     const prefix = level == null ? `${name}|sl|` : `${name}|${level}|`;
+    const suffix = `|${kind}`;
     let vmin = Infinity, vmax = -Infinity, any = false;
     for (const [key, val] of cache.entries()) {
         if (!val || typeof val !== 'object') continue;
-        if (!key.startsWith(prefix)) continue;
+        if (!key.startsWith(prefix) || !key.endsWith(suffix)) continue;
         if (val.vmin < vmin) vmin = val.vmin;
         if (val.vmax > vmax) vmax = val.vmax;
         any = true;
@@ -171,13 +181,16 @@ function aggregateStats(name, level) {
 }
 
 /** Kick off fetches for many months in parallel (for the "play" seasonal cycle). */
-export function prefetchField(name, { level = null, months = [1,2,3,4,5,6,7,8,9,10,11,12] } = {}) {
+export function prefetchField(name, { level = null, months = [1,2,3,4,5,6,7,8,9,10,11,12], kind = 'mean' } = {}) {
     const r = resolveField(name);
     if (!r) return;
+    // Skip std prefetch if the manifest entry doesn't advertise std tiles —
+    // the file just won't exist and we'd 404 every prefetch.
+    if (kind === 'std' && r.meta.has_std === false) return;
     const useLevel = r.meta.levels ? level : null;
     for (const m of months) {
-        const key = keyOf(name, m, useLevel);
-        if (!cache.has(key)) fetchTile(name, r.group, r.meta, m, useLevel);
+        const key = keyOf(name, m, useLevel, kind);
+        if (!cache.has(key)) fetchTile(name, r.group, r.meta, m, useLevel, kind);
     }
 }
 

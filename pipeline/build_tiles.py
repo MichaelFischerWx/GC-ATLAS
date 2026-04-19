@@ -110,7 +110,14 @@ def process(nc_path: Path, res: float, force: bool) -> None:
     da = ds[var_name]
 
     LOG.info("clim  %s  (%d times → 12 months of year)", short, da.sizes.get("time", -1))
-    clim = da.groupby("time.month").mean("time", keep_attrs=True)
+    grouped = da.groupby("time.month")
+    clim = grouped.mean("time", keep_attrs=True)
+    # Inter-annual standard deviation per month-of-year — captures variability
+    # like ENSO (peak in central tropical Pacific SST/u/T), monsoon strength
+    # variability (Indian Ocean, Sahel), and storm-track interannual changes.
+    # Only meaningful when there are enough years (we have 30) — for invariant
+    # fields like 'oro' the std collapses to ~0 which is fine.
+    std = grouped.std("time", keep_attrs=True)
 
     # Downsample spatially.
     lat_name = "latitude"  if "latitude"  in clim.dims else "lat"
@@ -119,6 +126,8 @@ def process(nc_path: Path, res: float, force: bool) -> None:
     if step > 1:
         clim = clim.isel({lat_name: slice(None, None, step),
                           lon_name: slice(None, None, step)})
+        std  = std .isel({lat_name: slice(None, None, step),
+                          lon_name: slice(None, None, step)})
 
     lev_name = "pressure_level" if "pressure_level" in clim.dims else (
         "level" if "level" in clim.dims else None)
@@ -126,6 +135,8 @@ def process(nc_path: Path, res: float, force: bool) -> None:
 
     vmin = float(clim.min())
     vmax = float(clim.max())
+    std_vmin = float(std.min())
+    std_vmax = float(std.max())
     nlat = clim.sizes[lat_name]
     nlon = clim.sizes[lon_name]
 
@@ -143,10 +154,14 @@ def process(nc_path: Path, res: float, force: bool) -> None:
             for month in range(1, 13):
                 arr = clim.sel({lev_name: lev, "month": month}).values.astype("<f4")
                 (out_dir / f"{lev}_{month:02d}.bin").write_bytes(arr.tobytes())
+                arrS = std.sel({lev_name: lev, "month": month}).values.astype("<f4")
+                (out_dir / f"std_{lev}_{month:02d}.bin").write_bytes(arrS.tobytes())
     else:
         for month in range(1, 13):
             arr = clim.sel(month=month).values.astype("<f4")
             (out_dir / f"{month:02d}.bin").write_bytes(arr.tobytes())
+            arrS = std.sel(month=month).values.astype("<f4")
+            (out_dir / f"std_{month:02d}.bin").write_bytes(arrS.tobytes())
 
     meta = {
         "var": short,
@@ -161,15 +176,18 @@ def process(nc_path: Path, res: float, force: bool) -> None:
         "lon_last":  float(lon_vals[-1]),
         "vmin": vmin,
         "vmax": vmax,
+        "std_vmin": std_vmin,
+        "std_vmax": std_vmax,
+        "has_std":  True,
         "levels": levels,
         "resolution_deg": res,
         "source_nc": nc_path.name,
     }
     (out_dir / "meta.json").write_text(json.dumps(meta, indent=2))
 
-    LOG.info("done  %s/%s  %dx%d  levels=%s  range=[%.3g, %.3g]",
+    LOG.info("done  %s/%s  %dx%d  levels=%s  range=[%.3g, %.3g]  std-range=[%.3g, %.3g]",
              group, short, nlat, nlon,
-             "n/a" if levels is None else len(levels), vmin, vmax)
+             "n/a" if levels is None else len(levels), vmin, vmax, std_vmin, std_vmax)
 
 
 def write_manifest() -> None:

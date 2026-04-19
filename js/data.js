@@ -79,11 +79,18 @@ function pendingField() {
  * tiles to the requested θ surface per column; tropics near low θ and the
  * upper stratosphere near high θ return NaN where θ₀ is out of range.
  */
-export function getField(name, { month = 1, level = 500, coord = 'pressure', theta = 330 } = {}) {
+export function getField(name, { month = 1, level = 500, coord = 'pressure', theta = 330, kind = 'mean' } = {}) {
     const meta = FIELDS[name];
     if (!meta) throw new Error(`unknown field: ${name}`);
 
     const isenMode = (coord === 'theta') && meta.type === 'pl';
+
+    // Derived / isentropic fields don't have pre-computed std tiles —
+    // computing std-of-derived from std-of-components requires assumptions
+    // about correlation that aren't generally valid. Fall back to mean for
+    // those paths in std mode (and tag the return so UI can surface this).
+    const stdUnsupported = kind === 'std' && (meta.derived || isenMode);
+    const effKind = stdUnsupported ? 'mean' : kind;
 
     // Derived fields (e.g. wind speed, PV) — compute from component tiles.
     if (meta.derived) {
@@ -95,6 +102,8 @@ export function getField(name, { month = 1, level = 500, coord = 'pressure', the
                 lats: LATS, lons: LONS,
                 ...meta,
                 isReal: d.isReal,
+                kind: 'mean',
+                stdUnavailable: stdUnsupported,
             };
         }
     } else if (isenMode) {
@@ -108,10 +117,12 @@ export function getField(name, { month = 1, level = 500, coord = 'pressure', the
                 long_name: meta.name,
                 units: meta.units,
                 isReal: true,
+                kind: 'mean',
+                stdUnavailable: stdUnsupported,
             };
         }
     } else {
-        const era = requestEra5(name, { month, level });
+        const era = requestEra5(name, { month, level, kind: effKind });
         if (era) {
             return {
                 values: era.values,
@@ -124,6 +135,7 @@ export function getField(name, { month = 1, level = 500, coord = 'pressure', the
                 long_name: meta.name,
                 units: meta.units,
                 isReal: true,
+                kind: effKind,
             };
         }
     }
@@ -134,6 +146,7 @@ export function getField(name, { month = 1, level = 500, coord = 'pressure', the
         lats: LATS, lons: LONS,
         ...meta,
         isReal: false,
+        kind: effKind,
     };
 }
 

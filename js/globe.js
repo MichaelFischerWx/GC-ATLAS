@@ -93,6 +93,7 @@ class GlobeApp {
             showSun: true,
             windMode: 'particles',   // 'off' | 'particles' | 'barbs'
             decompose: 'total',      // 'total' | 'zonal' | 'eddy' | 'anomaly'
+            kind: 'mean',            // 'mean' (climatology) | 'std' (inter-annual ±1σ)
             mapCenterLon: 0,         // central meridian for the flat map (-180..180)
             showXSection: false,
             showLorenz: false,
@@ -249,19 +250,33 @@ class GlobeApp {
         let startPt = null;
 
         const pointToLatLon = (e) => {
-            if (this.state.viewMode !== 'globe' || !this.globe) return null;
             const rect = el.getBoundingClientRect();
             ndc.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
             ndc.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
             raycaster.setFromCamera(ndc, this.camera);
-            const hits = raycaster.intersectObject(this.globe);
-            if (hits.length === 0) return null;
-            const local = this.globeGroup.worldToLocal(hits[0].point.clone());
-            const n = local.length() || 1;
-            return {
-                lat: Math.asin(local.y / n) * 180 / Math.PI,
-                lon: Math.atan2(local.x, local.z) * 180 / Math.PI,
-            };
+
+            if (this.state.viewMode === 'globe') {
+                if (!this.globe) return null;
+                const hits = raycaster.intersectObject(this.globe);
+                if (hits.length === 0) return null;
+                const local = this.globeGroup.worldToLocal(hits[0].point.clone());
+                const n = local.length() || 1;
+                return {
+                    lat: Math.asin(local.y / n) * 180 / Math.PI,
+                    lon: Math.atan2(local.x, local.z) * 180 / Math.PI,
+                };
+            }
+            if (this.state.viewMode === 'map') {
+                if (!this.mapMesh) return null;
+                const hits = raycaster.intersectObject(this.mapMesh);
+                if (hits.length === 0) return null;
+                let lon = hits[0].point.x * (360 / MAP_W) + this.state.mapCenterLon;
+                const lat = hits[0].point.y * (180 / MAP_H);
+                lon = ((lon + 180) % 360 + 360) % 360 - 180;
+                if (lat < -90 || lat > 90) return null;
+                return { lat, lon };
+            }
+            return null;   // orbit view doesn't support clicks
         };
 
         // Alt+click: drop a cluster of Lagrangian parcels at the clicked
@@ -288,14 +303,17 @@ class GlobeApp {
 
         el.addEventListener('pointerdown', (e) => {
             if (!e.shiftKey) return;
-            if (this.state.viewMode !== 'globe') return;
+            // Globe + map both support shift-drag arcs; orbit view doesn't.
+            if (this.state.viewMode === 'orbit') return;
             // No arcs in diagnostic modes — they're inherently zonal.
             if (this.state.xsDiag !== 'field') return;
             const p = pointToLatLon(e);
             if (!p) return;
             dragging = true;
             startPt = p;
-            this.controls.enabled = false;        // pause OrbitControls for this drag
+            // Pause OrbitControls (globe) or the map drag-pan handler so the
+            // arc draw doesn't fight the camera/projection drag.
+            this.controls.enabled = false;
             e.preventDefault();
             el.setPointerCapture(e.pointerId);
             // Open the cross-section panel if it isn't already.
@@ -330,6 +348,10 @@ class GlobeApp {
         let lastX = 0;
         el.addEventListener('pointerdown', (e) => {
             if (this.state.viewMode !== 'map') return;
+            // Skip the pan if the user is shift-dragging (cross-section arc),
+            // alt-clicking (Lagrangian parcels — globe-only but cheap to guard
+            // here too), or interacting with a panel above the canvas.
+            if (e.shiftKey || e.altKey) return;
             dragging = true;
             lastX = e.clientX;
             el.setPointerCapture(e.pointerId);
@@ -1088,9 +1110,10 @@ class GlobeApp {
 
         // Eagerly prefetch all 12 months at this (field, level) so the
         // colorbar stabilises quickly once any tile lands.
-        if ('field' in patch || 'level' in patch || 'vCoord' in patch || 'theta' in patch) {
+        if ('field' in patch || 'level' in patch || 'vCoord' in patch || 'theta' in patch || 'kind' in patch) {
             const isen = this.state.vCoord === 'theta';
-            prefetchField(this.state.field, { level: this.state.level });
+            const kind = this.state.kind;
+            prefetchField(this.state.field, { level: this.state.level, kind });
             prefetchField('u', { level: this.state.level });
             prefetchField('v', { level: this.state.level });
             // MSE depends on t, z, q at the chosen level (and at every level
@@ -1402,13 +1425,17 @@ class GlobeApp {
     }
 
     updateField() {
-        const { field, level, theta, vCoord, month, cmap, decompose: mode } = this.state;
-        const f = getField(field, { month, level, coord: vCoord, theta });
+        const { field, level, theta, vCoord, month, cmap, decompose: mode, kind } = this.state;
+        const f = getField(field, { month, level, coord: vCoord, theta, kind });
         this.setLoadingOverlay(!f.isReal);
 
-        // Apply decomposition mode (total / zonal / eddy / anomaly).
-        const decomp = this.applyDecomposition(f, mode);
-        const effCmap = decomp.symmetric ? 'RdBu_r' : cmap;
+        // In ±1σ mode we always show 'total' (decomposing a stddev field is
+        // meaningless) and force a sequential colormap since std ≥ 0.
+        const effMode = (kind === 'std') ? 'total' : mode;
+        const decomp = this.applyDecomposition(f, effMode);
+        const effCmap = (kind === 'std')
+            ? 'magma'
+            : (decomp.symmetric ? 'RdBu_r' : cmap);
         // Stash what's currently painted on the globe for hover sampling.
         this._displayedValues = decomp.values;
 
@@ -1684,6 +1711,17 @@ class GlobeApp {
                     b.classList.toggle('active', b === btn));
                 this.setState({ decompose: mode });
             });
+        });
+        // Mean | ±1σ display toggle. ±1σ disables decomposition (no anomaly
+        // of stddev) and forces a sequential colormap.
+        document.querySelectorAll('[data-kind]').forEach((btn) => {
+            btn.addEventListener('click', () => {
+                const kind = btn.getAttribute('data-kind');
+                document.querySelectorAll('[data-kind]').forEach((b) =>
+                    b.classList.toggle('active', b === btn));
+                const decomp = document.getElementById('decompose-group');
+                if (decomp) decomp.classList.toggle('is-disabled', kind === 'std');
+                this.setState({ kind });
         });
         // Central-meridian slider (map view only)
         const mapCenterSlider = document.getElementById('map-center-slider');
