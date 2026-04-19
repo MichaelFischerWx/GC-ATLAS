@@ -94,6 +94,7 @@ class GlobeApp {
             windMode: 'particles',   // 'off' | 'particles' | 'barbs'
             decompose: 'total',      // 'total' | 'zonal' | 'eddy' | 'anomaly'
             kind: 'mean',            // 'mean' (climatology) | 'std' (inter-annual ±1σ)
+            referencePeriod: 'default',  // 'default' (1991-2020) | '1961-1990' | …
             mapCenterLon: 0,         // central meridian for the flat map (-180..180)
             showXSection: false,
             showLorenz: false,
@@ -125,10 +126,19 @@ class GlobeApp {
         // get colorbars based on their bulk distribution rather than isolated
         // topographic / convective extremes.
         registerClamps(FIELDS);
-        onFieldLoaded(({ name, month, level }) => {
+        onFieldLoaded(({ name, month, level, period }) => {
             const s = this.state;
             const levelMatches = (level == null || level === s.level);
             const monthMatches = (month === s.month);
+            // Reference-period tile arrival → only matters for the active
+            // climate-change-anomaly view at the matching field/month/level.
+            if (period && period !== 'default') {
+                if (s.referencePeriod === period && s.decompose === 'anomaly'
+                        && name === s.field && monthMatches) {
+                    this.updateField();
+                }
+                return;   // don't trigger any of the default-period logic
+            }
             const isenActive  = (s.vCoord === 'theta');
             // θ-coord rendering needs T at every level (for the θ cube) plus
             // the chosen field at every level. PV additionally needs u, v.
@@ -1110,10 +1120,28 @@ class GlobeApp {
 
         // Eagerly prefetch all 12 months at this (field, level) so the
         // colorbar stabilises quickly once any tile lands.
+        // Reference-period change: lazy-load the manifest, then prefetch the
+        // current field at all 12 months for the reference period.
+        if ('referencePeriod' in patch && patch.referencePeriod !== 'default') {
+            (async () => {
+                const ok = await loadManifest(patch.referencePeriod);
+                if (!ok) {
+                    console.warn(`[ref-period] manifest unavailable for ${patch.referencePeriod} — falling back to self-anomaly`);
+                    return;
+                }
+                prefetchField(this.state.field, { level: this.state.level, period: patch.referencePeriod });
+                if (this.state.decompose === 'anomaly') this.updateField();
+            })();
+        }
         if ('field' in patch || 'level' in patch || 'vCoord' in patch || 'theta' in patch || 'kind' in patch) {
             const isen = this.state.vCoord === 'theta';
             const kind = this.state.kind;
             prefetchField(this.state.field, { level: this.state.level, kind });
+            // If user is in climate-change-anomaly mode, also prefetch the
+            // reference period's tiles for the new field/level.
+            if (this.state.referencePeriod !== 'default') {
+                prefetchField(this.state.field, { level: this.state.level, period: this.state.referencePeriod });
+            }
             prefetchField('u', { level: this.state.level });
             prefetchField('v', { level: this.state.level });
             // MSE depends on t, z, q at the chosen level (and at every level
@@ -1483,8 +1511,8 @@ class GlobeApp {
             return decompose(f.values, GRID.nlat, GRID.nlon, 'total');
         }
 
-        // Anomaly mode needs an annual-mean reference field. θ-coord makes
-        // this ill-defined (each month re-derives the surface), so fall back.
+        // Anomaly mode reference: either climate-change (same month from a
+        // different base period) or seasonal (12-month annual mean of self).
         let annualMean = null;
         if (mode === 'anomaly') {
             if (this.state.vCoord === 'theta') {
@@ -1492,12 +1520,25 @@ class GlobeApp {
             }
             const meta = FIELDS[this.state.field] || {};
             const useLevel = meta.type === 'pl' ? this.state.level : null;
-            annualMean = meta.derived === true
-                ? null
-                : annualMeanFrom(
-                    (m) => cachedMonth(this.state.field, m, useLevel),
-                    GRID.nlat, GRID.nlon,
-                );
+            const refPeriod = this.state.referencePeriod;
+            if (refPeriod !== 'default' && !meta.derived) {
+                // Climate-change anomaly: same month from reference period.
+                const refField = getField(this.state.field, {
+                    month: this.state.month,
+                    level: this.state.level,
+                    coord: this.state.vCoord,
+                    theta: this.state.theta,
+                    period: refPeriod,
+                });
+                annualMean = refField.isReal ? refField.values : null;
+            } else {
+                annualMean = meta.derived === true
+                    ? null
+                    : annualMeanFrom(
+                        (m) => cachedMonth(this.state.field, m, useLevel),
+                        GRID.nlat, GRID.nlon,
+                    );
+            }
         }
 
         const current = decompose(f.values, GRID.nlat, GRID.nlon, mode, annualMean);
@@ -1712,6 +1753,14 @@ class GlobeApp {
                 this.setState({ decompose: mode });
             });
         });
+        // Anomaly reference period — chooses what Anomaly mode compares against.
+        const refSel = document.getElementById('ref-period-select');
+        if (refSel) {
+            refSel.value = this.state.referencePeriod;
+            refSel.addEventListener('change', () => {
+                this.setState({ referencePeriod: refSel.value });
+            });
+        }
         // Mean | ±1σ display toggle. ±1σ disables decomposition (no anomaly
         // of stddev) and forces a sequential colormap.
         document.querySelectorAll('[data-kind]').forEach((btn) => {

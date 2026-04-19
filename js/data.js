@@ -81,7 +81,7 @@ function pendingField() {
  * tiles to the requested θ surface per column; tropics near low θ and the
  * upper stratosphere near high θ return NaN where θ₀ is out of range.
  */
-export function getField(name, { month = 1, level = 500, coord = 'pressure', theta = 330, kind = 'mean' } = {}) {
+export function getField(name, { month = 1, level = 500, coord = 'pressure', theta = 330, kind = 'mean', period = 'default' } = {}) {
     const meta = FIELDS[name];
     if (!meta) throw new Error(`unknown field: ${name}`);
 
@@ -93,6 +93,11 @@ export function getField(name, { month = 1, level = 500, coord = 'pressure', the
     // those paths in std mode (and tag the return so UI can surface this).
     const stdUnsupported = kind === 'std' && (meta.derived || isenMode);
     const effKind = stdUnsupported ? 'mean' : kind;
+    // Reference-period (non-default) only supported for raw fields. Derived /
+    // isentropic paths collapse back to default period so existing diagnostic
+    // logic keeps working.
+    const periodUnsupported = period !== 'default' && (meta.derived || isenMode);
+    const effPeriod = periodUnsupported ? 'default' : period;
 
     // Derived fields (e.g. wind speed, PV) — compute from component tiles.
     if (meta.derived) {
@@ -124,7 +129,7 @@ export function getField(name, { month = 1, level = 500, coord = 'pressure', the
             };
         }
     } else {
-        const era = requestEra5(name, { month, level, kind: effKind });
+        const era = requestEra5(name, { month, level, kind: effKind, period: effPeriod });
         if (era) {
             return {
                 values: era.values,
@@ -138,6 +143,7 @@ export function getField(name, { month = 1, level = 500, coord = 'pressure', the
                 units: meta.units,
                 isReal: true,
                 kind: effKind,
+                period: effPeriod,
             };
         }
     }
@@ -149,6 +155,7 @@ export function getField(name, { month = 1, level = 500, coord = 'pressure', the
         ...meta,
         isReal: false,
         kind: effKind,
+        period: effPeriod,
     };
 }
 

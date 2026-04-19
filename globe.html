@@ -1106,6 +1106,13 @@
                 <button type="button" data-decompose="eddy">Eddy</button>
                 <button type="button" data-decompose="anomaly">Anomaly</button>
             </div>
+            <div style="margin-top:10px;">
+                <label class="field-label" for="ref-period-select" style="margin-bottom:4px; font-size:0.66rem;">Anomaly reference</label>
+                <select id="ref-period-select" title="In Anomaly mode, compare against this period instead of the same field's annual mean. Picks up climate-change signal directly.">
+                    <option value="default">Self · 12-month mean</option>
+                    <option value="1961-1990">vs. 1961–1990 (climate change)</option>
+                </select>
+            </div>
         </section>
 
         <section class="control-group" id="map-center-group" hidden>
