@@ -500,8 +500,8 @@
                 </div>
                 <div class="feature-kicker">Core · Phase 2</div>
                 <h3 class="feature-title">Live Cross-Sections</h3>
-                <p class="feature-desc">Click-drag any great-circle line on the globe and get the vertical cross-section in a side panel. Equator-circling line → zonal-mean. Watch the Hadley cell, the jet core, the tropopause fold appear in a click.</p>
-                <span class="feature-phase soon">Next</span>
+                <p class="feature-desc">Shift-drag any great-circle arc on the globe (or zonal-mean by default) and get the vertical cross-section in a side panel. Field, mass streamfunction, angular momentum, geostrophic wind, Brunt–Väisälä, EP flux, plus Q / H / M budgets. The Hadley cell, jet core, and tropopause fold appear in a click.</p>
+                <span class="feature-phase ready">Live</span>
             </article>
 
             <!-- 3. Decomposition -->
@@ -511,8 +511,8 @@
                 </div>
                 <div class="feature-kicker">Core · Phase 2</div>
                 <h3 class="feature-title">Decomposition Toggles</h3>
-                <p class="feature-desc">Total · zonal-mean · eddy. Stationary · transient. Rotational · divergent. Climatology · anomaly. One click to peel the circulation apart the way the textbook does.</p>
-                <span class="feature-phase soon">Next</span>
+                <p class="feature-desc">Total · zonal-mean · stationary eddy · seasonal anomaly · climate-change anomaly (1991–2020 vs 1961–1990). Plus a ±1σ variability mode that swaps mean tiles for inter-annual standard deviation. One click to peel the circulation apart the way the textbook does. Transient-eddy decomposition pending the daily-data unlock.</p>
+                <span class="feature-phase ready">Live</span>
             </article>
 
             <!-- 4. Derived diagnostics -->
@@ -522,8 +522,8 @@
                 </div>
                 <div class="feature-kicker">Diagnostic · Phase 3</div>
                 <h3 class="feature-title">Derived Diagnostic Layers</h3>
-                <p class="feature-desc">Mass streamfunction, EP flux and its divergence, Plumb wave-activity flux, 2–8 day bandpass storm tracks, PV on isentropes, Lorenz energy cycle, MSE, angular momentum. The full diagnostic toolkit, precomputed and served.</p>
-                <span class="feature-phase soon">Roadmap</span>
+                <p class="feature-desc">Mass streamfunction, EP flux + ∇·F (stationary), PV on isentropes, Lorenz energy cycle, moist static energy, angular momentum, velocity potential χ, streamfunction ψ, geostrophic wind, Brunt–Väisälä N². The full classical toolkit, precomputed and served. Transient-eddy diagnostics and Plumb wave-activity flux pending the daily-data unlock.</p>
+                <span class="feature-phase ready">Live</span>
             </article>
 
             <!-- 5. Lagrangian -->
@@ -533,8 +533,8 @@
                 </div>
                 <div class="feature-kicker">Signature · Phase 3</div>
                 <h3 class="feature-title">Lagrangian Mode</h3>
-                <p class="feature-desc">Seed parcels anywhere on the globe and watch them advect on the climatological 3D wind. Release a cluster at 15°N, 200 hPa in July and ride the monsoon anticyclone. The most visceral way to teach the overturning.</p>
-                <span class="feature-phase soon">Roadmap</span>
+                <p class="feature-desc">Alt-click anywhere on the globe to seed parcels and watch them advect on the climatological 3D wind. Release a cluster at 15°N, 200 hPa in July and ride the monsoon anticyclone. The most visceral way to teach the overturning.</p>
+                <span class="feature-phase ready">Live</span>
             </article>
 
             <!-- 6. Budgets -->
@@ -544,8 +544,8 @@
                 </div>
                 <div class="feature-kicker">Diagnostic · Phase 3</div>
                 <h3 class="feature-title">Budget Viewers</h3>
-                <p class="feature-desc">Pick a latitude band or region. Get the closed (to reanalysis precision) energy budget, moisture budget (P–E + transport convergence), and angular-momentum budget with mountain and friction torques. Global constraints as numbers, not hand-waves.</p>
-                <span class="feature-phase soon">Roadmap</span>
+                <p class="feature-desc">Q-budget (moisture transport + E−P), H-budget (energy / MSE transport + surface and TOA fluxes), and M-budget (angular momentum with mountain + friction torques) — all live as cross-section diagnostics, with mass-weighted column means and vertical integrals. Latitude-band / regional closed-number viewers are next.</p>
+                <span class="feature-phase soon">Mostly live</span>
             </article>
 
             <!-- 7. Variability -->
@@ -555,8 +555,8 @@
                 </div>
                 <div class="feature-kicker">Diagnostic · Phase 4</div>
                 <h3 class="feature-title">Variability & Composites</h3>
-                <p class="feature-desc">Toggle ±1σ envelopes to see where the climatology is robust vs where interannual variance rules. ENSO, NAO, SAM, MJO composite anomalies. "The" jet is really a PDF — show it.</p>
-                <span class="feature-phase horizon">Horizon</span>
+                <p class="feature-desc">±1σ envelopes are live for every field — see where the climatology is robust vs where interannual variance rules. "The" jet is really a PDF, now visible. ENSO, NAO, SAM, MJO composite anomalies still pending the daily-data unlock.</p>
+                <span class="feature-phase soon">Partial</span>
             </article>
 
             <!-- 8. Guided tours -->
@@ -577,8 +577,41 @@
                 </div>
                 <div class="feature-kicker">Research · Phase 4</div>
                 <h3 class="feature-title">Model &amp; Obs Overlays</h3>
-                <p class="feature-desc">Swap ERA5 for a CMIP6 historical or SSP585 end-of-century climatology — every field becomes a climate-change anomaly. Overlay observations (GPCP, CERES, OISST, ASCAT). Held-Suarez and paleoclimate runs for context.</p>
+                <p class="feature-desc">Swap ERA5 for a CMIP6 historical or SSP585 end-of-century climatology — every field becomes a climate-change anomaly. Overlay observations (GPCP, CERES, OISST, ASCAT). Held-Suarez and paleoclimate runs for context. The 1961–1990 reference period for in-reanalysis climate-change anomalies is in flight.</p>
                 <span class="feature-phase horizon">Horizon</span>
+            </article>
+
+            <!-- 10. Three view modes -->
+            <article class="feature-card" style="--accent: var(--sky)">
+                <div class="feature-icon">
+                    <svg viewBox="0 0 24 24"><circle cx="6" cy="12" r="3.2"/><rect x="11" y="9" width="7" height="6" rx="0.8"/><circle cx="20.5" cy="6" r="1.6"/><path d="M19 7.5l-2.5 2.5"/></svg>
+                </div>
+                <div class="feature-kicker">Core · Live</div>
+                <h3 class="feature-title">Three Views, One Base State</h3>
+                <p class="feature-desc">Globe (3D, OrbitControls, axial tilt), Map (equirectangular, drag-to-pan, central-meridian slider, shift-drag for great-circle arcs), and Orbit — a heliocentric "viewer from space" with sun, ecliptic, solstice/equinox markers, day/night terminator, and a subsolar marker. Same field, three pedagogical roles.</p>
+                <span class="feature-phase ready">Live</span>
+            </article>
+
+            <!-- 11. Vertical coordinate -->
+            <article class="feature-card" style="--accent: var(--violet)">
+                <div class="feature-icon">
+                    <svg viewBox="0 0 24 24"><path d="M5 4v16M5 8h14M5 12h14M5 16h14"/><path d="M19 7c-1 1-1 2 0 3M19 11c-1 1-1 2 0 3M19 15c-1 1-1 2 0 3" opacity="0.7"/></svg>
+                </div>
+                <div class="feature-kicker">Core · Live</div>
+                <h3 class="feature-title">Pressure or θ</h3>
+                <p class="feature-desc">Toggle the vertical coordinate between standard pressure surfaces (12 levels, 10–1000 hPa) and isentropic θ surfaces (8 levels, 280–700 K). Adiabatic motion stays on its θ surface, so the right coordinate is on tap for the dynamics being taught.</p>
+                <span class="feature-phase ready">Live</span>
+            </article>
+
+            <!-- 12. GIF export -->
+            <article class="feature-card" style="--accent: var(--ochre)">
+                <div class="feature-icon">
+                    <svg viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="12" rx="1.5"/><path d="M3 9h18M7 6v12M17 6v12"/><path d="M11 11l3 1.5-3 1.5z" fill="currentColor"/></svg>
+                </div>
+                <div class="feature-kicker">Teaching · Live</div>
+                <h3 class="feature-title">GIF Export</h3>
+                <p class="feature-desc">Export an animated GIF of the current view — a single frame, the full annual cycle, or any month range. Drops straight into a slide deck or Canvas page, no screen-capture chain required.</p>
+                <span class="feature-phase ready">Live</span>
             </article>
 
         </div>
@@ -636,7 +669,7 @@
         GC-ATLAS · A teaching atlas by <a href="https://michaelfischerwx.github.io/TC-ATLAS/" target="_blank" rel="noopener">Dr. Michael Fischer</a>, University of Miami.
     </div>
     <div class="footer-meta">
-        ERA5 reanalysis · 1991–2020 climatology · under construction
+        ERA5 reanalysis · 1991–2020 climatology · 1961–1990 reference period in flight
     </div>
 </footer>
 
