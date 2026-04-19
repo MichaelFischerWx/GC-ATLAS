@@ -37,9 +37,13 @@ const D2R     = Math.PI / 180;
 const DAY_SEC = 86400;
 const DIV_UNIT = 1;              // m s⁻¹ day⁻¹  (typical |∇·F| ≈ 1–10)
 
-// Subsample arrow positions so the panel doesn't get cluttered.
-// One arrow every N latitudes, every level.
-const ARROW_LAT_STRIDE = 8;
+// Subsample arrow positions so the panel doesn't get cluttered. One arrow
+// every ARROW_LAT_STRIDE latitudes, and every ARROW_LEV_STRIDE levels.
+// Values tuned for the standard panel; the renderer further trims arrows
+// shorter than a dust threshold so the visible density stays sensible at
+// any panel size.
+const ARROW_LAT_STRIDE = 12;
+const ARROW_LEV_STRIDE = 2;
 
 /** NaN-safe zonal mean of a (nlat × nlon) tile, returning Float32Array(nlat). */
 function zonalMean(tile, nlat, nlon) {

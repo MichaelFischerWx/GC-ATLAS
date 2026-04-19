@@ -357,6 +357,9 @@ function drawArcAxes(ctx, x0, y0, w, h, zm) {
         ctx.fillText('hPa', 0, 0);
         ctx.restore();
     } else {
+        // Arc 1D line — keep simple corner labels for now (arc plots are
+        // bilinear samples, no panel zonal-mean). Same nice-ticks treatment
+        // could go here if needed later.
         ctx.fillText(zm.vmax.toFixed(0), x0 - 5 * dpr, y0 + 4 * dpr);
         ctx.fillText(zm.vmin.toFixed(0), x0 - 5 * dpr, y0 + h - 4 * dpr);
     }
@@ -444,20 +447,127 @@ function drawLine(ctx, x0, y0, w, h, zm) {
     const span = (vmax - vmin) || 1;
     const dpr = zm._dpr || 1;
 
-    ctx.strokeStyle = 'rgba(255,255,255,0.18)';
+    // Faint horizontal gridlines at "nice" tick positions.
+    const ticks = niceTicks(vmin, vmax, 5);
+    ctx.save();
+    ctx.lineWidth = Math.max(1, dpr * 0.75);
+    for (const t of ticks) {
+        const y = y0 + h - ((t - vmin) / span) * h;
+        if (Math.abs(t) < 1e-9) {
+            // Emphasised zero reference line — solid, brighter.
+            ctx.strokeStyle = 'rgba(232, 194, 106, 0.55)';   // amber
+            ctx.setLineDash([]);
+        } else {
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.10)';
+            ctx.setLineDash([3 * dpr, 3 * dpr]);
+        }
+        ctx.beginPath();
+        ctx.moveTo(x0, y + 0.5);
+        ctx.lineTo(x0 + w, y + 0.5);
+        ctx.stroke();
+    }
+    // Vertical quarter marks (latitude grid).
+    ctx.setLineDash([]);
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.10)';
+    for (const t of [0.25, 0.5, 0.75]) {
+        const x = Math.round(x0 + t * w) + 0.5;
+        ctx.beginPath();
+        ctx.moveTo(x, y0);
+        ctx.lineTo(x, y0 + h);
+        ctx.stroke();
+    }
+    ctx.restore();
+
+    // Plot frame.
+    ctx.strokeStyle = 'rgba(255,255,255,0.22)';
     ctx.lineWidth = dpr;
     ctx.strokeRect(x0 + 0.5, y0 + 0.5, w, h);
 
-    ctx.strokeStyle = '#2DBDA0';
-    ctx.lineWidth = 2 * dpr;
-    ctx.beginPath();
-    for (let i = 0; i < nlat; i++) {
-        const lat = 90 - i;
-        const x = x0 + ((lat + 90) / 180) * w;
-        const y = y0 + h - ((values[i] - vmin) / span) * h;
-        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    // Series rendering. Multi-series mode (zm.series) draws each one with its
+    // own color + a small legend; single-series falls back to the emerald default.
+    const series = zm.series && zm.series.length > 0
+        ? zm.series
+        : [{ values, color: '#2DBDA0', label: zm.name }];
+
+    for (const s of series) {
+        ctx.strokeStyle = s.color;
+        ctx.lineWidth = 2 * dpr;
+        ctx.beginPath();
+        let started = false;
+        for (let i = 0; i < nlat; i++) {
+            const v = s.values[i];
+            if (!Number.isFinite(v)) { started = false; continue; }
+            const lat = 90 - i;
+            const x = x0 + ((lat + 90) / 180) * w;
+            const y = y0 + h - ((v - vmin) / span) * h;
+            if (!started) { ctx.moveTo(x, y); started = true; }
+            else          ctx.lineTo(x, y);
+        }
+        ctx.stroke();
     }
-    ctx.stroke();
+
+    // Legend (only if multi-series). Top-right of plot, compact two-column
+    // layout so it doesn't crowd the curves.
+    if (zm.series && zm.series.length > 1) {
+        const fs = 10 * dpr;
+        ctx.font = `${fs}px 'JetBrains Mono', monospace`;
+        ctx.textBaseline = 'middle';
+        ctx.textAlign = 'left';
+        const padPx = 8 * dpr;
+        const swatch = 14 * dpr;
+        const lineH  = 14 * dpr;
+        // Measure widest label.
+        let maxLabel = 0;
+        for (const s of zm.series) maxLabel = Math.max(maxLabel, ctx.measureText(s.label).width);
+        const itemW = swatch + 6 * dpr + maxLabel + padPx;
+        const lx = x0 + w - itemW - padPx;
+        const ly = y0 + padPx;
+        // Background panel for legibility.
+        ctx.fillStyle = 'rgba(6, 22, 18, 0.78)';
+        ctx.fillRect(lx - 6 * dpr, ly - 6 * dpr,
+                     itemW + 6 * dpr, lineH * zm.series.length + 6 * dpr);
+        for (let si = 0; si < zm.series.length; si++) {
+            const s = zm.series[si];
+            const yy = ly + si * lineH + lineH / 2;
+            ctx.strokeStyle = s.color;
+            ctx.lineWidth = 2.5 * dpr;
+            ctx.beginPath();
+            ctx.moveTo(lx, yy);
+            ctx.lineTo(lx + swatch, yy);
+            ctx.stroke();
+            ctx.fillStyle = '#E6EFE9';
+            ctx.fillText(s.label, lx + swatch + 6 * dpr, yy);
+        }
+    }
+
+    // Stash ticks for the axis renderer to label.
+    zm._yTicks = ticks;
+}
+
+/** Pick ~n "nice" round-number ticks inside [vmin, vmax] including 0 if in range. */
+function niceTicks(vmin, vmax, n = 5) {
+    const span = vmax - vmin;
+    if (!(span > 0)) return [vmin];
+    const rough = span / Math.max(1, n - 1);
+    const mag = Math.pow(10, Math.floor(Math.log10(rough)));
+    const norm = rough / mag;
+    let step;
+    if      (norm < 1.5) step = 1 * mag;
+    else if (norm < 3)   step = 2 * mag;
+    else if (norm < 7)   step = 5 * mag;
+    else                 step = 10 * mag;
+    const start = Math.ceil(vmin / step) * step;
+    const ticks = [];
+    for (let t = start; t <= vmax + 1e-9 * step; t += step) {
+        // Round to suppress fp drift.
+        ticks.push(Math.round(t / step) * step);
+    }
+    // Force-include 0 if it's in range and not already a tick.
+    if (vmin <= 0 && vmax >= 0 && !ticks.some(t => Math.abs(t) < 1e-9 * step)) {
+        ticks.push(0);
+        ticks.sort((a, b) => a - b);
+    }
+    return ticks;
 }
 
 /**
@@ -470,7 +580,7 @@ function drawEPArrows(ctx, x0, y0, w, h, zm) {
     const { arrows, levels } = zm;
     const pMin = levels[0], pMax = levels[levels.length - 1];
     const logSpan = Math.log(pMax / pMin);
-    const LONG_FRAC = 0.10;     // longest arrow ≈ 10% of plot width
+    const LONG_FRAC = 0.14;     // longest arrow ≈ 14% of plot width
 
     let maxLen = 0;
     for (let i = 0; i < arrows.dx.length; i++) {
@@ -482,37 +592,48 @@ function drawEPArrows(ctx, x0, y0, w, h, zm) {
     const scale = targetPx / maxLen;
 
     ctx.save();
-    ctx.lineWidth = Math.max(1, dpr * 1.1);
-    ctx.strokeStyle = 'rgba(255, 232, 168, 0.92)';
-    ctx.fillStyle   = 'rgba(255, 232, 168, 0.92)';
+    // Dark ink with thin white halo for legibility on both pale (∇·F ≈ 0) and
+    // saturated red/blue regions of the divergent colormap.
+    const drawArrow = (x, y, x2, y2, lineW, headSize) => {
+        ctx.beginPath();
+        ctx.moveTo(x, y);
+        ctx.lineTo(x2, y2);
+        ctx.lineWidth = lineW;
+        ctx.stroke();
+        const ang = Math.atan2(y2 - y, x2 - x);
+        ctx.beginPath();
+        ctx.moveTo(x2, y2);
+        ctx.lineTo(x2 - headSize * Math.cos(ang - Math.PI / 6),
+                   y2 - headSize * Math.sin(ang - Math.PI / 6));
+        ctx.lineTo(x2 - headSize * Math.cos(ang + Math.PI / 6),
+                   y2 - headSize * Math.sin(ang + Math.PI / 6));
+        ctx.closePath();
+        ctx.fill();
+    };
+
+    const dustThresh = 2.5 * dpr;
+    const lineW    = Math.max(1.4, dpr * 1.6);
+    const haloW    = lineW + 2 * dpr;
+    const headSize = Math.max(5, dpr * 5.5);
 
     for (let i = 0; i < arrows.lats.length; i++) {
         const lat = arrows.lats[i];
         const p   = arrows.pressures[i];
         const dx  = arrows.dx[i] * scale;
         const dy  = arrows.dy[i] * scale;
-        if (Math.hypot(dx, dy) < 2 * dpr) continue;        // skip dust
-        const x = x0 + ((lat + 90) / 180) * w;
-        const y = y0 + h * (Math.log(p / pMin) / logSpan);
-        // Panel-y increases downward; F_p positive (downward in pressure ⇒
-        // toward the surface) maps to +y. F_φ positive (northward) ⇒ +x.
+        if (Math.hypot(dx, dy) < dustThresh) continue;
+        const x  = x0 + ((lat + 90) / 180) * w;
+        const y  = y0 + h * (Math.log(p / pMin) / logSpan);
         const x2 = x + dx;
         const y2 = y + dy;
-        ctx.beginPath();
-        ctx.moveTo(x, y);
-        ctx.lineTo(x2, y2);
-        ctx.stroke();
-        // Arrowhead.
-        const ang = Math.atan2(y2 - y, x2 - x);
-        const head = 4 * dpr;
-        ctx.beginPath();
-        ctx.moveTo(x2, y2);
-        ctx.lineTo(x2 - head * Math.cos(ang - Math.PI / 7),
-                   y2 - head * Math.sin(ang - Math.PI / 7));
-        ctx.lineTo(x2 - head * Math.cos(ang + Math.PI / 7),
-                   y2 - head * Math.sin(ang + Math.PI / 7));
-        ctx.closePath();
-        ctx.fill();
+        // Halo first (white, slightly wider) for legibility.
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.85)';
+        ctx.fillStyle   = 'rgba(255, 255, 255, 0.85)';
+        drawArrow(x, y, x2, y2, haloW, headSize + dpr);
+        // Then dark arrow on top.
+        ctx.strokeStyle = 'rgba(10, 18, 14, 0.95)';
+        ctx.fillStyle   = 'rgba(10, 18, 14, 0.95)';
+        drawArrow(x, y, x2, y2, lineW, headSize);
     }
     ctx.restore();
 }
@@ -557,7 +678,31 @@ function drawAxes(ctx, x0, y0, w, h, zm) {
         ctx.fillText('hPa', 0, 0);
         ctx.restore();
     } else {
-        ctx.fillText(zm.vmax.toFixed(0), x0 - 5 * dpr, y0 + 4 * dpr);
-        ctx.fillText(zm.vmin.toFixed(0), x0 - 5 * dpr, y0 + h - 4 * dpr);
+        // SL line plot — label every nice tick (computed by drawLine) with
+        // the zero line emphasised in amber so divergent quantities have an
+        // obvious reference baseline.
+        const ticks = zm._yTicks || [zm.vmin, zm.vmax];
+        const span  = (zm.vmax - zm.vmin) || 1;
+        const tStep = ticks.length > 1 ? Math.abs(ticks[1] - ticks[0]) : 1;
+        const decimals = tStep >= 10 ? 0 : tStep >= 1 ? 1 : 2;
+        for (const t of ticks) {
+            const y = y0 + h - ((t - zm.vmin) / span) * h;
+            ctx.beginPath();
+            ctx.moveTo(x0 - 3 * dpr, y);
+            ctx.lineTo(x0, y);
+            ctx.stroke();
+            ctx.fillStyle = Math.abs(t) < 1e-9 ? '#E8C26A' : '#AEC3B6';
+            ctx.fillText(t.toFixed(decimals), x0 - 5 * dpr, y);
+        }
+        ctx.fillStyle = '#AEC3B6';
+        // Y-axis units label (rotated, on the left).
+        if (zm.units) {
+            ctx.save();
+            ctx.translate(x0 - 32 * dpr, y0 + h / 2);
+            ctx.rotate(-Math.PI / 2);
+            ctx.textAlign = 'center';
+            ctx.fillText(zm.units, 0, 0);
+            ctx.restore();
+        }
     }
 }

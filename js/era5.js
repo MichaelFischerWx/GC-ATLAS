@@ -190,8 +190,9 @@ const RADIATIVE_FLUX_VARS = new Set(['sshf', 'slhf', 'ssr', 'str', 'tisr', 'ttr'
 
 function applyUnitConversions(name, values) {
     const n = values.length;
-    if (name === 'z') {
-        // ERA5 geopotential (m² s⁻²) → geopotential height (m)
+    if (name === 'z' || name === 'oro') {
+        // ERA5 geopotential (m² s⁻²) → geopotential height (m).
+        // 'oro' is the surface geopotential (model orography invariant).
         for (let i = 0; i < n; i++) values[i] /= G;
     } else if (name === 'msl' || name === 'sp') {
         // Pa → hPa
@@ -201,6 +202,10 @@ function applyUnitConversions(name, values) {
         for (let i = 0; i < n; i++) values[i] *= 1000;
     } else if (RADIATIVE_FLUX_VARS.has(name)) {
         // Monthly means provide J m⁻² per day — convert to W m⁻².
+        for (let i = 0; i < n; i++) values[i] /= DAY;
+    } else if (name === 'ews') {
+        // Eastward turbulent surface stress: monthly mean in N m⁻² s
+        // (accumulated over a day). Divide by DAY to get instantaneous N m⁻².
         for (let i = 0; i < n; i++) values[i] /= DAY;
     } else if (name === 'q') {
         // kg/kg → g/kg (typical surface tropics ≈ 18 g/kg, stratosphere ≈ 0)

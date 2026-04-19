@@ -81,6 +81,10 @@ GA4 wired (G-M1M3TNNJCB) on landing + globe pages.
 6. **Wind-by-speed colour** option for particle mode (alternative to fixed amber).
 7. **Anomaly mode UX** — show which months contributed when not all 12 are cached.
 8. **Validate Lorenz cycle numerics against published values** — Peixoto & Oort 1992 give annual-mean magnitudes (P_M ~50 MJ/m², C(P_M,P_E) ~2 W/m², etc.). Spot-check against those once tiles are pushed.
+9. **Explicit torques in the M-budget panel** — the "implied torque" we currently show is the residual of computed transport terms; it confounds true surface torque + missing transient eddies + numerical noise. Add two ERA5 fields and compute each torque directly:
+   - **Friction torque**: download `ews` (eastward turbulent surface stress, ~12 MB after tiling, single-level monthly mean). Friction torque profile: τ_f(φ) = -⟨[ews]⟩ (negative because positive stress on air = sink of atmospheric M to the surface).
+   - **Mountain torque**: download invariant `z` at surface (orography, ~3 MB) once; combine with our existing `sp` tile to compute τ_m(φ) = ⟨[p_s · ∂h/∂λ]⟩ as a latitude profile.
+   - Display: in the lat-only view, overlay friction + mountain alongside the "implied torque" line. Their sum should approximately equal the implied torque (any gap is the missing transient-eddy convergence — direct visual evidence of the stationary-only limitation).
 
 ### Bigger lifts
 
@@ -92,7 +96,18 @@ GA4 wired (G-M1M3TNNJCB) on landing + globe pages.
 10. **Storm-track diagnostics** — 2–8-day bandpass variance of z500 / v850. Requires daily ERA5.
 11. **Transient-eddy EP flux** — adds the time-covariance terms to the existing stationary-eddy diagnostic. Requires daily ERA5.
 12. **Transient-eddy Lorenz cycle** — same story; the stationary version ships from monthly means, transient needs daily.
-13. **ENSO / NAO / SAM / MJO composites** — daily ERA5 regression / composite maps.
+13. **Transient-eddy angular momentum budget** — turns the existing stationary M-budget into the full P&O Fig 11.7 / Newell-Kidson budget. Requires daily ERA5 covariances.
+14. **ENSO / NAO / SAM / MJO composites** — daily ERA5 regression / composite maps.
+
+#### Daily-ERA5 acquisition plan (sketch)
+
+These five items all share the same data path. Estimated work to enable:
+- **Download:** daily means of `u, v, w, t, z, q` at the 12 standard pressure levels for 1991–2020 via CDS (`reanalysis-era5-pressure-levels` daily). ~50–80 GB raw NetCDF.
+- **Pipeline:** new `pipeline/build_transient_tiles.py` that, per-month, computes zonal-mean transient covariances `[u'v']`, `[v'T']`, `[u'ω']`, `[T'²]`, `[u'²+v'²]` from daily samples (with `'` denoting departure from the *monthly mean*), then climatologizes across 30 years. ~10–12 GB of derived covariance tiles.
+- **Frontend:** add a `Stationary | Stationary + transient | Transient only` toggle on every diagnostic that currently says "stationary only" (EP flux, Lorenz, M-budget). Total + transient paths just sum the new tiles into the existing computations.
+- **Effort:** ~one focused download pass (CDS queue can take ~hours-days), one pipeline session, ~half a session of frontend wiring per diagnostic.
+
+This is the natural Phase-4 unlock — turns three existing diagnostics from "planetary-wave only" into the canonical full-cycle diagnostics.
 
 ---
 

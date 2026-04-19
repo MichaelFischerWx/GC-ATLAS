@@ -23,6 +23,7 @@ import { HoverProbe } from './hover.js';
 import { computeMassStreamfunction, computeAngularMomentum, computeBruntVaisala } from './diagnostics.js';
 import { computeEPFlux } from './ep_flux.js';
 import { computeLorenzCycle } from './lorenz.js';
+import { buildMBudgetView } from './m_budget.js';
 import { ParcelField } from './parcels.js';
 import { GifExporter, downloadBlob } from './gif_export.js';
 
@@ -95,7 +96,10 @@ class GlobeApp {
             showLorenz: false,
             lorenzRef: 'lorenz',     // 'lorenz' (sorted) | 'simple' (area-mean)
             xsArc: null,             // { start:{lat,lon}, end:{lat,lon} } or null for zonal-mean
-            xsDiag: 'field',         // 'field' | 'psi' | 'M' | 'N2' | 'epflux' (cross-section variable)
+            xsDiag: 'field',         // 'field' | 'psi' | 'M' | 'N2' | 'epflux' | 'mbudget'
+            mbTerm: 'total',         // 'total' | 'meanY' | 'meanP' | 'eddyY' | 'eddyP' | 'torque'
+            mbForm: 'u',             // 'u' (∂[u]/∂t m/s/day) | 'M' (∂[M]/∂t scaled)
+            mbMode: '2d',            // '2d' | '1d_mean' (mass-weighted profile) | '1d_int' (∫dp/g, N/m²)
         };
         this.windCache = { u: null, v: null, nlat: 0, nlon: 0, stale: true };
 
@@ -169,7 +173,8 @@ class GlobeApp {
             const diagNeeds = (s.xsDiag === 'psi'    && name === 'v')
                            || (s.xsDiag === 'M'      && name === 'u')
                            || (s.xsDiag === 'N2'     && name === 't')
-                           || (s.xsDiag === 'epflux' && (name === 'u' || name === 'v' || name === 'w' || name === 't'));
+                           || (s.xsDiag === 'epflux' && (name === 'u' || name === 'v' || name === 'w' || name === 't'))
+                           || (s.xsDiag === 'mbudget' && (name === 'u' || name === 'v' || name === 'w'));
             if (s.showXSection && diagNeeds && monthMatches) {
                 this.updateXSection();
             }
@@ -946,6 +951,23 @@ class GlobeApp {
                     prefetchField('w', { level: L });
                     prefetchField('t', { level: L });
                 }
+            } else if (patch.xsDiag === 'mbudget') {
+                for (const L of LEVELS) {
+                    prefetchField('u', { level: L });
+                    prefetchField('v', { level: L });
+                    prefetchField('w', { level: L });
+                }
+            }
+            // Show / hide the M-budget sub-controls + info button.
+            const mbCtl = document.getElementById('mb-controls');
+            if (mbCtl) mbCtl.hidden = patch.xsDiag !== 'mbudget';
+            const mbInfoBtn = document.getElementById('mb-info-btn');
+            if (mbInfoBtn) mbInfoBtn.hidden = patch.xsDiag !== 'mbudget';
+            const mbInfo = document.getElementById('mb-info');
+            // Auto-collapse the popover when leaving M-budget mode.
+            if (mbInfo && patch.xsDiag !== 'mbudget') {
+                mbInfo.setAttribute('hidden', '');
+                mbInfoBtn?.classList.remove('active');
             }
         }
         if ('showXSection' in patch) {
@@ -1129,6 +1151,21 @@ class GlobeApp {
                 effCmap = 'RdBu_r';                  // ∇·F shading: westerly + / easterly −
                 zm.contourInterval = 2;              // m s⁻¹ day⁻¹
             }
+        } else if (xsDiag === 'mbudget') {
+            zm = buildMBudgetView(month, {
+                term: this.state.mbTerm,
+                form: this.state.mbForm,
+                mode: this.state.mbMode,
+            });
+            if (!zm) {
+                zm = computeZonalMean(field, month);
+            } else {
+                effCmap = 'RdBu_r';                  // signed: westerly + / easterly −
+                // M-budget terms are residuals of larger numbers — even after
+                // smoothing, fwidth-based contour overlays would paint speckle.
+                // The shading + 1D mode (with proper y-ticks) carry the message.
+                zm.suppressContours = true;
+            }
         } else if (xsArc) {
             const arc = greatCircleArc(
                 xsArc.start.lat, xsArc.start.lon,
@@ -1143,8 +1180,12 @@ class GlobeApp {
         // Propagate display options into the renderer: gridlines always on,
         // contours gated by the main Contours toggle for field sections,
         // but forced on in diagnostic modes (ψ and M tell their story via
-        // isolines — contour slope IS the pedagogy).
-        zm.showContours = zm.isDiagnostic ? true : !!showContours;
+        // isolines — contour slope IS the pedagogy). Diagnostics that flag
+        // suppressContours (M-budget) opt out — their data is too noisy after
+        // double-derivative amplification for the fwidth-based overlay.
+        zm.showContours = zm.suppressContours
+            ? false
+            : (zm.isDiagnostic ? true : !!showContours);
         if (zm.contourInterval == null) {
             zm.contourInterval = FIELDS[field]?.contour || 0;
         }
@@ -1173,6 +1214,7 @@ class GlobeApp {
                     M:   'M = (Ω a cos φ + u) · a cos φ · from zonal-mean u',
                     N2:  'N² = -(g²p / R T θ) · ∂θ/∂p · static stability',
                     epflux: 'F = (-a cos φ [u′v′], a cos φ f [v′θ′] / ∂[θ]/∂p) — stationary eddies; shading: ∇·F (m s⁻¹ day⁻¹)',
+                    mbudget: '∂[M]/∂t = -∇·([v][M]) - ∇·([v*M*]) + torque · stationary eddies only · 1° monthly clim',
                 }[xsDiag] || 'Zonal-mean diagnostic';
                 hint.innerHTML = desc;
             } else if (zm.kind === 'arc') {
@@ -1555,9 +1597,60 @@ class GlobeApp {
                 this.setState({ xsDiag: diagSel.value });
             });
         }
+        // M-budget sub-controls — present only when xsDiag === 'mbudget'.
+        const mbTermSel = document.getElementById('mb-term-select');
+        if (mbTermSel) {
+            mbTermSel.value = this.state.mbTerm;
+            mbTermSel.addEventListener('change', () => {
+                const patch = { mbTerm: mbTermSel.value };
+                // "All terms" overlay only makes sense in lat-only mode —
+                // auto-flip the mode toggle to keep the UX coherent.
+                const inLatOnly = (this.state.mbMode === '1d_mean' || this.state.mbMode === '1d_int');
+                if (mbTermSel.value === 'all' && !inLatOnly) {
+                    patch.mbMode = '1d_mean';
+                    const radio = document.querySelector('input[name="mb-mode"][value="1d_mean"]');
+                    if (radio) radio.checked = true;
+                }
+                this.setState(patch);
+            });
+        }
+        document.querySelectorAll('input[name="mb-form"]').forEach((r) => {
+            r.addEventListener('change', (e) => {
+                if (e.target.checked) this.setState({ mbForm: e.target.value });
+            });
+        });
+        document.querySelectorAll('input[name="mb-mode"]').forEach((r) => {
+            r.addEventListener('change', (e) => {
+                if (e.target.checked) this.setState({ mbMode: e.target.value });
+            });
+        });
+        document.getElementById('mb-info-btn')?.addEventListener('click', () => {
+            const info = document.getElementById('mb-info');
+            const btn  = document.getElementById('mb-info-btn');
+            if (!info || !btn) return;
+            const open = info.hasAttribute('hidden');
+            if (open) { info.removeAttribute('hidden'); btn.classList.add('active'); }
+            else      { info.setAttribute('hidden', ''); btn.classList.remove('active'); }
+        });
         document.getElementById('xs-close').addEventListener('click', () => {
             document.getElementById('toggle-xsection').checked = false;
             this.setState({ showXSection: false });
+        });
+        // Expand-to-fullscreen toggle. The DPR-aware renderCrossSection re-sizes
+        // the canvas buffer to whatever CSS dimensions it ends up at, so simply
+        // toggling the .expanded class and re-rendering on the next tick is
+        // enough to get crisp output at the larger size.
+        document.getElementById('xs-expand')?.addEventListener('click', () => {
+            const panel = document.getElementById('xsection-panel');
+            const btn   = document.getElementById('xs-expand');
+            if (!panel || !btn) return;
+            const expanded = panel.classList.toggle('expanded');
+            btn.textContent = expanded ? '⛶' : '⛶';
+            btn.setAttribute('title', expanded ? 'Restore' : 'Expand to fullscreen');
+            // Defer one frame so the new CSS dimensions settle before redraw.
+            requestAnimationFrame(() => {
+                if (this.state.showXSection) this.updateXSection();
+            });
         });
 
         // View-mode toggle (Globe | Map | Orbit)

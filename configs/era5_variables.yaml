@@ -141,3 +141,11 @@ datasets:
         cds_name: boundary_layer_height
         long:    Planetary boundary layer height
         units:   m
+      - short: ews
+        cds_name: eastward_turbulent_surface_stress
+        long:    Eastward turbulent surface stress
+        units:   N m-2 s
+      - short: oro
+        cds_name: geopotential
+        long:    Surface geopotential (model orography)
+        units:   m2 s-2

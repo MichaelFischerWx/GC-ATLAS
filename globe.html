@@ -413,6 +413,37 @@
             border-radius: 4px;
         }
         .xs-close:hover { color: var(--paper); background: rgba(255,255,255,0.07); }
+        .xs-expand {
+            background: none;
+            border: none;
+            color: var(--sage);
+            cursor: pointer;
+            font-size: 0.95rem;
+            padding: 0 4px;
+            line-height: 1;
+            border-radius: 4px;
+        }
+        .xs-expand:hover { color: var(--paper); background: rgba(255,255,255,0.07); }
+        .xsection.expanded {
+            right: 24px;
+            bottom: 24px;
+            top: 24px;
+            left: 24px;
+            width: auto;
+            max-width: none;
+            display: flex;
+            flex-direction: column;
+        }
+        .xsection.expanded #xs-canvas {
+            width: 100% !important;
+            height: 100% !important;
+            flex: 1 1 auto;
+            min-height: 0;
+        }
+        .xsection.expanded .xs-cb,
+        .xsection.expanded #xs-cb-canvas {
+            width: 100%;
+        }
         #xs-canvas {
             display: block;
             width: 380px;
@@ -491,6 +522,68 @@
             padding: 2px 8px; border-radius: 4px; cursor: pointer;
         }
         .xs-reset:hover { color: var(--paper); background: rgba(255,255,255,0.06); }
+
+        /* ── M-budget sub-controls inside the cross-section panel ─── */
+        .mb-controls {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            margin: 4px 0 8px 0;
+            padding: 8px 10px;
+            background: rgba(6, 22, 18, 0.45);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+        }
+        .mb-controls[hidden] { display: none; }
+        .mb-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .mb-row-toggles { gap: 6px; }
+        .mb-label {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.66rem;
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+            color: var(--sage);
+            min-width: 36px;
+        }
+        #mb-term-select {
+            flex: 1;
+            background: rgba(255,255,255,0.04);
+            border: 1px solid var(--border);
+            color: var(--paper);
+            font: inherit;
+            font-size: 0.75rem;
+            padding: 4px 8px;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+        .mb-toggle-group {
+            display: flex;
+            flex: 1;
+            background: var(--thalo-raised);
+            border: 1px solid var(--thalo-line);
+            border-radius: 5px;
+            padding: 1px;
+            overflow: hidden;
+        }
+        .mb-toggle {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 3px 4px;
+            font-size: 0.7rem;
+            color: var(--sage);
+            cursor: pointer;
+            border-radius: 4px;
+            transition: background 0.12s, color 0.12s;
+        }
+        .mb-toggle:hover { color: var(--paper); }
+        .mb-toggle input { display: none; }
+        .mb-toggle:has(input:checked) { background: var(--emerald); color: var(--deep); font-weight: 600; }
 
         /* ── Lorenz energy-cycle panel ───────────────────────── */
         .lorenz {
@@ -1199,7 +1292,32 @@ C(P_M→K_M) = -(R/g) ∫ [ω][T] / p dp</pre>
         <div class="xsection" id="xsection-panel" hidden>
             <div class="xs-header">
                 <span id="xs-title">Zonal-mean cross-section</span>
-                <button class="xs-close" id="xs-close" aria-label="Close panel">&times;</button>
+                <span style="display:flex; gap:6px; align-items:center;">
+                    <button class="lz-info-btn" id="mb-info-btn" aria-label="About this diagnostic" title="About the M-budget" hidden>i</button>
+                    <button class="xs-expand" id="xs-expand" aria-label="Expand panel" title="Expand to fullscreen">⛶</button>
+                    <button class="xs-close"  id="xs-close"  aria-label="Close panel">&times;</button>
+                </span>
+            </div>
+            <div class="lz-info" id="mb-info" hidden>
+                <p><b>Stationary-eddy angular momentum budget.</b> Per unit mass:</p>
+                <pre>∂[M]/∂t = -(1/(a cosφ))·∂([v][M] cosφ)/∂y - ∂([ω][M])/∂p   mean transport
+          -(1/(a cosφ))·∂([v*M*] cosφ)/∂y - ∂([ω*M*])/∂p   stationary eddies
+          + F_λ · a cosφ                                    friction + torque</pre>
+                <p>where M = (Ω a cosφ + [u])·a cosφ. <b>[·]</b> = zonal mean, <b>*</b> = stationary eddy departure (M* = a cosφ · u*). In monthly steady-state ∂[M]/∂t ≈ 0, so the implied surface torque (residual) is shown as the negative of the sum.</p>
+                <p><b>Display variable:</b> ∂[u]/∂t (m s⁻¹ day⁻¹) = ∂[M]/∂t / (a cosφ) — the implied zonal-wind tendency. Or ∂[M]/∂t scaled to 10⁶ m² s⁻¹ day⁻¹.</p>
+                <p><b>Aggregation modes:</b></p>
+                <ul style="margin: 4px 0 6px 16px; padding: 0; font-size: 0.74rem;">
+                    <li><b>(lat, p)</b> — full cross-section heatmap (Holton Fig 10.4 style).</li>
+                    <li><b>col-mean</b> — mass-weighted vertical mean (1/p_s)·∫T·dp. Same units as 2D, "what the column-average tendency looks like."</li>
+                    <li><b>∫dp/g</b> — vertical integral ∫T·(1/g)·dp in N/m² for ∂[u]/∂t form. Directly comparable to surface friction stress (~0.1 N/m²). This is the canonical Peixoto–Oort Fig 11.6 form.</li>
+                </ul>
+                <p style="color: var(--ochre);"><b>Stationary eddies only.</b> The transient-eddy contribution (sub-monthly variability) is excluded. Per Peixoto–Oort 1992 Table 11.1, stationary [u*v*] is roughly <i>40% of total</i> in NH winter at 200 hPa (12 vs 30 m²/s²). For SH or annual mean the stationary fraction is smaller. Implied torque magnitudes here will be off vs. published totals by the missing transient amount.</p>
+                <p><b>Friction + mountain overlays</b> (active when <code>ews</code> and <code>oro</code> tiles are built):
+                In the all-terms 1D view, two extra lines appear — friction torque
+                τ_f(φ) = -[ews] from observed surface stress, and mountain torque
+                τ_m(φ) = ⟨p_s · ∂h/∂λ⟩/a from surface pressure × orography slope.
+                Their sum is what closes the budget in steady state: <b>(friction + mountain) − (implied torque) ≈ transient-eddy convergence</b> — a direct visual measure of what we're approximating away by using monthly means.</p>
+                <p style="color: var(--paper-dim); font-size: 0.74rem;">References: Newell et al. (1972, 1974); Oort &amp; Peixoto (1983 atlas); Peixoto &amp; Oort (1992) ch. 11; Holton (textbook) ch. 10; Egger, Weickmann &amp; Hoinka (2007, <i>Rev. Geophys.</i>) for the modern AAM review.</p>
             </div>
             <div class="xs-diag">
                 <label class="xs-diag-label" for="xs-diag-select">Variable</label>
@@ -1209,7 +1327,33 @@ C(P_M→K_M) = -(R/g) ∫ [ω][T] / p dp</pre>
                     <option value="M">M — Angular momentum</option>
                     <option value="N2">N² — Brunt–Väisälä (stability)</option>
                     <option value="epflux">EP flux (stationary eddy)</option>
+                    <option value="mbudget">Angular momentum budget</option>
                 </select>
+            </div>
+            <div class="mb-controls" id="mb-controls" hidden>
+                <div class="mb-row">
+                    <span class="mb-label">Term</span>
+                    <select id="mb-term-select">
+                        <option value="total">Total convergence</option>
+                        <option value="meanY">Mean meridional</option>
+                        <option value="meanP">Mean vertical</option>
+                        <option value="eddyY">Eddy meridional</option>
+                        <option value="eddyP">Eddy vertical</option>
+                        <option value="torque">Implied surface torque</option>
+                        <option value="all">All terms (lat-only)</option>
+                    </select>
+                </div>
+                <div class="mb-row mb-row-toggles">
+                    <div class="mb-toggle-group" role="radiogroup" aria-label="Display variable">
+                        <label class="mb-toggle"><input type="radio" name="mb-form" value="u" checked><span>∂[u]/∂t</span></label>
+                        <label class="mb-toggle"><input type="radio" name="mb-form" value="M"><span>∂[M]/∂t</span></label>
+                    </div>
+                    <div class="mb-toggle-group" role="radiogroup" aria-label="Display mode" title="2D heatmap, mass-weighted column mean, or column integral (∫T·dp/g, N/m² — Peixoto–Oort Fig 11.6)">
+                        <label class="mb-toggle"><input type="radio" name="mb-mode" value="2d" checked><span>(lat, p)</span></label>
+                        <label class="mb-toggle"><input type="radio" name="mb-mode" value="1d_mean"><span>col-mean</span></label>
+                        <label class="mb-toggle"><input type="radio" name="mb-mode" value="1d_int"><span>∫dp/g</span></label>
+                    </div>
+                </div>
             </div>
             <canvas id="xs-canvas" width="380" height="200"></canvas>
             <div class="xs-cb-wrap">
