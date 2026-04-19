@@ -47,17 +47,23 @@ FRESH_FILE_GRACE_SEC = 120
 
 LOG = logging.getLogger("gc-atlas.build_tiles")
 ROOT = Path(__file__).resolve().parent.parent
-RAW_DIR = ROOT / "data" / "raw"
-OUT_DIR = ROOT / "data" / "tiles"
+DEFAULT_RAW_DIR = ROOT / "data" / "raw"
+DEFAULT_OUT_DIR = ROOT / "data" / "tiles"
 
 # Native grid of the CDS download (we requested 0.5°).
 SRC_RES = 0.5
+
+# Module-level globals set in main() — process() and write_manifest() read them
+# instead of taking them as args, to keep the public per-file signature simple.
+RAW_DIR = DEFAULT_RAW_DIR
+OUT_DIR = DEFAULT_OUT_DIR
 
 
 def parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--var", help="short name filter (e.g. u)")
     ap.add_argument("--group", choices=["pressure_levels", "single_levels"])
+    ap.add_argument("--period", help="START-END, e.g. 1961-1990 (reads data/raw_START_END/, writes data/tiles_START_END/)")
     ap.add_argument("--resolution", type=float, default=1.0,
                     help="target grid spacing in degrees (default 1.0; source is 0.5)")
     ap.add_argument("--force", action="store_true", help="rebuild even if output exists")
@@ -208,8 +214,16 @@ def write_manifest() -> None:
 
 
 def main() -> int:
+    global RAW_DIR, OUT_DIR
     logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(message)s", datefmt="%H:%M:%S")
     args = parse_args()
+
+    if args.period:
+        start, end = (int(x) for x in args.period.split("-"))
+        RAW_DIR = ROOT / "data" / f"raw_{start}_{end}"
+        OUT_DIR = ROOT / "data" / f"tiles_{start}_{end}"
+        LOG.info("period  %d–%d  (%s → %s)", start, end, RAW_DIR.name, OUT_DIR.name)
+
     OUT_DIR.mkdir(parents=True, exist_ok=True)
 
     for nc in sorted(RAW_DIR.glob("era5_*.nc")):

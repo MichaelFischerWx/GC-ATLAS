@@ -45,13 +45,14 @@ import xarray as xr
 
 LOG = logging.getLogger("gc-atlas.helmholtz")
 ROOT = Path(__file__).resolve().parent.parent
-RAW_DIR = ROOT / "data" / "raw"
-OUT_DIR = ROOT / "data" / "tiles" / "pressure_levels"
+DEFAULT_RAW_DIR = ROOT / "data" / "raw"
+DEFAULT_OUT_DIR = ROOT / "data" / "tiles" / "pressure_levels"
 SRC_RES = 0.5    # ERA5 native (CDS download) grid
 
 
 def parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--period", help="START-END, e.g. 1961-1990 (reads data/raw_START_END/, writes data/tiles_START_END/)")
     ap.add_argument("--resolution", type=float, default=1.0,
                     help="target grid spacing in degrees (default 1.0; source is 0.5)")
     ap.add_argument("--no-std", action="store_true", help="skip std-across-years tiles")
@@ -69,6 +70,15 @@ def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(message)s", datefmt="%H:%M:%S")
     args = parse_args()
 
+    if args.period:
+        start, end = (int(x) for x in args.period.split("-"))
+        raw_dir = ROOT / "data" / f"raw_{start}_{end}"
+        out_dir = ROOT / "data" / f"tiles_{start}_{end}" / "pressure_levels"
+        LOG.info("period  %d–%d  (%s → %s)", start, end, raw_dir.name, out_dir.parent.name)
+    else:
+        raw_dir = DEFAULT_RAW_DIR
+        out_dir = DEFAULT_OUT_DIR
+
     try:
         from windspharm.xarray import VectorWind
     except ImportError:
@@ -78,8 +88,8 @@ def main() -> int:
         )
         return 1
 
-    u_path = RAW_DIR / "era5_pressure_levels_u.nc"
-    v_path = RAW_DIR / "era5_pressure_levels_v.nc"
+    u_path = raw_dir / "era5_pressure_levels_u.nc"
+    v_path = raw_dir / "era5_pressure_levels_v.nc"
     if not u_path.exists() or not v_path.exists():
         LOG.error("Need both %s and %s", u_path, v_path)
         return 1
@@ -133,19 +143,19 @@ def main() -> int:
         ("chi", chi_mean, chi_std, "Velocity potential", "m**2 s**-1"),
         ("psi", psi_mean, psi_std, "Streamfunction",      "m**2 s**-1"),
     ]:
-        out_dir = OUT_DIR / short
-        if out_dir.exists() and not args.force:
+        out_subdir = out_dir / short
+        if out_subdir.exists() and not args.force:
             LOG.info("skip   %s (exists — pass --force to rebuild)", short)
             continue
-        out_dir.mkdir(parents=True, exist_ok=True)
+        out_subdir.mkdir(parents=True, exist_ok=True)
 
         for lev in levels:
             for month in range(1, 13):
                 arr = mean_da.sel({lev_name: lev, "month": month}).values.astype("<f4")
-                (out_dir / f"{lev}_{month:02d}.bin").write_bytes(arr.tobytes())
+                (out_subdir / f"{lev}_{month:02d}.bin").write_bytes(arr.tobytes())
                 if std_da is not None:
                     arrS = std_da.sel({lev_name: lev, "month": month}).values.astype("<f4")
-                    (out_dir / f"std_{lev}_{month:02d}.bin").write_bytes(arrS.tobytes())
+                    (out_subdir / f"std_{lev}_{month:02d}.bin").write_bytes(arrS.tobytes())
 
         meta = {
             "var": short,
@@ -167,17 +177,18 @@ def main() -> int:
             "resolution_deg": args.resolution,
             "source_nc": "derived from era5_pressure_levels_{u,v}.nc",
         }
-        (out_dir / "meta.json").write_text(json.dumps(meta, indent=2))
+        (out_subdir / "meta.json").write_text(json.dumps(meta, indent=2))
         LOG.info("done   %s   range=[%.3g, %.3g]", short, meta["vmin"], meta["vmax"])
 
     LOG.info("regen  manifest.json")
-    refresh_manifest()
+    # The output dir is .../tiles/pressure_levels (or .../tiles_PERIOD/pressure_levels);
+    # walk up one level to find the tiles root that contains both groups.
+    refresh_manifest(out_dir.parent)
     return 0
 
 
-def refresh_manifest():
-    """Walk data/tiles/ and regenerate manifest.json — same logic build_tiles.py uses."""
-    tiles_root = ROOT / "data" / "tiles"
+def refresh_manifest(tiles_root: Path):
+    """Walk a tiles root and regenerate manifest.json — same logic build_tiles.py uses."""
     groups: dict = {}
     for group_dir in sorted(tiles_root.iterdir()):
         if not group_dir.is_dir():

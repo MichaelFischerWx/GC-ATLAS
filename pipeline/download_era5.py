@@ -26,14 +26,14 @@ LOG = logging.getLogger("gc-atlas.download")
 
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = ROOT / "configs" / "era5_variables.yaml"
-OUT_DIR = ROOT / "data" / "raw"
+DEFAULT_OUT_DIR = ROOT / "data" / "raw"
 
 
-def build_request(var: dict, cfg: dict, group_name: str) -> dict:
+def build_request(var: dict, cfg: dict, group_name: str, start: int, end: int) -> dict:
     req = {
         "product_type": "monthly_averaged_reanalysis",
         "variable": var["cds_name"],
-        "year": [str(y) for y in range(cfg["period"]["start"], cfg["period"]["end"] + 1)],
+        "year": [str(y) for y in range(start, end + 1)],
         "month": [f"{m:02d}" for m in range(1, 13)],
         "time": "00:00",
         "grid": [cfg["grid"], cfg["grid"]],
@@ -49,9 +49,22 @@ def parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--var", help="filter by short name (e.g. u)")
     ap.add_argument("--group", choices=["pressure_levels", "single_levels"])
+    ap.add_argument("--period", help="START-END, e.g. 1961-1990 (overrides config; output goes to data/raw_START_END/)")
     ap.add_argument("--dry-run", action="store_true", help="print requests only")
     ap.add_argument("--force", action="store_true", help="overwrite existing files")
     return ap.parse_args()
+
+
+def parse_period(period_arg, cfg) -> tuple[int, int, Path]:
+    """Resolve (start, end, out_dir) from CLI or config defaults."""
+    if period_arg:
+        start, end = (int(x) for x in period_arg.split("-"))
+        out_dir = ROOT / "data" / f"raw_{start}_{end}"
+    else:
+        start = cfg["period"]["start"]
+        end   = cfg["period"]["end"]
+        out_dir = DEFAULT_OUT_DIR
+    return start, end, out_dir
 
 
 def main() -> int:
@@ -59,7 +72,9 @@ def main() -> int:
     args = parse_args()
 
     cfg = yaml.safe_load(CONFIG_PATH.read_text())
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    start, end, out_root = parse_period(args.period, cfg)
+    out_root.mkdir(parents=True, exist_ok=True)
+    LOG.info("period  %d–%d  →  %s", start, end, out_root)
 
     # Import cdsapi lazily so --dry-run works without credentials installed.
     client = None
@@ -74,13 +89,13 @@ def main() -> int:
         for var in group_cfg["variables"]:
             if args.var and args.var != var["short"]:
                 continue
-            out_path = OUT_DIR / f"era5_{group_name}_{var['short']}.nc"
+            out_path = out_root / f"era5_{group_name}_{var['short']}.nc"
             if out_path.exists() and not args.force:
                 LOG.info("skip    %s  (exists)", out_path.name)
                 skipped += 1
                 continue
 
-            req = build_request(var, cfg, group_name)
+            req = build_request(var, cfg, group_name, start, end)
             LOG.info("request %-34s %s", var["short"], group_cfg["dataset"])
             queued += 1
             if args.dry_run:
