@@ -31,7 +31,12 @@ import { GifExporter, downloadBlob } from './gif_export.js';
 
 const PLAY_INTERVAL_MS = 900;
 
-const COASTLINE_URL = 'https://cdn.jsdelivr.net/gh/nvkelso/natural-earth-vector@master/geojson/ne_50m_coastline.geojson';
+// Natural Earth 50 m coastline (~1.6 MB). Mirrored from jsdelivr so it doesn't
+// re-download on every page load and the site doesn't depend on a third-party CDN.
+const IS_LOCAL_HOST = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+const COASTLINE_URL = IS_LOCAL_HOST
+    ? 'data/coastlines/ne_50m_coastline.geojson'
+    : 'https://storage.googleapis.com/gc-atlas-era5/coastlines/ne_50m_coastline.geojson';
 const AXIAL_TILT = 23.4 * Math.PI / 180;
 
 // Default globe viewpoint: centred on North America so the opening frame shows
@@ -706,7 +711,9 @@ class GlobeApp {
         for (const child of this.coastGroup.children) child.geometry.dispose();
         this.coastGroup.clear();
 
-        const mat = new THREE.LineBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.88 });
+        // Single shared material so applyCoastlineContrast() can flip colour
+        // without rebuilding geometry on every cmap change.
+        this.coastMat = new THREE.LineBasicMaterial({ transparent: true });
         const R = 1.003;
         const seamJump = MAP_W / 2;  // flag if consecutive x-coords wrap the map
         const isMap = this.state.viewMode === 'map';
@@ -720,11 +727,25 @@ class GlobeApp {
             for (const seg of segments) {
                 if (seg.length < 2) continue;
                 const geom = new THREE.BufferGeometry().setFromPoints(seg);
-                this.coastGroup.add(new THREE.Line(geom, mat));
+                this.coastGroup.add(new THREE.Line(geom, this.coastMat));
             }
         }
         this.currentGroup().add(this.coastGroup);
         this.coastGroup.visible = this.state.showCoastlines;
+        this.applyCoastlineContrast();
+    }
+
+    applyCoastlineContrast(effCmap) {
+        if (!this.coastMat) return;
+        // Track the most recent effective cmap so post-rebuild calls (which
+        // pass nothing) reuse the last value updateField() handed us.
+        if (effCmap) this._coastEffCmap = effCmap;
+        const cmap = this._coastEffCmap || this.state.cmap;
+        // Match the contour-ink threshold (0.45) and palette so coastlines
+        // and contour strokes stay visually consistent on every cmap.
+        const darkBg = meanLuminance(cmap) < 0.45;
+        this.coastMat.color.setHex(darkBg ? 0xf4faf7 : 0x000000);
+        this.coastMat.opacity = darkBg ? 0.70 : 0.88;
     }
 
     // ── wind overlays (particles + barbs) ────────────────────────────
@@ -1508,6 +1529,7 @@ class GlobeApp {
             effCmap,
         };
         this.updateContours(fDecorated);
+        this.applyCoastlineContrast(effCmap);
         this.updateStatus(f);   // status reflects raw tile, not the transform
         this.emit('field-updated', { field: fDecorated });
     }
