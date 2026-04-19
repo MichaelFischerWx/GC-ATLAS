@@ -403,6 +403,42 @@
             transition: left 0.05s linear;
         }
         .compare-label[hidden] { display: none; }
+        /* ── Swipe-compare divider handle (arrows + drag hint) ─── */
+        .compare-handle {
+            position: absolute;
+            top: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(12, 36, 32, 0.9);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            border: 1px solid rgba(232, 194, 106, 0.65);
+            border-radius: 24px;
+            padding: 8px 16px;
+            color: var(--amber);
+            font-family: 'JetBrains Mono', monospace;
+            pointer-events: none;
+            z-index: 71;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 3px;
+            white-space: nowrap;
+            box-shadow: 0 4px 18px rgba(0, 0, 0, 0.45);
+            transition: left 0.05s linear;
+        }
+        .compare-handle[hidden] { display: none; }
+        .compare-handle-arrows {
+            font-size: 1.05rem;
+            line-height: 1;
+            letter-spacing: 0.02em;
+            font-weight: 600;
+        }
+        .compare-handle-hint {
+            font-size: 0.62rem;
+            opacity: 0.78;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+        }
         .cb-tick-input {
             font-family: 'JetBrains Mono', monospace;
             font-size: 0.72rem;
@@ -1260,6 +1296,11 @@
         <!-- Swipe-compare period labels (visible only in Map view + compare on) -->
         <div id="compare-label-left"  class="compare-label" hidden></div>
         <div id="compare-label-right" class="compare-label compare-label--right" hidden></div>
+        <!-- Swipe-compare divider handle: arrows + drag hint, centred on the divider -->
+        <div id="compare-handle" class="compare-handle" hidden>
+            <span class="compare-handle-arrows">◀&nbsp;&nbsp;▶</span>
+            <span class="compare-handle-hint">Drag to compare</span>
+        </div>
 
         <aside class="tips-panel" id="tips-panel">
             <button class="tips-dismiss" id="tips-dismiss" aria-label="Dismiss tips">&times;</button>

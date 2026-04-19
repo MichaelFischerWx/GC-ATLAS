@@ -944,11 +944,13 @@ class GlobeApp {
     updateCompareLabels() {
         const lEl = document.getElementById('compare-label-left');
         const rEl = document.getElementById('compare-label-right');
+        const hEl = document.getElementById('compare-handle');
         if (!lEl || !rEl) return;
         const on = this.state.compareMode && this.state.viewMode === 'map';
         if (!on) {
             if (!lEl.hidden) lEl.hidden = true;
             if (!rEl.hidden) rEl.hidden = true;
+            if (hEl && !hEl.hidden) hEl.hidden = true;
             return;
         }
         const fmt = (p) => p === 'default' ? '1991–2020'
@@ -977,6 +979,14 @@ class GlobeApp {
             Math.min(offsetX + canvasRect.width - padding, rightCenter)) + 'px';
         if (lEl.hidden) lEl.hidden = false;
         if (rEl.hidden) rEl.hidden = false;
+        // Drag handle pinned to the divider — same screen-x as the line, plus
+        // a small clamp so it stays on-canvas at extreme split positions.
+        if (hEl) {
+            const handleX = Math.max(offsetX + 56,
+                Math.min(offsetX + canvasRect.width - 56, offsetX + splitX));
+            hEl.style.left = handleX + 'px';
+            if (hEl.hidden) hEl.hidden = false;
+        }
     }
 
     // Compare needs a genuine alternate reference period selected; otherwise
