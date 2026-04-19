@@ -15,10 +15,10 @@ import { ContourField } from './contours.js';
 import { ContourLabels } from './contour_labels.js';
 import { SunLight } from './sun.js';
 import { OrbitScene, ORBIT_RADIUS } from './orbit.js';
-import { computeZonalMean, computeArcCrossSection, renderCrossSection } from './cross_section.js';
+import { computeZonalMean, computeArcCrossSection, renderCrossSection, samplePanel } from './cross_section.js';
 import { greatCircleArc, latLonToVec3, gcDistanceKm } from './arc.js';
 import { loadManifest, onFieldLoaded, isReady as era5Ready, prefetchField, cachedMonth, registerClamps } from './era5.js';
-import { decompose, annualMeanFrom } from './decompose.js';
+import { decompose, annualMeanFrom, aggregatedDecompositionRange } from './decompose.js';
 import { HoverProbe } from './hover.js';
 import { computeMassStreamfunction, computeAngularMomentum, computeBruntVaisala } from './diagnostics.js';
 import { computeEPFlux } from './ep_flux.js';
@@ -775,6 +775,65 @@ class GlobeApp {
         );
     }
 
+    /** Pointer hover on the cross-section canvas → (lat, p, value) tooltip. */
+    bindXSHover() {
+        const canvas = document.getElementById('xs-canvas');
+        const tip    = document.getElementById('xs-hover');
+        if (!canvas || !tip) return;
+        // Padding in CSS pixels — must mirror renderCrossSection's calc
+        // (which uses padL = 42*DPR etc. in BUFFER pixels; in CSS pixels the
+        // numbers are the same since they're proportional to DPR).
+        const PAD_L = 42, PAD_R = 10, PAD_T = 10, PAD_B = 26;
+
+        const onMove = (e) => {
+            if (!this.state.showXSection) { tip.classList.add('hidden'); return; }
+            const zm = this._xsLastZm;
+            if (!zm) { tip.classList.add('hidden'); return; }
+            const rect = canvas.getBoundingClientRect();
+            const cx = e.clientX - rect.left;
+            const cy = e.clientY - rect.top;
+            const plotW = rect.width  - PAD_L - PAD_R;
+            const plotH = rect.height - PAD_T - PAD_B;
+            if (cx < PAD_L || cx > PAD_L + plotW || cy < PAD_T || cy > PAD_T + plotH) {
+                tip.classList.add('hidden'); return;
+            }
+            const fracX = (cx - PAD_L) / plotW;
+            const fracY = (cy - PAD_T) / plotH;
+            const sample = samplePanel(zm, fracX, fracY);
+            if (!sample) { tip.classList.add('hidden'); return; }
+            tip.innerHTML = this.formatXSHoverLabel(zm, sample);
+            // Position; flip to other side of cursor near right/bottom edges.
+            const pad = 14;
+            const w = tip.offsetWidth || 200;
+            const h = tip.offsetHeight || 30;
+            let x = e.clientX + pad;
+            let y = e.clientY + pad;
+            if (x + w > window.innerWidth)  x = e.clientX - w - pad;
+            if (y + h > window.innerHeight) y = e.clientY - h - pad;
+            tip.style.left = `${x}px`;
+            tip.style.top  = `${y}px`;
+            tip.classList.remove('hidden');
+        };
+        canvas.addEventListener('pointermove',  onMove);
+        canvas.addEventListener('pointerleave', () => tip.classList.add('hidden'));
+    }
+
+    formatXSHoverLabel(zm, sample) {
+        const fmt = (v, n = 2) => Number.isFinite(v) ? v.toFixed(n) : '—';
+        const latS = `${Math.abs(sample.lat).toFixed(1)}°${sample.lat >= 0 ? 'N' : 'S'}`;
+        const parts = [latS];
+        if (sample.lon !== undefined) {
+            const lonS = `${Math.abs(sample.lon).toFixed(1)}°${sample.lon >= 0 ? 'E' : 'W'}`;
+            parts.push(lonS);
+        }
+        if (sample.p !== undefined) parts.push(`${Math.round(sample.p)} hPa`);
+        const valHtml =
+            `<span class="hv-value">${fmt(sample.value, 2)}</span>` +
+            `<span class="hv-unit">${zm.units || ''}</span>`;
+        return parts.join('<span class="hv-sep">·</span>') +
+               '<span class="hv-sep">·</span>' + valHtml;
+    }
+
     applyParticleContrast() {
         if (!this.particles) return;
         // Ink a dark near-black on bright colormaps (turbo, wind, plasma end)
@@ -1191,6 +1250,8 @@ class GlobeApp {
         }
         renderCrossSection(canvas, zm, effCmap);
         this.updateXSectionColorbar(zm, effCmap);
+        // Stash for the hover handler — it inverse-maps cursor → (lat, p, value).
+        this._xsLastZm = zm;
         const title = document.getElementById('xs-title');
         const hint  = document.getElementById('xs-hint');
         const reset = document.getElementById('xs-reset');
@@ -1337,25 +1398,44 @@ class GlobeApp {
         if (mode === 'total' || !mode) {
             return decompose(f.values, GRID.nlat, GRID.nlon, 'total');
         }
+
+        // Anomaly mode needs an annual-mean reference field. θ-coord makes
+        // this ill-defined (each month re-derives the surface), so fall back.
+        let annualMean = null;
         if (mode === 'anomaly') {
-            // Anomaly mode uses the per-month tile cache to build a 12-month
-            // mean — in θ-coord the "cached" values are re-derived per month
-            // and the component is ill-defined. Fall back to total; UI hides
-            // the anomaly option whenever vCoord='theta'.
             if (this.state.vCoord === 'theta') {
                 return decompose(f.values, GRID.nlat, GRID.nlon, 'total');
             }
             const meta = FIELDS[this.state.field] || {};
             const useLevel = meta.type === 'pl' ? this.state.level : null;
-            const comp = meta.derived === true
-                ? null  // derived fields (wspd) handled below via components
+            annualMean = meta.derived === true
+                ? null
                 : annualMeanFrom(
                     (m) => cachedMonth(this.state.field, m, useLevel),
                     GRID.nlat, GRID.nlon,
                 );
-            return decompose(f.values, GRID.nlat, GRID.nlon, 'anomaly', comp);
         }
-        return decompose(f.values, GRID.nlat, GRID.nlon, mode);
+
+        const current = decompose(f.values, GRID.nlat, GRID.nlon, mode, annualMean);
+
+        // Cross-month aggregation for stable colorbar — without this the range
+        // shifts every time the user scrubs months because the local extrema
+        // change. We pull from getField (uses cached tiles for raw fields,
+        // existing _wspdCache/_mseCache/_pvCache entries for derived).
+        const { field, level, vCoord, theta } = this.state;
+        const range = aggregatedDecompositionRange(
+            mode,
+            (m) => {
+                const fm = getField(field, { month: m, level, coord: vCoord, theta });
+                return fm.isReal ? fm : null;
+            },
+            GRID.nlat, GRID.nlon, annualMean,
+        );
+        if (range) {
+            current.vmin = range.vmin;
+            current.vmax = range.vmax;
+        }
+        return current;
     }
 
     updateContours(f) {
@@ -1633,6 +1713,12 @@ class GlobeApp {
             else      { info.setAttribute('hidden', ''); btn.classList.remove('active'); }
         });
         document.getElementById('xs-close').addEventListener('click', () => {
+            // Drop fullscreen state on close — otherwise the .expanded class
+            // keeps `display:flex` even with [hidden] set (same CSS specificity,
+            // .expanded comes later so it wins). Removing it both fixes the
+            // visual close + makes the next open default to compact size.
+            const panel = document.getElementById('xsection-panel');
+            panel?.classList.remove('expanded');
             document.getElementById('toggle-xsection').checked = false;
             this.setState({ showXSection: false });
         });
@@ -1640,6 +1726,11 @@ class GlobeApp {
         // the canvas buffer to whatever CSS dimensions it ends up at, so simply
         // toggling the .expanded class and re-rendering on the next tick is
         // enough to get crisp output at the larger size.
+        // Hover readout — inverse-maps cursor on xs-canvas to (lat, p, value).
+        // Pointer events on the panel don't reach the globe canvas underneath
+        // (the panel has solid backdrop + sits in front), so this won't fight
+        // the existing globe HoverProbe.
+        this.bindXSHover();
         document.getElementById('xs-expand')?.addEventListener('click', () => {
             const panel = document.getElementById('xsection-panel');
             const btn   = document.getElementById('xs-expand');

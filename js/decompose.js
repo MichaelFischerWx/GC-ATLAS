@@ -129,6 +129,49 @@ export function decompose(values, nlat, nlon, mode, annualMean = null) {
 }
 
 /**
+ * Aggregate decomposition range across every month whose tiles are cached.
+ * Keeps the colorbar stable as the user scrubs months instead of re-shifting
+ * with each new month's local extrema.
+ *
+ * Mirrors `decompose()`'s symmetry rules: for symmetric modes (eddy, anomaly)
+ * we widen ±absMax across months; for plain modes we take min(vmin) / max(vmax).
+ *
+ * @param {string} mode             'zonal' | 'eddy' | 'anomaly' (total uses the field's own range)
+ * @param {(month:number)=>{values:Float32Array}|null} fetchMonth
+ *                                  Returns the field for a given month, or null if not cached.
+ * @param {number} nlat
+ * @param {number} nlon
+ * @param {Float32Array|null} annualMean  Required for 'anomaly' mode.
+ *
+ * Returns { vmin, vmax, symmetric } or null if nothing cached.
+ */
+export function aggregatedDecompositionRange(mode, fetchMonth, nlat, nlon, annualMean = null) {
+    if (mode === 'total' || !mode) return null;
+    let vmin = Infinity, vmax = -Infinity;
+    let absMax = 0;
+    let any = false;
+    let symmetric = false;
+
+    for (let m = 1; m <= 12; m++) {
+        const f = fetchMonth(m);
+        if (!f || !f.values) continue;
+        const d = decompose(f.values, nlat, nlon, mode, annualMean);
+        if (d.empty) continue;       // anomaly without annualMean
+        symmetric = d.symmetric;
+        if (d.symmetric) {
+            absMax = Math.max(absMax, Math.abs(d.vmin), Math.abs(d.vmax));
+        } else {
+            if (d.vmin < vmin) vmin = d.vmin;
+            if (d.vmax > vmax) vmax = d.vmax;
+        }
+        any = true;
+    }
+    if (!any) return null;
+    if (symmetric) return { vmin: -absMax, vmax: absMax, symmetric: true };
+    return { vmin, vmax, symmetric: false };
+}
+
+/**
  * Compute the annual (12-month) mean of a field at a fixed (name, level) by
  * averaging whatever tiles are currently available. Requires a getter that
  * returns { values } for a given month (or null if the tile isn't in cache).

@@ -66,6 +66,101 @@ export function computeZonalMean(fieldName, month) {
              levels: LEVELS.slice(), name: meta.name, units: meta.units };
 }
 
+/** Sample the cross-section heatmap data at fractional panel coordinates. Used
+ *  by the hover tooltip — keeps the inverse mapping in one place. */
+export function samplePanel(zm, fracX, fracY) {
+    if (!zm) return null;
+    if (zm.kind === 'zonal') {
+        const lat = -90 + fracX * 180;
+        if (zm.type === 'pl') {
+            const pMin = zm.levels[0];
+            const pMax = zm.levels[zm.levels.length - 1];
+            const p = pMin * Math.exp(fracY * Math.log(pMax / pMin));
+            return { lat, p, value: sampleZonalPL(zm, lat, p) };
+        }
+        return { lat, value: sampleZonalSL(zm, lat) };
+    }
+    if (zm.kind === 'arc') {
+        const sIdx = fracX * (zm.nSamples - 1);
+        const j0 = Math.floor(sIdx);
+        const j1 = Math.min(zm.nSamples - 1, j0 + 1);
+        const fJ = sIdx - j0;
+        const a = zm.arc[j0], b = zm.arc[j1];
+        const lat = a.lat * (1 - fJ) + b.lat * fJ;
+        // Longitude lerp across the dateline needs care; pick the closer wrap.
+        let dLon = b.lon - a.lon;
+        if (dLon >  180) dLon -= 360;
+        if (dLon < -180) dLon += 360;
+        let lon = a.lon + dLon * fJ;
+        if (lon >  180) lon -= 360;
+        if (lon < -180) lon += 360;
+        if (zm.type === 'pl') {
+            const pMin = zm.levels[0];
+            const pMax = zm.levels[zm.levels.length - 1];
+            const p = pMin * Math.exp(fracY * Math.log(pMax / pMin));
+            return { lat, lon, p, value: sampleArcPL(zm, sIdx, p) };
+        }
+        return { lat, lon, value: sampleArcSL(zm, sIdx) };
+    }
+    return null;
+}
+
+function sampleZonalPL(zm, lat, p) {
+    const { nlat } = GRID;
+    const { values, levels } = zm;
+    const nlev = levels.length;
+    const rLat = 90 - lat;
+    if (rLat < 0 || rLat > nlat - 1) return NaN;
+    const i0 = Math.max(0, Math.min(nlat - 1, Math.floor(rLat)));
+    const i1 = Math.max(0, Math.min(nlat - 1, i0 + 1));
+    const fi = rLat - i0;
+    let k0 = 0;
+    while (k0 < nlev - 1 && levels[k0 + 1] < p) k0++;
+    const k1 = Math.min(nlev - 1, k0 + 1);
+    const fK = (k0 === k1) ? 0 : Math.log(p / levels[k0]) / Math.log(levels[k1] / levels[k0]);
+    const v00 = values[k0 * nlat + i0], v01 = values[k0 * nlat + i1];
+    const v10 = values[k1 * nlat + i0], v11 = values[k1 * nlat + i1];
+    const vT = v00 * (1 - fi) + v01 * fi;
+    const vB = v10 * (1 - fi) + v11 * fi;
+    return vT * (1 - fK) + vB * fK;
+}
+
+function sampleZonalSL(zm, lat) {
+    const { nlat } = GRID;
+    const rLat = 90 - lat;
+    if (rLat < 0 || rLat > nlat - 1) return NaN;
+    const i0 = Math.max(0, Math.min(nlat - 1, Math.floor(rLat)));
+    const i1 = Math.max(0, Math.min(nlat - 1, i0 + 1));
+    const fi = rLat - i0;
+    const v0 = zm.values[i0], v1 = zm.values[i1];
+    return v0 * (1 - fi) + v1 * fi;
+}
+
+function sampleArcPL(zm, sIdx, p) {
+    const { values, levels, nSamples } = zm;
+    const nlev = levels.length;
+    const j0 = Math.max(0, Math.min(nSamples - 1, Math.floor(sIdx)));
+    const j1 = Math.min(nSamples - 1, j0 + 1);
+    const fJ = sIdx - j0;
+    let k0 = 0;
+    while (k0 < nlev - 1 && levels[k0 + 1] < p) k0++;
+    const k1 = Math.min(nlev - 1, k0 + 1);
+    const fK = (k0 === k1) ? 0 : Math.log(p / levels[k0]) / Math.log(levels[k1] / levels[k0]);
+    const v00 = values[k0 * nSamples + j0], v01 = values[k0 * nSamples + j1];
+    const v10 = values[k1 * nSamples + j0], v11 = values[k1 * nSamples + j1];
+    const vT = v00 * (1 - fJ) + v01 * fJ;
+    const vB = v10 * (1 - fJ) + v11 * fJ;
+    return vT * (1 - fK) + vB * fK;
+}
+
+function sampleArcSL(zm, sIdx) {
+    const { values, nSamples } = zm;
+    const j0 = Math.max(0, Math.min(nSamples - 1, Math.floor(sIdx)));
+    const j1 = Math.min(nSamples - 1, j0 + 1);
+    const fJ = sIdx - j0;
+    return values[j0] * (1 - fJ) + values[j1] * fJ;
+}
+
 /** Bilinear sample of a (nlat × nlon) field at arbitrary (lat, lon). NaN-safe. */
 function bilinearSample(values, lat, lon) {
     const { nlat, nlon } = GRID;
