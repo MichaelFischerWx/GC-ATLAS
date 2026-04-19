@@ -198,7 +198,7 @@ class GlobeApp {
                 this.updateField();
             }
 
-            if (name === 'u' || name === 'v' ||
+            if (name === 'u' || name === 'v' || name === 'u10' || name === 'v10' ||
                 (isenActive && name === 't')) this.windCache.stale = true;
 
             if (s.showXSection && feedsCurrentField && monthMatches) this.updateXSection();
@@ -1111,9 +1111,21 @@ class GlobeApp {
     }
 
     refreshWindCache() {
-        const { month, level, theta, vCoord } = this.state;
-        const uF = getField('u', { month, level, coord: vCoord, theta });
-        const vF = getField('v', { month, level, coord: vCoord, theta });
+        const { field, month, level, theta, vCoord } = this.state;
+        // Pick the right wind source for the displayed field's level type:
+        // single-level fields (SST, MSL, T2m, surface fluxes, …) get the
+        // 10-m winds (u10/v10); pressure-level fields get u/v at the chosen
+        // pressure or θ surface. Without this, surface fields would show
+        // 500 hPa winds (or whatever the pressure dropdown was last set to)
+        // — pedagogically misleading over SST, T2m, MSL, etc.
+        const meta = FIELDS[field];
+        const useSurface = meta?.type === 'sl';
+        const uF = useSurface
+            ? getField('u10', { month })
+            : getField('u', { month, level, coord: vCoord, theta });
+        const vF = useSurface
+            ? getField('v10', { month })
+            : getField('v', { month, level, coord: vCoord, theta });
         // If the request came back pending (tiles still loading, especially
         // in θ-coord where we need T + u + v at every pressure level), keep
         // the previous cache so particles keep moving with the last good
@@ -1358,7 +1370,7 @@ class GlobeApp {
                 }
             }
         }
-        if ('level' in patch || 'month' in patch || 'vCoord' in patch || 'theta' in patch) this.windCache.stale = true;
+        if ('level' in patch || 'month' in patch || 'vCoord' in patch || 'theta' in patch || 'field' in patch) this.windCache.stale = true;
         if ('month' in patch && this.parcels) this.parcels.invalidateCube();
         if ('vCoord' in patch || 'theta' in patch) invalidateIsentropicCache();
         if ('climatologyPeriod' in patch) {
@@ -1420,6 +1432,13 @@ class GlobeApp {
             }
             prefetchField('u', { level: this.state.level });
             prefetchField('v', { level: this.state.level });
+            // Single-level fields use 10-m winds for the particle/barb overlay
+            // (see refreshWindCache); kick those tiles too so the wind layer
+            // populates instantly when the user picks SST / T2m / MSL / etc.
+            if (FIELDS[this.state.field]?.type === 'sl') {
+                prefetchField('u10', {});
+                prefetchField('v10', {});
+            }
             // MSE depends on t, z, q at the chosen level (and at every level
             // when in θ-coord OR when the cross-section panel is open).
             // We prefetch ALL 12 months at the chosen level so the aggregate
@@ -2022,6 +2041,7 @@ class GlobeApp {
         // (Dynamics → Moisture → Derived → Surface → fluxes → TOA).
         const groups = new Map();
         for (const [key, meta] of Object.entries(FIELDS)) {
+            if (meta.hidden) continue;   // overlay-only sources (u10, v10, …)
             const g = meta.group || 'Other';
             if (!groups.has(g)) groups.set(g, []);
             groups.get(g).push([key, meta]);

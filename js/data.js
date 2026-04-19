@@ -54,6 +54,11 @@ export const FIELDS = {
     str:  { type: 'sl', group: 'Surface fluxes',     name: 'Surface net LW radiation',   units: 'W m⁻²', cmap: 'RdBu_r',  contour: 10, symmetric: true },
     tisr: { type: 'sl', group: 'TOA',                name: 'TOA incoming solar',         units: 'W m⁻²', cmap: 'plasma',  contour: 50 },
     ttr:  { type: 'sl', group: 'TOA',                name: 'TOA net LW (OLR)',           units: 'W m⁻²', cmap: 'magma',   contour: 20 },
+    // 10-m winds — surface-level u/v used by the particle/barb overlay when
+    // a single-level field is displayed. Hidden from the field dropdown
+    // (they're an overlay source, not a primary display field).
+    u10:  { type: 'sl', group: '_internal',          name: '10-m zonal wind',            units: 'm s⁻¹', cmap: 'RdBu_r',  symmetric: true, hidden: true },
+    v10:  { type: 'sl', group: '_internal',          name: '10-m meridional wind',       units: 'm s⁻¹', cmap: 'RdBu_r',  symmetric: true, hidden: true },
 };
 
 /** Fields that only make sense on isentropic surfaces. When user picks one of
