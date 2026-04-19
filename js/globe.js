@@ -1562,16 +1562,26 @@ class GlobeApp {
         const f = getField(field, { month, level, coord: vCoord, theta, kind });
         this.setLoadingOverlay(!f.isReal);
 
-        // In ±1σ mode we always show 'total' (decomposing a stddev field is
-        // meaningless) and force a sequential colormap since std ≥ 0.
-        const effMode = (kind === 'std') ? 'total' : mode;
+        // In ±1σ mode we usually show 'total' (decomposing a stddev field is
+        // meaningless), but if the user has chosen a non-active reference
+        // period in ±1σ, route through the anomaly path so it computes
+        // σ(active period) − σ(reference period) — the Δσ "has variability
+        // changed?" view. Skip when the underlying tile isn't actually a std
+        // (derived / θ-coord fall back to mean).
+        const isStdAnomaly = kind === 'std' && f.kind === 'std'
+                          && this.state.referencePeriod !== 'default'
+                          && this.state.referencePeriod !== this.state.climatologyPeriod;
+        const effMode = (kind === 'std')
+            ? (isStdAnomaly ? 'anomaly' : 'total')
+            : mode;
         const decomp = this.applyDecomposition(f, effMode);
         // Manual colorbar overrides — applied after auto-range so user input
         // wins over symmetric/clamp/aggregate logic. Reset on field change.
         const overrideActive = (this.state.userVmin != null) || (this.state.userVmax != null);
         if (this.state.userVmin != null) decomp.vmin = this.state.userVmin;
         if (this.state.userVmax != null) decomp.vmax = this.state.userVmax;
-        const effCmap = (kind === 'std')
+        // Δσ is a difference field → divergent palette. Plain ±1σ stays magma.
+        const effCmap = (kind === 'std' && !isStdAnomaly)
             ? 'magma'
             : (decomp.symmetric ? 'RdBu_r' : cmap);
         // Stash what's currently painted on the globe for hover sampling.
@@ -1596,7 +1606,10 @@ class GlobeApp {
             rawValues: f.values,          // original tile values — used by contours
             vmin: decomp.vmin,
             vmax: decomp.vmax,
-            decomposeMode: mode,
+            // Δσ display reuses the anomaly machinery but is conceptually
+            // a separate mode — tag it explicitly so the colorbar title can
+            // say "Δσ" instead of "anomaly".
+            decomposeMode: isStdAnomaly ? 'std-anomaly' : mode,
             isSymmetric: decomp.symmetric,
             effCmap,
         };
@@ -1652,11 +1665,14 @@ class GlobeApp {
             const refPeriod = this.state.referencePeriod;
             if (refPeriod !== 'default' && !meta.derived) {
                 // Climate-change anomaly: same month from reference period.
+                // `kind` is propagated so when Display=±1σ we fetch the ref
+                // period's std tile (giving Δσ) instead of its mean tile.
                 const refField = getField(this.state.field, {
                     month: this.state.month,
                     level: this.state.level,
                     coord: this.state.vCoord,
                     theta: this.state.theta,
+                    kind: this.state.kind,
                     period: refPeriod,
                 });
                 annualMean = refField.isReal ? refField.values : null;
@@ -1669,6 +1685,7 @@ class GlobeApp {
                         level: this.state.level,
                         coord: this.state.vCoord,
                         theta: this.state.theta,
+                        kind: this.state.kind,
                         period: refPeriod,
                     });
                     return rf.isReal ? rf.values : null;
@@ -1952,13 +1969,23 @@ class GlobeApp {
         }
         // Mean | ±1σ display toggle. ±1σ disables decomposition (no anomaly
         // of stddev) and forces a sequential colormap.
+        // Apply the ±1σ-mode UI state (disable decomp buttons, relabel the
+        // reference dropdown for σ-comparison) once on init AND on each kind
+        // toggle. The reference dropdown stays enabled in ±1σ so the user
+        // can pick a comparison period for the Δσ view.
+        const applyKindUI = (kind) => {
+            const decompSeg = document.querySelector('#decompose-group .decomp-seg');
+            if (decompSeg) decompSeg.classList.toggle('is-disabled', kind === 'std');
+            const refLabel = document.querySelector('label[for="ref-period-select"]');
+            if (refLabel) refLabel.textContent = (kind === 'std') ? 'σ comparison' : 'Anomaly reference';
+        };
+        applyKindUI(this.state.kind);
         document.querySelectorAll('[data-kind]').forEach((btn) => {
             btn.addEventListener('click', () => {
                 const kind = btn.getAttribute('data-kind');
                 document.querySelectorAll('[data-kind]').forEach((b) =>
                     b.classList.toggle('active', b === btn));
-                const decomp = document.getElementById('decompose-group');
-                if (decomp) decomp.classList.toggle('is-disabled', kind === 'std');
+                applyKindUI(kind);
                 this.setState({ kind });
             });
         });
@@ -2275,9 +2302,10 @@ class GlobeApp {
         if (autoBtn) autoBtn.classList.toggle('is-active',
             this.state.userVmin != null || this.state.userVmax != null);
         const modeSuffix = {
-            zonal:   ' · zonal mean',
-            eddy:    ' · eddy',
-            anomaly: ' · anomaly',
+            zonal:           ' · zonal mean',
+            eddy:            ' · eddy',
+            anomaly:         ' · anomaly',
+            'std-anomaly':   ' · Δσ',
         }[field.decomposeMode] || '';
         const coordSuffix = (field.type === 'pl')
             ? (this.state.vCoord === 'theta'
