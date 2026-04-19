@@ -105,6 +105,8 @@ class GlobeApp {
             kind: 'mean',            // 'mean' (climatology) | 'std' (inter-annual ±1σ)
             referencePeriod: 'default',  // 'default' (1991-2020) | '1961-1990' | …
             climatologyPeriod: 'default', // active climatology — drives mean + std + decomp reference
+            compareMode: false,      // swipe-compare overlay (Map view only)
+            compareSplit: 0.5,       // split position in [0,1] — uv-x of the divider
             userVmin: null,          // manual colorbar min override; null = auto
             userVmax: null,          // manual colorbar max override; null = auto
             mapCenterLon: 0,         // central meridian for the flat map (-180..180)
@@ -373,6 +375,28 @@ class GlobeApp {
         const el = this.renderer.domElement;
         let dragging = false;
         let lastX = 0;
+        // When compareMode is on, drag drives the swipe divider (split position)
+        // instead of panning the central meridian.
+        const updateSplitFromPointer = (e) => {
+            // Raycast to the active map plane and use the world-x of the hit
+            // — handles zoom and central-meridian shift uniformly.
+            const rect = el.getBoundingClientRect();
+            const mouse = new THREE.Vector2(
+                ((e.clientX - rect.left) / rect.width) * 2 - 1,
+                -((e.clientY - rect.top) / rect.height) * 2 + 1,
+            );
+            const ray = new THREE.Raycaster();
+            ray.setFromCamera(mouse, this.camera);
+            const hits = ray.intersectObject(this.mapMesh, false);
+            if (!hits.length) return;
+            // Clamp to a small inset so the divider stays grabbable even at
+            // the edges (the map plane spans x in [-MAP_W/2, +MAP_W/2]).
+            const margin = 0.04 * MAP_W;
+            const worldX = Math.max(-MAP_W / 2 + margin,
+                            Math.min(MAP_W / 2 - margin, hits[0].point.x));
+            const split = (worldX / MAP_W) + 0.5;
+            this.applyCompareSplit(split);
+        };
         el.addEventListener('pointerdown', (e) => {
             if (this.state.viewMode !== 'map') return;
             // Skip the pan if the user is shift-dragging (cross-section arc),
@@ -382,9 +406,16 @@ class GlobeApp {
             dragging = true;
             lastX = e.clientX;
             el.setPointerCapture(e.pointerId);
+            // In compare mode, the click jumps the divider to the pointer
+            // (no need to grab the line first) — feels right with swipe UX.
+            if (this.state.compareMode) updateSplitFromPointer(e);
         });
         el.addEventListener('pointermove', (e) => {
             if (!dragging) return;
+            if (this.state.compareMode) {
+                updateSplitFromPointer(e);
+                return;   // skip the pan-meridian path
+            }
             const dx = e.clientX - lastX;
             lastX = e.clientX;
             // How many degrees of longitude does one CSS pixel correspond to
@@ -427,7 +458,10 @@ class GlobeApp {
                 { kbd: '⌥ + click',   desc: 'release parcels' },
                 { kbd: 'scroll',       desc: 'zoom' },
             ],
-            map: [
+            map: this.state.compareMode ? [
+                { kbd: 'drag',         desc: 'slide the swipe-compare divider' },
+                { kbd: 'scroll',       desc: 'zoom' },
+            ] : [
                 { kbd: 'drag',         desc: 'pan the central meridian' },
                 { kbd: 'scroll',       desc: 'zoom' },
             ],
@@ -514,6 +548,44 @@ class GlobeApp {
         const planeMat  = new THREE.MeshBasicMaterial({ map: this.mapTexture, side: THREE.DoubleSide });
         this.mapMesh = new THREE.Mesh(planeGeom, planeMat);
         this.mapGroup.add(this.mapMesh);
+
+        // ── swipe-compare overlay (Map view) ─────────────────────────────
+        // A second canvas + texture painted with the reference period; drawn
+        // on a duplicate plane just in front, with a clipping plane that hides
+        // everything to the LEFT of the divider — so the user sees the active
+        // period on the left and the reference period on the right.
+        this.referenceCanvas = document.createElement('canvas');
+        this.referenceCanvas.width = GRID.nlon;
+        this.referenceCanvas.height = GRID.nlat;
+        this.referenceCtx = this.referenceCanvas.getContext('2d');
+        this.referenceImageData = this.referenceCtx.createImageData(GRID.nlon, GRID.nlat);
+        this.referenceTexture = new THREE.CanvasTexture(this.referenceCanvas);
+        this.referenceTexture.minFilter = THREE.LinearFilter;
+        this.referenceTexture.magFilter = THREE.LinearFilter;
+        this.referenceTexture.wrapS = THREE.RepeatWrapping;
+        this.referenceTexture.colorSpace = THREE.SRGBColorSpace;
+        // Plane equation (1,0,0)·p + constant = 0 → keeps p.x > -constant.
+        // Initial constant=0 → keeps right half (x > 0).
+        this.splitPlane = new THREE.Plane(new THREE.Vector3(1, 0, 0), 0);
+        this.renderer.localClippingEnabled = true;
+        const refMat = new THREE.MeshBasicMaterial({
+            map: this.referenceTexture, side: THREE.DoubleSide,
+            clippingPlanes: [this.splitPlane], clipShadows: false,
+        });
+        this.mapMeshRef = new THREE.Mesh(planeGeom, refMat);
+        this.mapMeshRef.position.z = 0.001;   // win z-fight with the active plane
+        this.mapMeshRef.visible = false;
+        this.mapGroup.add(this.mapMeshRef);
+        // Divider line. Lives at z=0.002 (just in front of the reference plane)
+        // so it always reads on top. Position.x slides with the split.
+        const splitLineGeom = new THREE.BufferGeometry().setFromPoints([
+            new THREE.Vector3(0, -MAP_H / 2, 0.002),
+            new THREE.Vector3(0,  MAP_H / 2, 0.002),
+        ]);
+        this.splitLine = new THREE.Line(splitLineGeom,
+            new THREE.LineBasicMaterial({ color: 0xe6efe9, transparent: true, opacity: 0.95 }));
+        this.splitLine.visible = false;
+        this.mapGroup.add(this.splitLine);
 
         // Contour overlay: isolines drawn on top of the shaded field.
         this.contours = new ContourField({
@@ -800,6 +872,13 @@ class GlobeApp {
             this.mapTexture.offset.x = u;
             this.mapTexture.needsUpdate = true;
         }
+        // Reference (compare) texture must follow the same shift so the two
+        // halves of the swipe share a coordinate system.
+        if (this.referenceTexture) {
+            this.referenceTexture.wrapS = THREE.RepeatWrapping;
+            this.referenceTexture.offset.x = u;
+            this.referenceTexture.needsUpdate = true;
+        }
         // Contour overlay on the plane shares the same texture sample space
         // (see contours.js planeMaterial.uUOffset).
         if (this.contours?.planeMaterial?.uniforms?.uUOffset) {
@@ -816,6 +895,34 @@ class GlobeApp {
         if (!this.sun) return;
         // Sun / terminator are globe-mode concepts; hide in flat-map mode.
         this.sun.setVisible(this.state.showSun && this.state.viewMode === 'globe');
+    }
+
+    // ── swipe compare helpers ────────────────────────────────────────
+    applyCompareSplit(split) {
+        const s = Math.max(0.02, Math.min(0.98, split));
+        this.state.compareSplit = s;
+        const worldX = (s - 0.5) * MAP_W;
+        // Plane equation x + constant = 0 → keeps x > -constant. We want to
+        // keep the right half (x > worldX), so constant = -worldX.
+        if (this.splitPlane) this.splitPlane.constant = -worldX;
+        if (this.splitLine)  this.splitLine.position.x = worldX;
+    }
+
+    applyCompareMode() {
+        const on = !!this.state.compareMode;
+        if (this.mapMeshRef) this.mapMeshRef.visible = on;
+        if (this.splitLine)  this.splitLine.visible  = on;
+        if (on) this.applyCompareSplit(this.state.compareSplit ?? 0.5);
+    }
+
+    // Compare needs a genuine alternate reference period selected; otherwise
+    // the right half would mirror the left. Returns the period to use, or
+    // null if no valid comparison can be drawn.
+    compareRefPeriod() {
+        const r = this.state.referencePeriod;
+        if (!r || r === 'default') return null;
+        if (r === this.state.climatologyPeriod) return null;
+        return r;
     }
 
     // NaN-safe bilinear sample of the currently-displayed field (after
@@ -1085,6 +1192,9 @@ class GlobeApp {
             }
         }
         if ('mapCenterLon' in patch) this.applyMapCenterLon();
+        if ('compareMode' in patch || 'viewMode' in patch) this.applyCompareMode();
+        if ('compareSplit' in patch) this.applyCompareSplit(this.state.compareSplit);
+        if ('compareMode' in patch) this.updateHintForViewMode();
         if ('xsArc' in patch) this.updateArcLine();
         if ('xsDiag' in patch) {
             // Diagnostics sample a specific component field at every
@@ -1575,15 +1685,39 @@ class GlobeApp {
             ? (isStdAnomaly ? 'anomaly' : 'total')
             : mode;
         const decomp = this.applyDecomposition(f, effMode);
-        // Manual colorbar overrides — applied after auto-range so user input
-        // wins over symmetric/clamp/aggregate logic. Reset on field change.
-        const overrideActive = (this.state.userVmin != null) || (this.state.userVmax != null);
-        if (this.state.userVmin != null) decomp.vmin = this.state.userVmin;
-        if (this.state.userVmax != null) decomp.vmax = this.state.userVmax;
         // Δσ is a difference field → divergent palette. Plain ±1σ stays magma.
         const effCmap = (kind === 'std' && !isStdAnomaly)
             ? 'magma'
             : (decomp.symmetric ? 'RdBu_r' : cmap);
+
+        // Swipe-compare: in Mean+Total mode with a genuine alternate reference
+        // period selected, fetch the same field at that period and pool its
+        // range with the active so both halves share a colorbar (visual
+        // differences = real differences, not normalisation artefacts).
+        // Decomposition modes are intentionally restricted to Total for v1
+        // so the swipe compares like-with-like; richer per-mode compares
+        // (Eddy↔Eddy, Anomaly↔Anomaly) are an obvious follow-up.
+        const compareRef = this.state.compareMode ? this.compareRefPeriod() : null;
+        const compareActive = !!(compareRef && effMode === 'total' && kind === 'mean');
+        let refValues = null;
+        if (compareActive) {
+            const refField = getField(field, {
+                month, level, coord: vCoord, theta,
+                kind: 'mean', period: compareRef,
+            });
+            if (refField.isReal) {
+                refValues = refField.values;
+                // Pool the cmap range only when the user hasn't pinned it.
+                if (this.state.userVmin == null) decomp.vmin = Math.min(decomp.vmin, refField.vmin);
+                if (this.state.userVmax == null) decomp.vmax = Math.max(decomp.vmax, refField.vmax);
+            }
+        }
+
+        // Manual colorbar overrides — applied after auto-range AND compare
+        // pooling so user input wins over everything.
+        if (this.state.userVmin != null) decomp.vmin = this.state.userVmin;
+        if (this.state.userVmax != null) decomp.vmax = this.state.userVmax;
+
         // Stash what's currently painted on the globe for hover sampling.
         this._displayedValues = decomp.values;
 
@@ -1594,6 +1728,18 @@ class GlobeApp {
         this.texture.needsUpdate = true;
         if (this.mapTexture) this.mapTexture.needsUpdate = true;
         if (this.earthTexture) this.earthTexture.needsUpdate = true;
+
+        // Paint the reference period into the second canvas (right half of
+        // the swipe). Same cmap + range as the active so the comparison is
+        // honest. When compare is off OR no reference is loaded, leave the
+        // reference texture as-is (it's hidden by mapMeshRef.visible=false).
+        if (refValues) {
+            fillRGBA(this.referenceImageData.data, refValues, {
+                vmin: decomp.vmin, vmax: decomp.vmax, cmap: effCmap,
+            });
+            this.referenceCtx.putImageData(this.referenceImageData, 0, 0);
+            this.referenceTexture.needsUpdate = true;
+        }
 
         // Decorated field for contour overlay + colorbar. The heatmap uses
         // the decomposed values (shading the eddy / anomaly / zonal signal),
@@ -1965,6 +2111,19 @@ class GlobeApp {
             climoSel.value = this.state.climatologyPeriod;
             climoSel.addEventListener('change', () => {
                 this.setState({ climatologyPeriod: climoSel.value });
+            });
+        }
+        // Swipe-compare toggle (Map view) — drives the right-half overlay.
+        // Auto-switches to Map view when enabled in Globe / Orbit so the
+        // user actually sees the comparison.
+        const compareToggle = document.getElementById('toggle-compare');
+        if (compareToggle) {
+            compareToggle.checked = this.state.compareMode;
+            compareToggle.addEventListener('change', (e) => {
+                const on = !!e.target.checked;
+                const patch = { compareMode: on };
+                if (on && this.state.viewMode !== 'map') patch.viewMode = 'map';
+                this.setState(patch);
             });
         }
         // Mean | ±1σ display toggle. ±1σ disables decomposition (no anomaly

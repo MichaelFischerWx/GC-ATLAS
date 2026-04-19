@@ -98,6 +98,24 @@ Cross-section panel: **expand-to-fullscreen toggle**, **hover readout** (lat, p,
 8. **Validate budget signs and magnitudes** for Q-budget and H-budget once you've used them in lecture — Newell-Kidson-Vincent-Boer (1972) and Trenberth atlases are the comparison sources.
 9. **Add 1981–2010 climatology** — the WMO previous-standard normal. Same recipe as 1961–1990.
 
+### Two-period comparison — richer modes (Δσ + swipe shipped 2026-04-19)
+
+The Mean+Total swipe-compare landed in v1; remaining variants:
+
+- **B. Stacked side-by-side** in Map view — period A on top half, period B on
+  bottom half, both planes painted with a shared range. ~2.5 hours.
+  Better for "scan the same latitude band on both panels at once" demos
+  vs. the swipe's "fade between" interaction.
+- **C. Full dual-globe** in Globe view — two synced rotating spheres,
+  shared OrbitControls, two cameras / scenes / textures. Major refactor
+  (~half day to a day) since the renderer is currently single-everything.
+  Marquee demo but the engineering risk is real (parcels, particles,
+  cross-section, hover all need dual-aware paths).
+- **Per-mode swipe** — let Compare work in Eddy/Anomaly/Zonal modes too,
+  with each side computing its own decomposition reference (e.g. self-eddy
+  per period). Currently the v1 swipe restricts to Mean+Total to keep the
+  comparison apples-to-apples.
+
 ### Bigger lift — Phase-4 daily-data unlock
 
 These five all share one data pipeline:
