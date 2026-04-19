@@ -373,11 +373,57 @@
         .cb-ticks {
             display: flex;
             justify-content: space-between;
+            align-items: center;
             margin-top: 4px;
             font-family: 'JetBrains Mono', monospace;
             font-size: 0.72rem;
             color: var(--paper-dim);
+            gap: 6px;
         }
+        .cb-tick-input {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.72rem;
+            color: var(--paper-dim);
+            background: transparent;
+            border: 1px solid transparent;
+            border-radius: 3px;
+            padding: 1px 5px;
+            width: 78px;
+            text-align: left;
+            transition: border-color 0.15s, color 0.15s;
+        }
+        .cb-tick-input--right { text-align: right; }
+        .cb-tick-input:hover { border-color: rgba(255,255,255,0.10); }
+        .cb-tick-input:focus {
+            outline: none;
+            border-color: var(--emerald-bright);
+            color: var(--paper);
+        }
+        .cb-tick-input.is-override {
+            color: var(--emerald-bright);
+            border-color: rgba(45, 189, 160, 0.35);
+        }
+        .cb-auto {
+            background: transparent;
+            border: 1px solid var(--border);
+            color: var(--sage);
+            border-radius: 4px;
+            padding: 1px 8px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.68rem;
+            letter-spacing: 0.04em;
+            cursor: pointer;
+            transition: color 0.15s, border-color 0.15s;
+            line-height: 1.4;
+            white-space: nowrap;
+        }
+        .cb-auto:hover { color: var(--paper); border-color: var(--emerald); }
+        .cb-auto.is-active {
+            color: var(--emerald-bright);
+            border-color: rgba(45, 189, 160, 0.45);
+            background: rgba(14, 140, 110, 0.08);
+        }
+        .cb-auto:not(.is-active) { opacity: 0.55; }
 
         /* ── Zonal-mean cross-section panel ─────────────────── */
         .xsection {
@@ -1190,8 +1236,12 @@
             </div>
             <canvas id="colorbar-canvas" width="280" height="12"></canvas>
             <div class="cb-ticks">
-                <span id="cb-min">—</span>
-                <span id="cb-max">—</span>
+                <input id="cb-min" class="cb-tick-input" type="text" inputmode="decimal" autocomplete="off" spellcheck="false"
+                       title="Click to override colorbar minimum. Persists across months/levels/modes; resets on field change.">
+                <button id="cb-auto" class="cb-auto" type="button"
+                        title="Reset colorbar range to auto" aria-label="Reset colorbar range to auto">↺ Auto</button>
+                <input id="cb-max" class="cb-tick-input cb-tick-input--right" type="text" inputmode="decimal" autocomplete="off" spellcheck="false"
+                       title="Click to override colorbar maximum. Persists across months/levels/modes; resets on field change.">
             </div>
         </div>
 

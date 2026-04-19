@@ -100,6 +100,8 @@ class GlobeApp {
             decompose: 'total',      // 'total' | 'zonal' | 'eddy' | 'anomaly'
             kind: 'mean',            // 'mean' (climatology) | 'std' (inter-annual ±1σ)
             referencePeriod: 'default',  // 'default' (1991-2020) | '1961-1990' | …
+            userVmin: null,          // manual colorbar min override; null = auto
+            userVmax: null,          // manual colorbar max override; null = auto
             mapCenterLon: 0,         // central meridian for the flat map (-180..180)
             showXSection: false,
             showLorenz: false,
@@ -1033,6 +1035,13 @@ class GlobeApp {
     // ── state updates ─────────────────────────────────────────────────
     setState(patch) {
         Object.assign(this.state, patch);
+        if ('field' in patch) {
+            // Manual colorbar override almost certainly doesn't apply to the
+            // new field — drop it so the user sees the new field's natural
+            // range. Persists across level / month / mode changes per design.
+            this.state.userVmin = null;
+            this.state.userVmax = null;
+        }
         if ('showCoastlines' in patch && this.coastGroup) this.coastGroup.visible = !!patch.showCoastlines;
         if ('showGraticule' in patch && this.gratGroup)   this.gratGroup.visible   = !!patch.showGraticule;
         if ('showContours' in patch && this.contours)     this.contours.setVisible(!!patch.showContours);
@@ -1499,6 +1508,11 @@ class GlobeApp {
         // meaningless) and force a sequential colormap since std ≥ 0.
         const effMode = (kind === 'std') ? 'total' : mode;
         const decomp = this.applyDecomposition(f, effMode);
+        // Manual colorbar overrides — applied after auto-range so user input
+        // wins over symmetric/clamp/aggregate logic. Reset on field change.
+        const overrideActive = (this.state.userVmin != null) || (this.state.userVmax != null);
+        if (this.state.userVmin != null) decomp.vmin = this.state.userVmin;
+        if (this.state.userVmax != null) decomp.vmax = this.state.userVmax;
         const effCmap = (kind === 'std')
             ? 'magma'
             : (decomp.symmetric ? 'RdBu_r' : cmap);
@@ -1796,6 +1810,40 @@ class GlobeApp {
         }
         cmapSel.value = this.state.cmap;
         cmapSel.addEventListener('change', () => this.setState({ cmap: cmapSel.value }));
+
+        // Manual colorbar range — type a number into either input to override,
+        // or press the ↺ Auto button to clear. Empty input = clear that side.
+        const cbMinEl = document.getElementById('cb-min');
+        const cbMaxEl = document.getElementById('cb-max');
+        const cbAutoEl = document.getElementById('cb-auto');
+        const parseCbInput = (raw) => {
+            const s = String(raw ?? '').trim();
+            if (s === '' || s === '—') return null;
+            const n = Number(s);
+            return Number.isFinite(n) ? n : null;
+        };
+        const commitCbRange = () => {
+            let userVmin = parseCbInput(cbMinEl?.value);
+            let userVmax = parseCbInput(cbMaxEl?.value);
+            // If both set and reversed, swap so min < max — fillRGBA's
+            // (v - vmin) / (vmax - vmin) goes negative otherwise and the
+            // whole globe collapses to the cmap's first colour.
+            if (userVmin != null && userVmax != null && userVmin > userVmax) {
+                [userVmin, userVmax] = [userVmax, userVmin];
+            }
+            this.setState({ userVmin, userVmax });
+        };
+        cbMinEl?.addEventListener('change', commitCbRange);
+        cbMaxEl?.addEventListener('change', commitCbRange);
+        // Enter to commit immediately (change fires on blur otherwise).
+        for (const el of [cbMinEl, cbMaxEl]) {
+            el?.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') { e.preventDefault(); el.blur(); }
+            });
+        }
+        cbAutoEl?.addEventListener('click', () => {
+            this.setState({ userVmin: null, userVmax: null });
+        });
 
         document.getElementById('toggle-coastlines').addEventListener('change', (e) => {
             this.setState({ showCoastlines: e.target.checked });
@@ -2145,8 +2193,20 @@ class GlobeApp {
         const effCmap = field.effCmap || this.state.cmap;
         if (cb) fillColorbar(cb, effCmap);
         const set = (id, text) => { const el = document.getElementById(id); if (el) el.textContent = text; };
-        set('cb-min',   fmtValue(field.vmin));
-        set('cb-max',   fmtValue(field.vmax));
+        // cb-min / cb-max are now <input>s — write to .value (skip when the
+        // input is focused so we don't yank a mid-edit cursor) and toggle
+        // the override accent style based on which side has a manual value.
+        const setInput = (id, text, isOverride) => {
+            const el = document.getElementById(id);
+            if (!el) return;
+            if (document.activeElement !== el) el.value = text;
+            el.classList.toggle('is-override', !!isOverride);
+        };
+        setInput('cb-min', fmtValue(field.vmin), this.state.userVmin != null);
+        setInput('cb-max', fmtValue(field.vmax), this.state.userVmax != null);
+        const autoBtn = document.getElementById('cb-auto');
+        if (autoBtn) autoBtn.classList.toggle('is-active',
+            this.state.userVmin != null || this.state.userVmax != null);
         const modeSuffix = {
             zonal:   ' · zonal mean',
             eddy:    ' · eddy',
