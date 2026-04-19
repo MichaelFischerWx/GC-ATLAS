@@ -256,5 +256,9 @@ function applyUnitConversions(name, values) {
         // m² s⁻¹ → 10⁶ m² s⁻¹ ("Mm²/s") for readability. 200 hPa ψ peaks
         // at ±100 Mm²/s; χ peaks ~±10 Mm²/s.
         for (let i = 0; i < n; i++) values[i] /= 1e6;
+    } else if (name === 'pv') {
+        // K m² kg⁻¹ s⁻¹ → PVU (1 PVU = 10⁻⁶ K m² kg⁻¹ s⁻¹). Tropopause sits
+        // around 2 PVU; stratospheric values reach 10+ PVU.
+        for (let i = 0; i < n; i++) values[i] *= 1e6;
     }
 }

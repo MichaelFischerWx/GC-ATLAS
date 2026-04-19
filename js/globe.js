@@ -145,12 +145,12 @@ class GlobeApp {
             const isenNeedsName = isenActive &&
                 (name === 't' || name === s.field ||
                  (s.field === 'wspd' && (name === 'u' || name === 'v')) ||
-                 (s.field === 'pv'   && (name === 'u' || name === 'v')) ||
+                 (s.field === 'pv'   && name === 'pv') ||
                  (s.field === 'mse'  && (name === 'z' || name === 'q')));
             const feedsCurrentField =
                 (name === s.field) ||
                 (s.field === 'wspd' && (name === 'u' || name === 'v')) ||
-                (s.field === 'pv'   && (name === 't' || name === 'u' || name === 'v')) ||
+                (s.field === 'pv'   && (name === 't' || name === 'pv')) ||
                 (s.field === 'mse'  && (name === 't' || name === 'z' || name === 'q')) ||
                 isenNeedsName;
 
@@ -159,7 +159,7 @@ class GlobeApp {
             // the cache.
             const needsLevelMatch = !(
                 isenNeedsName ||
-                (s.field === 'pv' && (name === 't' || name === 'u' || name === 'v'))
+                (s.field === 'pv' && (name === 't' || name === 'pv'))
             );
             // MSE in pressure-coord is single-level (only the chosen level matters).
             // In θ-coord it gets caught by isenNeedsName below.
@@ -1170,9 +1170,14 @@ class GlobeApp {
             const needsAllLevels = (this.state.field === 'pv') || isen;
             if (needsAllLevels) {
                 // Build the list of ingredients we need at every level.
+                // PV needs t (for the θ cube) + pv (the canonical Ertel field
+                // we now interpolate directly to θ surfaces).
                 const ingredients = ['t'];
-                if (isen || this.state.field === 'pv' || this.state.field === 'wspd') {
+                if (isen || this.state.field === 'wspd') {
                     ingredients.push('u', 'v');
+                }
+                if (this.state.field === 'pv') {
+                    ingredients.push('pv');
                 }
                 if (this.state.field === 'mse') {
                     ingredients.push('z', 'q');

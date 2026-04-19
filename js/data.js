@@ -307,19 +307,12 @@ function computeDerived(name, month, level, coord, theta) {
 }
 
 // ── PV on an isentropic surface ──────────────────────────────────────────
-// Ertel PV in pressure coordinates:
-//     PV = -g · (ζ + f) · ∂θ/∂p
-// ERA5 monthly climatology tiles include u, v, t on pressure levels but NOT
-// relative vorticity, so we compute ζ on the fly in spherical coordinates:
-//     ζ = (1/(a·cosφ)) · [∂v/∂λ - ∂(u·cosφ)/∂φ]
-// f = 2Ω sin φ, and θ = T·(1000/p)^(R/cp) is potential temperature. We
-// compute PV at every (lat, lon, p) level, then for each column linearly
-// interpolate (in p) to the surface where θ = θ₀.
+// We use ERA5's canonical Ertel PV (computed by ECMWF from the spectral
+// model state — full 3-D form with density-weighting, more accurate than
+// the simplified -g·(ζ+f)·∂θ/∂p approximation) on pressure levels, and
+// interpolate per column to the requested isentropic surface θ₀.
 
-const OMEGA_EARTH = 7.2921e-5;
-const G_EARTH     = 9.80665;
-const KAPPA       = 0.2854;      // R / cp for dry air
-const A_EARTH_PV  = 6.371e6;     // m
+const KAPPA = 0.2854;      // R / cp for dry air — used by buildThetaCube
 
 const _pvCache = new Map();
 const _thetaCubeCache = new Map();    // month → Array<Float32Array> (θ per level)
@@ -450,42 +443,6 @@ function fieldOnIsentrope(name, month, theta0) {
     };
 }
 
-/** Relative vorticity ζ on a 1° lat/lon grid. Centred differences; zonal
- *  wrap; forward/backward at lat boundaries; output is zero at the exact
- *  poles. Input u, v are Float32Array shape (nlat*nlon). */
-function relativeVorticityFromUV(u, v, nlat, nlon) {
-    const out = new Float32Array(nlat * nlon);
-    const dLam = Math.PI / 180;           // 1°
-    const dPhi = Math.PI / 180;
-    for (let i = 0; i < nlat; i++) {
-        const lat = 90 - i;
-        const phi = lat * Math.PI / 180;
-        const cosphi = Math.cos(phi);
-        // Skip exact poles — metric terms blow up; PV there is not meaningful.
-        if (Math.abs(lat) >= 89.5 || cosphi < 1e-6) {
-            for (let j = 0; j < nlon; j++) out[i * nlon + j] = 0;
-            continue;
-        }
-        // ∂(u·cosφ)/∂φ uses the neighbouring latitude rows' u·cosφ.
-        const iN = Math.max(0, i - 1);
-        const iS = Math.min(nlat - 1, i + 1);
-        const phiN = (90 - iN) * Math.PI / 180;
-        const phiS = (90 - iS) * Math.PI / 180;
-        const cosN = Math.cos(phiN);
-        const cosS = Math.cos(phiS);
-        const dPhiEff = (phiN - phiS);     // positive; N is bigger φ
-        for (let j = 0; j < nlon; j++) {
-            const jE = (j + 1) % nlon;
-            const jW = (j - 1 + nlon) % nlon;
-            const dvdlam = (v[i * nlon + jE] - v[i * nlon + jW]) / (2 * dLam);
-            const ucosN = u[iN * nlon + j] * cosN;
-            const ucosS = u[iS * nlon + j] * cosS;
-            const ducosdphi = (ucosN - ucosS) / dPhiEff;
-            out[i * nlon + j] = (dvdlam - ducosdphi) / (A_EARTH_PV * cosphi);
-        }
-    }
-    return out;
-}
 
 /** Invalidate every θ-coord cache — called when a new pressure-level tile
  *  lands so the next render uses the freshest data. */
@@ -500,14 +457,14 @@ export function invalidateIsentropicCache() {
 export const invalidatePVCache = invalidateIsentropicCache;
 
 function computePVOnIsentrope(month, theta0) {
-    // Opportunistic fill: compute PV for any month whose t/u/v tiles are all
-    // already cached, so the aggregate colorbar stays stable as the user scrubs.
+    // Opportunistic fill: build PV-on-θ for any month whose t and pv tiles
+    // are all cached, so the aggregate colorbar stays stable as the user scrubs.
     for (let m = 1; m <= 12; m++) {
         const ck = `${m}:${theta0}`;
         if (_pvCache.has(ck) && _pvCache.get(ck).ready) continue;
         let allHere = true;
         for (const L of LEVELS) {
-            if (!cachedMonth('t', m, L) || !cachedMonth('u', m, L) || !cachedMonth('v', m, L)) {
+            if (!cachedMonth('t', m, L) || !cachedMonth('pv', m, L)) {
                 allHere = false; break;
             }
         }
@@ -535,59 +492,32 @@ function computePVOnIsentrope(month, theta0) {
     };
 }
 
-/** PV computation for a single (month, θ₀) — returns the cached entry or null
- *  if any required tile is missing. Caches its result. */
+/** PV-on-θ for a single (month, θ₀) — interpolate the canonical ERA5 PV
+ *  (already in PVU after era5.js's unit conversion) to the requested θ surface,
+ *  using the θ cube derived from T. Returns the cached entry or null if any
+ *  required tile is missing. */
 function _pvComputeRaw(month, theta0) {
     const thetas = buildThetaCube(month);
     if (!thetas) return null;
 
     const { nlat, nlon } = GRID;
-    const N = nlat * nlon;
     const nlev = LEVELS.length;
 
-    // Fetch u, v tiles on every pressure level (for ζ).
-    const vos = [];
-    for (let k = 0; k < nlev; k++) {
-        const tU = requestEra5('u', { month, level: LEVELS[k] });
-        const tV = requestEra5('v', { month, level: LEVELS[k] });
-        if (!tU || !tV) return null;
-        vos.push(relativeVorticityFromUV(tU.values, tV.values, nlat, nlon));
-    }
-
-    // Coriolis parameter (1D by latitude).
-    const fCor = new Float32Array(nlat);
-    for (let i = 0; i < nlat; i++) {
-        fCor[i] = 2 * OMEGA_EARTH * Math.sin((90 - i) * Math.PI / 180);
-    }
-
-    // PV on every pressure level. Units: 1 PVU = 10⁻⁶ K m² kg⁻¹ s⁻¹ ⇒
-    // multiply SI result by 1e6.
+    // Pull the canonical ERA5 PV tiles (already PVU from the era5.js unit pass).
+    // No need to compute ζ from u, v or to apply the ∂θ/∂p approximation
+    // ourselves — ECMWF's spectral computation is more accurate (full Ertel
+    // form including density-weighting and 3-D vorticity components).
     const pvLevs = new Array(nlev);
-    for (let k = 0; k < nlev; k++) pvLevs[k] = new Float32Array(N);
     for (let k = 0; k < nlev; k++) {
-        for (let idx = 0; idx < N; idx++) {
-            const i = (idx / nlon) | 0;
-            const absVort = vos[k][idx] + fCor[i];
-            let dthdp;
-            if (k === 0) {
-                const dp = (LEVELS[1] - LEVELS[0]) * 100;
-                dthdp = (thetas[1][idx] - thetas[0][idx]) / dp;
-            } else if (k === nlev - 1) {
-                const dp = (LEVELS[nlev - 1] - LEVELS[nlev - 2]) * 100;
-                dthdp = (thetas[nlev - 1][idx] - thetas[nlev - 2][idx]) / dp;
-            } else {
-                const dp = (LEVELS[k + 1] - LEVELS[k - 1]) * 100;
-                dthdp = (thetas[k + 1][idx] - thetas[k - 1][idx]) / dp;
-            }
-            pvLevs[k][idx] = -G_EARTH * absVort * dthdp * 1e6;
-        }
+        const tPV = requestEra5('pv', { month, level: LEVELS[k] });
+        if (!tPV) return null;
+        pvLevs[k] = tPV.values;
     }
 
     const interp = interpolateColumnToIsentrope(pvLevs, thetas, theta0);
 
-    // Clamp display range for readability — stratospheric intrusions can
-    // blow up the limits to hundreds of PVU; cap around ±10 so the
-    // tropospheric ribbon keeps its contrast.
+    // Clamp display range — stratospheric intrusions reach hundreds of PVU;
+    // ±10 keeps the tropospheric ribbon (where the dynamic story lives) crisp.
     const DISPLAY_CAP = 10;
     const result = {
         values: interp.values,
@@ -597,7 +527,6 @@ function _pvComputeRaw(month, theta0) {
     };
     _pvCache.set(`${month}:${theta0}`, result);
     return result;
-    // (Cross-month aggregation now happens in computePVOnIsentrope.)
 }
 
 /** True if ERA5 has the listed level (or sl fields w/ no level required). */
