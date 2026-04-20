@@ -2203,8 +2203,13 @@ class GlobeApp {
         let effMode;
         if (kind === 'std') {
             effMode = isStdAnomaly ? 'anomaly' : 'total';
-        } else if (compareOn && mode === 'anomaly') {
-            effMode = 'total';   // compare and anomaly are alternative ways to see differences
+        } else if (compareOn && mode === 'anomaly' && this.state.compareYear == null) {
+            // climo-vs-refPeriod or climo-vs-year compare with Anomaly
+            // degenerates on the right half (ref − ref = 0), so fall back
+            // to raw comparison. year-vs-year compare with Anomaly is
+            // meaningful (both sides show departures from the same climo)
+            // and flows through the anomaly path below.
+            effMode = 'total';
         } else {
             effMode = mode;
         }
@@ -2238,8 +2243,19 @@ class GlobeApp {
                 let refDec;
                 if (effMode === 'total' || !effMode) {
                     refDec = { values: refField.values, vmin: refField.vmin, vmax: refField.vmax };
+                } else if (effMode === 'anomaly') {
+                    // Year-vs-year anomaly compare: subtract the SAME climo
+                    // baseline from both halves so the swipe shows how each
+                    // year departs from the reference period. Without this,
+                    // the right half would be a raw total and the signals
+                    // wouldn't be comparable.
+                    refDec = decompose(
+                        refField.values, GRID.nlat, GRID.nlon, 'anomaly',
+                        decomp.annualMean,
+                        decomp.clamp ? { clamp: decomp.clamp } : {},
+                    );
                 } else {
-                    // Each side runs decompose() against its own data.
+                    // zonal / eddy: each side decomposes independently.
                     refDec = decompose(refField.values, GRID.nlat, GRID.nlon, effMode);
                 }
                 refValues = refDec.values;
@@ -2415,6 +2431,11 @@ class GlobeApp {
                         { symmetric: !!FIELDS[fieldName]?.symmetric, clamp: fieldClamp },
                     );
                     if (range) { current.vmin = range.vmin; current.vmax = range.vmax; }
+                    // Expose the climatology baseline so swipe-compare can
+                    // subtract it from the right-hand side too (year-vs-year
+                    // anomaly: both halves are departures from the same climo).
+                    current.annualMean = annualMeanTheta;
+                    current.clamp = fieldClamp;
                     return current;
                 }
                 // Couldn't compute (no cached months yet) — fall back to total
@@ -2519,6 +2540,10 @@ class GlobeApp {
             current.vmin = range.vmin;
             current.vmax = range.vmax;
         }
+        // Expose the climatology baseline (pressure-coord branch) so swipe-
+        // compare can apply the same anomaly transform to the right half.
+        current.annualMean = annualMean;
+        current.clamp = fieldClamp;
         return current;
     }
 
