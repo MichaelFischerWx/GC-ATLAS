@@ -1016,6 +1016,13 @@ class GlobeApp {
         if (this.state.viewMode === 'map') {
             this.rebuildCoastlines();
             this.rebuildGraticule();
+            // Particles store world-space positions but project() depends on
+            // mapCenterLon — after a pan the existing trail positions are
+            // stale (they read at the OLD centre-lon). Reproject from each
+            // particle's stored (lat, lon) so the wind field stays anchored
+            // to the map instead of sliding with the cursor.
+            if (this.particles) this.particles.onProjectionChanged();
+            if (this.barbs)     this.barbs.rebuild('map');
         }
     }
 
