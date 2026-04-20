@@ -341,14 +341,17 @@ class GlobeApp {
                 (s.field === 'wspd' && (name === 'u' || name === 'v')) ||
                 (s.field === 'pv'   && (name === 't' || name === 'pv')) ||
                 (s.field === 'mse'  && (name === 't' || name === 'z' || name === 'q')) ||
+                (s.field === 'dls'  && (name === 'u' || name === 'v')) ||
                 isenNeedsName;
 
             // PV and θ-coord fields span every pressure level, so don't
             // require level to match — any ingredient arrival could complete
-            // the cache.
+            // the cache. DLS reads u / v at fixed 200 + 850 hPa regardless
+            // of the dropdown level, so its ingredient tiles match too.
             const needsLevelMatch = !(
                 isenNeedsName ||
-                (s.field === 'pv' && (name === 't' || name === 'pv'))
+                (s.field === 'pv' && (name === 't' || name === 'pv')) ||
+                (s.field === 'dls' && (name === 'u' || name === 'v'))
             );
             // MSE in pressure-coord is single-level (only the chosen level matters).
             // In θ-coord it gets caught by isenNeedsName below.
@@ -4464,6 +4467,20 @@ class GlobeApp {
         }
         set('cb-title', field.name + coordSuffix + periodSuffix + modeSuffix);
         set('cb-units', field.units);
+        // Field-level caveat / pedagogical note (e.g. DLS computed from
+        // monthly-mean winds underestimates instantaneous shear). Pulled
+        // from FIELDS[name].note so any field can surface a one-liner.
+        const noteEl = document.getElementById('cb-note');
+        if (noteEl) {
+            const fieldMeta = FIELDS[this.state.field] || {};
+            if (fieldMeta.note) {
+                noteEl.textContent = fieldMeta.note;
+                noteEl.hidden = false;
+            } else {
+                noteEl.textContent = '';
+                noteEl.hidden = true;
+            }
+        }
         // Sub-title under the colorbar: when an independent contour-overlay
         // field is active, name it + its interval so the second ink isn't
         // mystery isolines. ("contours: Geopotential 500 hPa, every 60 m")

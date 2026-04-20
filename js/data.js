@@ -43,6 +43,14 @@ export const FIELDS = {
     d2m:  { type: 'sl', group: 'Surface',            name: '2-m dewpoint',             units: 'K',       cmap: 'turbo',   contour: 5 },
     sst:  { type: 'sl', group: 'Surface',            name: 'Sea surface temperature',  units: 'K',       cmap: 'turbo',   contour: 2 },
     msl:  { type: 'sl', group: 'Surface',            name: 'Mean sea-level pressure',  units: 'hPa',     cmap: 'plasma',  contour: 4 },
+    // Deep-layer shear: |⟨V_200⟩ − ⟨V_850⟩|, magnitude of the difference of
+    // the monthly-mean wind vectors at 200 hPa minus 850 hPa. Useful for TC
+    // genesis climatology (Gray 1968) but UNDERESTIMATES instantaneous
+    // shear because the magnitude of the mean vector ≤ the mean of the
+    // magnitudes (Jensen). For operational TC work prefer ⟨|V_200−V_850|⟩
+    // computed from daily winds.
+    dls:  { type: 'sl', group: 'Derived & PV',       name: 'Deep-layer shear (mean-flow)', units: 'm s⁻¹', cmap: 'magma',   contour: 5, derived: true,
+            note: '|⟨V₂₀₀⟩ − ⟨V₈₅₀⟩| from monthly-mean winds. Underestimates the climatology of instantaneous shear (Jensen) — for TC-genesis thresholds use a daily-resolved product.' },
     sp:   { type: 'sl', group: 'Surface',            name: 'Surface pressure',         units: 'hPa',     cmap: 'plasma',  contour: 20, clamp: { lo: 0.005, hi: 0.995 } },
     blh:  { type: 'sl', group: 'Surface',            name: 'Boundary-layer height',    units: 'm',       cmap: 'plasma',  contour: 200 },
     tcwv: { type: 'sl', group: 'Moisture',           name: 'Precipitable water (TCWV)', units: 'kg m⁻²', cmap: 'thalo',   contour: 5 },
@@ -379,6 +387,25 @@ function magnitudeFromUV(u, v) {
     return { values, vmin, vmax };
 }
 
+// Magnitude of the vector difference (V_top − V_bot) for deep-layer shear.
+// Operates point-wise on aligned grids of u/v at two levels.
+function shearMagnitude(uTop, vTop, uBot, vBot) {
+    const n = uTop.length;
+    const values = new Float32Array(n);
+    let vmin = Infinity, vmax = -Infinity;
+    for (let i = 0; i < n; i++) {
+        const du = uTop[i] - uBot[i];
+        const dv = vTop[i] - vBot[i];
+        const s = Math.hypot(du, dv);
+        values[i] = s;
+        if (Number.isFinite(s)) {
+            if (s < vmin) vmin = s;
+            if (s > vmax) vmax = s;
+        }
+    }
+    return { values, vmin: Number.isFinite(vmin) ? vmin : 0, vmax: Number.isFinite(vmax) ? vmax : 1 };
+}
+
 // Moist static energy: h = c_p·T + g·z + L_v·q, displayed as h/c_p (K).
 // Pressure-coord uses cached t/z/q tiles; θ-coord interpolates each ingredient
 // to the requested isentropic surface.  q is stored in g/kg (×1000 from raw),
@@ -459,6 +486,53 @@ function computeDerived(name, month, level, coord, theta, year = null, refPeriod
         const prefix = `${coord}:${coord === 'theta' ? theta : level}:`;
         const suffix = `:${srcSfx}`;
         const agg = aggregateRangeByPrefixSuffix(_wspdCache, prefix, suffix);
+        return {
+            values: entry.values,
+            vmin: agg ? agg.vmin : entry.vmin,
+            vmax: agg ? agg.vmax : entry.vmax,
+            isReal: true,
+        };
+    }
+    if (name === 'dls') {
+        // Deep-layer shear is a fixed-level diagnostic: |V_200 − V_850|.
+        // Single-level field (no level knob), so the cache key only
+        // varies on month + source slice.
+        const yArgs = year != null
+            ? { period: 'per_year', year }
+            : (refPeriod ? { period: refPeriod } : {});
+        const computeFor = (m) => {
+            const u200 = cachedMonth('u', m, 200, 'mean', period, year);
+            const v200 = cachedMonth('v', m, 200, 'mean', period, year);
+            const u850 = cachedMonth('u', m, 850, 'mean', period, year);
+            const v850 = cachedMonth('v', m, 850, 'mean', period, year);
+            if (!u200 || !v200 || !u850 || !v850) return null;
+            return applyClampToEntry(
+                shearMagnitude(u200, v200, u850, v850), FIELDS.dls);
+        };
+        // Opportunistic 12-month fill so the cross-month colorbar is stable.
+        for (let m = 1; m <= 12; m++) {
+            const k = `${m}:${srcSfx}`;
+            if (_dlsCache.has(k)) continue;
+            const e = computeFor(m);
+            if (e) _dlsCache.set(k, e);
+        }
+        const key = `${month}:${srcSfx}`;
+        let entry = _dlsCache.get(key);
+        if (!entry) {
+            // Force-fetch the four ingredient tiles for the requested month.
+            const u200E = requestEra5('u', { month, level: 200, ...yArgs });
+            const v200E = requestEra5('v', { month, level: 200, ...yArgs });
+            const u850E = requestEra5('u', { month, level: 850, ...yArgs });
+            const v850E = requestEra5('v', { month, level: 850, ...yArgs });
+            if (!u200E || !v200E || !u850E || !v850E) return null;
+            entry = applyClampToEntry(
+                shearMagnitude(u200E.values, v200E.values, u850E.values, v850E.values),
+                FIELDS.dls);
+            _dlsCache.set(key, entry);
+        }
+        const prefix = '';
+        const suffix = `:${srcSfx}`;
+        const agg = aggregateRangeByPrefixSuffix(_dlsCache, prefix, suffix);
         return {
             values: entry.values,
             vmin: agg ? agg.vmin : entry.vmin,
@@ -549,6 +623,7 @@ const _pvCache = new Map();
 const _thetaCubeCache = new Map();    // month → Array<Float32Array> (θ per level)
 const _isenFieldCache = new Map();    // `${name}:${month}:${theta0}` → {values, vmin, vmax}
 const _wspdCache = new Map();         // `${month}:${level|theta}:${coord}` → {values, vmin, vmax}
+const _dlsCache  = new Map();         // `${month}:${srcSfx}` → {values, vmin, vmax} (single-level diagnostic)
 
 /** Aggregate vmin/vmax across every cached entry whose key matches `prefix`.
  *  Used so derived/isentropic fields keep a stable colorbar as the user
@@ -703,6 +778,7 @@ export function invalidateIsentropicCache() {
     _thetaCubeCache.clear();
     _isenFieldCache.clear();
     _wspdCache.clear();
+    _dlsCache.clear();
     _mseCache.clear();
 }
 // Legacy name kept for callers that still import it.
