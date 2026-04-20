@@ -1575,7 +1575,7 @@ class GlobeApp {
                 if (this.state.decompose === 'anomaly') this.updateField();
             })();
         }
-        if ('field' in patch || 'level' in patch || 'vCoord' in patch || 'theta' in patch || 'kind' in patch) {
+        if ('field' in patch || 'level' in patch || 'vCoord' in patch || 'theta' in patch || 'kind' in patch || 'year' in patch) {
             const isen = this.state.vCoord === 'theta';
             const kind = this.state.kind;
             prefetchField(this.state.field, { level: this.state.level, kind });
@@ -1583,6 +1583,18 @@ class GlobeApp {
             // reference period's tiles for the new field/level.
             if (this.state.referencePeriod !== 'default') {
                 prefetchField(this.state.field, { level: this.state.level, period: this.state.referencePeriod });
+            }
+            // Year mode: prefetch all 12 months of the chosen year so the
+            // cross-month aggregator's colorbar stabilises and month-scrub
+            // is instant. Climatology mean for the same months is already
+            // covered by the active-period prefetch above (used as the
+            // year-anomaly reference).
+            if (this.state.year != null) {
+                prefetchField(this.state.field, {
+                    level: this.state.level,
+                    period: 'per_year',
+                    year: this.state.year,
+                });
             }
             prefetchField('u', { level: this.state.level });
             prefetchField('v', { level: this.state.level });
@@ -2078,7 +2090,35 @@ class GlobeApp {
             const meta = FIELDS[this.state.field] || {};
             const useLevel = meta.type === 'pl' ? this.state.level : null;
             const refPeriod = this.state.referencePeriod;
-            if (refPeriod !== 'default' && !meta.derived) {
+            // Year-anomaly: with a specific year selected, anomaly = single-
+            // year tile minus the climatology mean for the same month. The
+            // climatology comes from the chosen reference period (default =
+            // active 30-year window). Pedagogical: "how much warmer was Jul
+            // 2015 than the 1991-2020 Jul mean?"
+            if (this.state.year != null && !meta.derived) {
+                const climoPeriod = (refPeriod !== 'default') ? refPeriod : 'default';
+                const refField = getField(this.state.field, {
+                    month: this.state.month,
+                    level: this.state.level,
+                    coord: this.state.vCoord,
+                    theta: this.state.theta,
+                    kind: 'mean',
+                    period: climoPeriod,
+                    // year omitted → climatology mean tile
+                });
+                annualMean = refField.isReal ? refField.values : null;
+                annualMeanForAgg = (m) => {
+                    const rf = getField(this.state.field, {
+                        month: m,
+                        level: this.state.level,
+                        coord: this.state.vCoord,
+                        theta: this.state.theta,
+                        kind: 'mean',
+                        period: climoPeriod,
+                    });
+                    return rf.isReal ? rf.values : null;
+                };
+            } else if (refPeriod !== 'default' && !meta.derived) {
                 // Climate-change anomaly: same month from reference period.
                 // `kind` is propagated so when Display=±1σ we fetch the ref
                 // period's std tile (giving Δσ) instead of its mean tile.
@@ -2128,7 +2168,13 @@ class GlobeApp {
         const range = aggregatedDecompositionRange(
             mode,
             (m) => {
-                const fm = getField(field, { month: m, level, coord: vCoord, theta });
+                // Year mode: each iteration fetches the per-year tile for
+                // month m of the chosen year. Climatology mode: per-month
+                // climatology tile (existing behaviour).
+                const fm = getField(field, {
+                    month: m, level, coord: vCoord, theta,
+                    year: this.state.year,
+                });
                 return fm.isReal ? fm : null;
             },
             GRID.nlat, GRID.nlon, annualMeanForAgg,
