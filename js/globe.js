@@ -167,15 +167,15 @@ class GlobeApp {
                     period === s.climatologyPeriod ||
                     (!period && s.climatologyPeriod === 'default')));
             if (period && !isActivePeriod) {
-                // θ climate-change anomaly needs T (for the θ cube) + the
-                // field (for interpolation) + pv (when field is pv) at
-                // every level from the reference period. Any of those tiles
-                // landing should trigger a re-render so the θ interpolation
-                // can progress. name === s.field alone isn't enough on θ.
+                // θ climate-change / year-vs-refPeriod anomaly needs T (for
+                // the θ cube) + the field (for interpolation) + pv (when
+                // field is pv) at every level from the reference period.
+                // Any of those tiles landing should trigger a re-render so
+                // the θ interpolation can progress. name === s.field alone
+                // isn't enough on θ.
                 const thetaAnomalyWaiting = s.vCoord === 'theta'
                     && s.decompose === 'anomaly'
                     && s.referencePeriod === period
-                    && s.year == null
                     && (name === s.field || name === 't' || name === 'pv');
                 const isRefForAnomaly = s.referencePeriod === period
                                      && s.decompose === 'anomaly'
@@ -1707,12 +1707,12 @@ class GlobeApp {
                     return;
                 }
                 prefetchField(this.state.field, { level: this.state.level, period: patch.referencePeriod });
-                // θ climate-change-anomaly needs T at every level + field
-                // at every level from the reference period so the θ-cube
-                // + interpolation can run without cold-start stalls.
+                // θ climate-change / year-vs-refPeriod anomaly needs T at
+                // every level + field at every level from the reference
+                // period so the θ-cube + interpolation can run without
+                // cold-start stalls. Applies whether or not year is set.
                 if (this.state.vCoord === 'theta'
-                        && this.state.decompose === 'anomaly'
-                        && this.state.year == null) {
+                        && this.state.decompose === 'anomaly') {
                     for (const L of LEVELS) {
                         prefetchField('t', { level: L, period: patch.referencePeriod });
                         if (this.state.field !== 't') {
@@ -2274,54 +2274,54 @@ class GlobeApp {
         let annualMeanForAgg = null;
         if (mode === 'anomaly') {
             if (this.state.vCoord === 'theta') {
-                // θ-mode anomaly — four sub-cases based on state:
-                //   1. refPeriod set (non-default, !== active) + no year:
-                //      climate-change anomaly — current climo's θ-values
-                //      minus refPeriod's θ-values, matched month-by-month.
-                //   2. state.year set: year-vs-climo — year's θ-values
-                //      minus active-climatology's 12-month θ-mean (or
-                //      refPeriod's 12-month mean if refPeriod is set).
-                //   3. self-anomaly: value minus 12-month mean of the same
-                //      source on the same θ surface.
+                // θ-mode anomaly, unified logic:
+                //
+                //   refPeriod set + year set → year-vs-refPeriod-climo
+                //     (e.g. "2015 Jul 330K PV minus 1961-1990 Jul 330K PV mean")
+                //   refPeriod set + no year → climate-change anomaly
+                //     (e.g. "1991-2020 Jul mean minus 1961-1990 Jul mean on 330K")
+                //   no refPeriod + year set → year-vs-active-climo
+                //     (e.g. "2015 Jul 330K PV minus 1991-2020 Jul 330K PV mean")
+                //   no refPeriod + no year → self-anomaly
+                //     (value minus 12-month annual mean of active climo on θ)
+                //
+                // Reference-source logic: same-month reference when either
+                // year or refPeriod is in play (pedagogically: "departure
+                // from THIS MONTH's normal"). 12-month mean only for pure
+                // self-anomaly (classic "seasonal departure" definition).
                 const theta = this.state.theta;
                 const fieldName = this.state.field;
                 const refPeriod = this.state.referencePeriod;
-                const isClimateChange = this.state.year == null
-                    && refPeriod !== 'default'
-                    && refPeriod !== this.state.climatologyPeriod;
                 const fieldClamp = FIELDS[fieldName]?.clamp ?? null;
+                const hasRefPeriod = refPeriod !== 'default'
+                    && refPeriod !== this.state.climatologyPeriod;
+                const hasYear = this.state.year != null;
 
                 let annualMeanTheta = null;
                 let annualMeanForAgg = null;
-                if (isClimateChange) {
-                    // Climate-change: left side is active-climo θ-values
-                    // (f.values already holds the current month). Reference
-                    // is the SAME-MONTH θ-value from refPeriod. Per-month
-                    // aggregator matches each month to its refPeriod
-                    // counterpart so the seasonal cycle doesn't bleed in
-                    // (same pattern as the pressure-coord climate-change
-                    // aggregator fix from earlier).
+
+                if (hasRefPeriod || hasYear) {
+                    // Same-month reference. The reference period is either
+                    // the chosen alt-climo (refPeriod) or the active default.
+                    // When both year and refPeriod are set, refPeriod wins
+                    // (deeper baseline for the year-anomaly).
+                    const refArgs = hasRefPeriod
+                        ? { period: refPeriod }
+                        : { /* active climo — no extras */ };
                     const refField = getField(fieldName, {
-                        month: this.state.month,
-                        coord: 'theta',
-                        theta,
-                        period: refPeriod,
+                        month: this.state.month, coord: 'theta', theta, ...refArgs,
                     });
                     annualMeanTheta = refField.isReal ? refField.values : null;
                     annualMeanForAgg = (m) => {
                         const rf = getField(fieldName, {
-                            month: m, coord: 'theta', theta, period: refPeriod,
+                            month: m, coord: 'theta', theta, ...refArgs,
                         });
                         return rf.isReal ? rf.values : null;
                     };
                 } else {
-                    // Self / year-vs-climo: reference is the 12-month mean
-                    // of the ACTIVE climatology on this θ surface (climo
-                    // tiles — no year, no refPeriod).
+                    // Pure self-anomaly: 12-month annual mean of active climo.
                     const getMonthClimoIsen = (m) => {
-                        const g = getField(fieldName, {
-                            month: m, coord: 'theta', theta,
-                        });
+                        const g = getField(fieldName, { month: m, coord: 'theta', theta });
                         return g.isReal ? g.values : null;
                     };
                     annualMeanTheta = annualMeanFrom(
