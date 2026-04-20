@@ -175,6 +175,78 @@ function composeCustomRangeMean(name, month, level, spec) {
 }
 export { composeCustomRangeMean };
 
+// ── Per-year evaluation cache for derived / θ-coord composites ──────
+// Keyed by `${name}:${coord}:${level|theta}:${month}:${year}`. Stores
+// the evaluated grid for one event year; the composite reuses these
+// across month-scrubs and across composite-rebuilds so flipping
+// thresholds is fast once the underlying tiles are warm.
+const _derivedYearCache = new Map();
+
+function _derivedYearKey(name, opts, year) {
+    const { month, level, coord, theta } = opts;
+    const z = coord === 'theta' ? `t${theta}` : `p${level ?? 'sl'}`;
+    return `${name}:${coord}:${z}:${month}:${year}`;
+}
+
+/** Evaluate the derived / isen value-grid for one event year, with
+ *  cache. Returns null when ingredient tiles are still loading. */
+function _derivedYearEval(name, opts, year) {
+    const key = _derivedYearKey(name, opts, year);
+    const hit = _derivedYearCache.get(key);
+    if (hit) return hit;
+    const meta = FIELDS[name];
+    const { month, level, coord, theta } = opts;
+    const isenMode = (coord === 'theta') && meta.type === 'pl';
+    let entry = null;
+    if (meta.derived) {
+        entry = computeDerived(name, month, level, coord, theta, year, null);
+    } else if (isenMode) {
+        entry = fieldOnIsentrope(name, month, theta, year, null);
+    }
+    if (!entry || !entry.values) return null;
+    _derivedYearCache.set(key, entry);
+    return entry;
+}
+
+/** Composite a derived / isen field across a list of event years. Each
+ *  per-year evaluation is computed (and cached) separately, then the
+ *  resulting grids are averaged point-wise. NaN-skipping so years that
+ *  miss the θ surface in some columns still contribute elsewhere. */
+function composeDerivedComposite(name, opts, years) {
+    const grids = [];
+    for (const y of years) {
+        const e = _derivedYearEval(name, opts, y);
+        if (!e || !e.values) return null;   // pending → caller re-tries
+        grids.push(e.values);
+    }
+    if (grids.length === 0) return null;
+    const N = grids[0].length;
+    const out = new Float32Array(N);
+    const cnt = new Uint16Array(N);
+    for (const g of grids) {
+        for (let i = 0; i < N; i++) {
+            const v = g[i];
+            if (Number.isFinite(v)) { out[i] += v; cnt[i] += 1; }
+        }
+    }
+    let vmin = Infinity, vmax = -Infinity;
+    for (let i = 0; i < N; i++) {
+        if (cnt[i] > 0) {
+            out[i] /= cnt[i];
+            if (out[i] < vmin) vmin = out[i];
+            if (out[i] > vmax) vmax = out[i];
+        } else {
+            out[i] = NaN;
+        }
+    }
+    return {
+        values: out,
+        vmin: Number.isFinite(vmin) ? vmin : 0,
+        vmax: Number.isFinite(vmax) ? vmax : 1,
+        isReal: true,
+    };
+}
+
 // Force [-A, +A] when meta.symmetric so RdBu_r centres white on zero. Applied
 // at getField return so it covers raw + derived + isentropic paths uniformly.
 function symmetricRange(vmin, vmax, meta) {
@@ -254,6 +326,43 @@ export function getField(name, { month = 1, level = 500, coord = 'pressure', the
             };
         }
         // Not all tiles cached yet — fall through to pending below.
+        return {
+            ...pendingField(),
+            shape: [GRID.nlat, GRID.nlon],
+            lats: LATS, lons: LONS,
+            ...meta,
+            isReal: false, kind: 'mean',
+            period: 'custom_range',
+            customRange,
+        };
+    }
+    // Composite of a derived field (wspd, mse, pv, dls) or any θ-coord
+    // pressure field (PV-on-θ, T-on-θ, etc.). The plain customRange
+    // engine above can't help because it averages tile values directly,
+    // and these fields need the per-year COMPUTED grid to be averaged.
+    // Compute per-year, then mean across event years (NaN-skipping).
+    // Without this branch, derived/θ composites silently returned the
+    // climatology, which made the anomaly view paint zero everywhere.
+    if (customRange && Array.isArray(customRange.years) && customRange.years.length
+        && (meta.derived || (coord === 'theta' && meta.type === 'pl'))) {
+        const composed = composeDerivedComposite(
+            name, { month, level, coord, theta }, customRange.years);
+        if (composed) {
+            const r = symmetricRange(composed.vmin, composed.vmax, meta);
+            return {
+                values: composed.values,
+                vmin: r.vmin, vmax: r.vmax,
+                shape: [GRID.nlat, GRID.nlon],
+                lats: LATS, lons: LONS,
+                ...meta,
+                long_name: meta.name,
+                units: meta.units,
+                isReal: true,
+                kind: 'mean',
+                period: 'custom_range',
+                customRange,
+            };
+        }
         return {
             ...pendingField(),
             shape: [GRID.nlat, GRID.nlon],
@@ -780,6 +889,7 @@ export function invalidateIsentropicCache() {
     _wspdCache.clear();
     _dlsCache.clear();
     _mseCache.clear();
+    _derivedYearCache.clear();
 }
 // Legacy name kept for callers that still import it.
 export const invalidatePVCache = invalidateIsentropicCache;

@@ -3595,6 +3595,23 @@ class GlobeApp {
         btn.disabled = false;
     }
 
+    // Which ingredient fields does the active displayed field need at the
+    // per-year tile level? Mirrors the dispatch in data.js's
+    // computeDerived / fieldOnIsentrope so the composite Apply button
+    // prefetches the right tiles for derived / θ-coord fields.
+    _compositeIngredientFields() {
+        const f = this.state.field;
+        const isenActive = this.state.vCoord === 'theta';
+        if (f === 'pv')   return ['t', 'pv'];
+        if (f === 'wspd') return isenActive ? ['t', 'u', 'v'] : ['u', 'v'];
+        if (f === 'mse')  return isenActive ? ['t', 'z', 'q'] : ['t', 'z', 'q'];
+        if (f === 'dls')  return ['u', 'v'];
+        // θ-coord on a non-derived field — needs t for the cube + the field.
+        if (isenActive)   return ['t', f];
+        // Plain raw field on pressure: just the field itself.
+        return [f];
+    }
+
     _applyComposite() {
         const sel    = document.getElementById('composite-index');
         const cmpSel = document.getElementById('composite-cmp');
@@ -3610,15 +3627,26 @@ class GlobeApp {
         const { kept: years } = this._clipToAvailableYears(
             eventYears(id, month, cmp, threshold));
         if (years.length === 0) return;
-        // Prefetch per-year tiles for all event years at the current
-        // (field, level). The composer mean lands as each tile arrives
-        // (onFieldLoaded → updateField); no all-or-nothing wait.
+        // Prefetch per-year ingredient tiles. For raw fields this is just
+        // the field tile at the displayed level. For derived (PV, wspd,
+        // mse, dls) and θ-coord fields the composer needs ingredient
+        // tiles at every pressure level, so kick a wider prefetch — only
+        // for the current month to avoid flooding (months scrub lazily).
+        const ingredients = this._compositeIngredientFields();
+        const meta = FIELDS[this.state.field];
+        const allLevels = !!(meta?.derived || this.state.vCoord === 'theta');
+        const lvls = allLevels ? LEVELS : [meta?.type === 'pl' ? this.state.level : null];
         for (const y of years) {
-            prefetchField(this.state.field, {
-                level: this.state.level,
-                period: 'per_year',
-                year: y,
-            });
+            for (const ing of ingredients) {
+                for (const L of lvls) {
+                    prefetchField(ing, {
+                        level: L,
+                        months: [month],   // current month only — keeps the burst small
+                        period: 'per_year',
+                        year: y,
+                    });
+                }
+            }
         }
         const label = compositeLabel(id, month, cmp, threshold);
         this.setState({
