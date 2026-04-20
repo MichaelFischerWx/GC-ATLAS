@@ -143,19 +143,26 @@ export function getField(name, { month = 1, level = 500, coord = 'pressure', the
     // those paths in std mode (and tag the return so UI can surface this).
     const stdUnsupported = kind === 'std' && (meta.derived || isenMode);
     const effKind = stdUnsupported ? 'mean' : kind;
-    // Reference-period (non-default) only supported for raw fields. Derived /
-    // isentropic paths collapse back to default period so existing diagnostic
-    // logic keeps working. Same applies to per-year tiles (year != null) —
-    // EXCEPT for isentropic mode, where the θ-cube + interpolation machinery
-    // is year-aware (fieldOnIsentrope + buildThetaCube + computePVOnIsentrope
-    // each thread `year` through). So isenMode doesn't force effYear=null.
-    const periodUnsupported = period !== 'default' && (meta.derived || isenMode);
+    // Reference-period (non-default) is supported for raw fields (direct tile
+    // fetch) AND for isentropic mode (the θ cube + interpolation machinery
+    // thread `refPeriod` through — fetches 1961-1990 pressure tiles, builds
+    // 1961-1990 θ cube, interpolates). Only pressure-coord *non-derived*
+    // fields used the per-period path before; now isenMode gets it too.
+    // Derived non-θ-only fields in pressure mode still fall back to default
+    // period (they'd need more plumbing to compose).
+    const periodUnsupported = period !== 'default'
+        && meta.derived
+        && !meta.thetaOnly
+        && !isenMode;
     const effPeriod = periodUnsupported ? 'default' : period;
     const effYear = (year != null && meta.derived && !meta.thetaOnly) ? null : year;
 
     // Derived fields (e.g. wind speed, PV) — compute from component tiles.
+    // refPeriod (e.g. 1961-1990) is only propagated when year is null, since
+    // year takes precedence as the tile-source selector.
+    const refPeriodArg = (effYear == null && effPeriod !== 'default') ? effPeriod : null;
     if (meta.derived) {
-        const d = computeDerived(name, month, level, coord, theta, effYear);
+        const d = computeDerived(name, month, level, coord, theta, effYear, refPeriodArg);
         if (d) {
             const r = symmetricRange(d.vmin, d.vmax, meta);
             return {
@@ -167,10 +174,11 @@ export function getField(name, { month = 1, level = 500, coord = 'pressure', the
                 kind: 'mean',
                 stdUnavailable: stdUnsupported,
                 year: effYear,
+                period: effPeriod,
             };
         }
     } else if (isenMode) {
-        const d = fieldOnIsentrope(name, month, theta, effYear);
+        const d = fieldOnIsentrope(name, month, theta, effYear, refPeriodArg);
         if (d) {
             const r = symmetricRange(d.vmin, d.vmax, meta);
             return {
@@ -184,6 +192,7 @@ export function getField(name, { month = 1, level = 500, coord = 'pressure', the
                 kind: 'mean',
                 stdUnavailable: stdUnsupported,
                 year: effYear,
+                period: effPeriod,
             };
         }
     } else {
@@ -278,23 +287,24 @@ function computeMSEFromTiles(tT, tZ, tQ) {
     return { values: out, vmin, vmax };
 }
 
-function computeDerived(name, month, level, coord, theta, year = null) {
-    // Year-aware derived fields: on θ-coord we now thread year through the
-    // isentropic interpolation (buildThetaCube + fieldOnIsentrope +
-    // computePVOnIsentrope all accept year). For pressure-coord wspd/mse
-    // we also thread year through cachedMonth/requestEra5 so picking a
-    // specific year returns that year's derived field (not climo).
-    const ySfx = year ?? '_';
-    const period = year != null ? 'per_year' : 'default';
-    const yReq = year != null ? { period, year } : {};
+function computeDerived(name, month, level, coord, theta, year = null, refPeriod = null) {
+    // Year-aware + refPeriod-aware derived fields. Source precedence:
+    //   year set → per-year tile tree for that year
+    //   refPeriod set → alternate climatology (e.g. 1961-1990)
+    //   neither → active default climatology
+    const srcSfx = `${year ?? '_'}:${refPeriod ?? '_'}`;
+    const period = year != null ? 'per_year' : (refPeriod || 'default');
+    const yReq = year != null
+        ? { period, year }
+        : (refPeriod ? { period: refPeriod } : {});
     if (name === 'wspd') {
         for (let m = 1; m <= 12; m++) {
-            const k = `${coord}:${coord === 'theta' ? theta : level}:${m}:${ySfx}`;
+            const k = `${coord}:${coord === 'theta' ? theta : level}:${m}:${srcSfx}`;
             if (_wspdCache.has(k)) continue;
             let uVals, vVals;
             if (coord === 'theta') {
-                const uI = fieldOnIsentrope('u', m, theta, year);
-                const vI = fieldOnIsentrope('v', m, theta, year);
+                const uI = fieldOnIsentrope('u', m, theta, year, refPeriod);
+                const vI = fieldOnIsentrope('v', m, theta, year, refPeriod);
                 if (!uI || !vI) continue;
                 uVals = uI.values; vVals = vI.values;
             } else {
@@ -306,13 +316,13 @@ function computeDerived(name, month, level, coord, theta, year = null) {
             _wspdCache.set(k, applyClampToEntry(magnitudeFromUV(uVals, vVals), FIELDS.wspd));
         }
 
-        const key = `${coord}:${coord === 'theta' ? theta : level}:${month}:${ySfx}`;
+        const key = `${coord}:${coord === 'theta' ? theta : level}:${month}:${srcSfx}`;
         let entry = _wspdCache.get(key);
         if (!entry) {
             let uVals, vVals;
             if (coord === 'theta') {
-                const uI = fieldOnIsentrope('u', month, theta, year);
-                const vI = fieldOnIsentrope('v', month, theta, year);
+                const uI = fieldOnIsentrope('u', month, theta, year, refPeriod);
+                const vI = fieldOnIsentrope('v', month, theta, year, refPeriod);
                 if (!uI || !vI) return null;
                 uVals = uI.values; vVals = vI.values;
             } else {
@@ -325,7 +335,7 @@ function computeDerived(name, month, level, coord, theta, year = null) {
             _wspdCache.set(key, entry);
         }
         const prefix = `${coord}:${coord === 'theta' ? theta : level}:`;
-        const suffix = `:${ySfx}`;
+        const suffix = `:${srcSfx}`;
         const agg = aggregateRangeByPrefixSuffix(_wspdCache, prefix, suffix);
         return {
             values: entry.values,
@@ -336,17 +346,17 @@ function computeDerived(name, month, level, coord, theta, year = null) {
     }
     if (name === 'pv') {
         const theta0 = (coord === 'theta') ? theta : 330;
-        return computePVOnIsentrope(month, theta0, year);
+        return computePVOnIsentrope(month, theta0, year, refPeriod);
     }
     if (name === 'mse') {
         for (let m = 1; m <= 12; m++) {
-            const k = `${coord}:${coord === 'theta' ? theta : level}:${m}:${ySfx}`;
+            const k = `${coord}:${coord === 'theta' ? theta : level}:${m}:${srcSfx}`;
             if (_mseCache.has(k)) continue;
             let t, z, q;
             if (coord === 'theta') {
-                const Ti = fieldOnIsentrope('t', m, theta, year);
-                const Zi = fieldOnIsentrope('z', m, theta, year);
-                const Qi = fieldOnIsentrope('q', m, theta, year);
+                const Ti = fieldOnIsentrope('t', m, theta, year, refPeriod);
+                const Zi = fieldOnIsentrope('z', m, theta, year, refPeriod);
+                const Qi = fieldOnIsentrope('q', m, theta, year, refPeriod);
                 if (!Ti || !Zi || !Qi) continue;
                 t = Ti.values; z = Zi.values; q = Qi.values;
             } else {
@@ -357,14 +367,14 @@ function computeDerived(name, month, level, coord, theta, year = null) {
             }
             _mseCache.set(k, applyClampToEntry(computeMSEFromTiles(t, z, q), FIELDS.mse));
         }
-        const key = `${coord}:${coord === 'theta' ? theta : level}:${month}:${ySfx}`;
+        const key = `${coord}:${coord === 'theta' ? theta : level}:${month}:${srcSfx}`;
         let entry = _mseCache.get(key);
         if (!entry) {
             let tT, tZ, tQ;
             if (coord === 'theta') {
-                const Ti = fieldOnIsentrope('t', month, theta, year);
-                const Zi = fieldOnIsentrope('z', month, theta, year);
-                const Qi = fieldOnIsentrope('q', month, theta, year);
+                const Ti = fieldOnIsentrope('t', month, theta, year, refPeriod);
+                const Zi = fieldOnIsentrope('z', month, theta, year, refPeriod);
+                const Qi = fieldOnIsentrope('q', month, theta, year, refPeriod);
                 if (!Ti || !Zi || !Qi) return null;
                 tT = Ti.values; tZ = Zi.values; tQ = Qi.values;
             } else {
@@ -378,7 +388,7 @@ function computeDerived(name, month, level, coord, theta, year = null) {
             _mseCache.set(key, entry);
         }
         const prefix = `${coord}:${coord === 'theta' ? theta : level}:`;
-        const suffix = `:${ySfx}`;
+        const suffix = `:${srcSfx}`;
         const agg = aggregateRangeByPrefixSuffix(_mseCache, prefix, suffix);
         return {
             values: entry.values,
@@ -434,14 +444,18 @@ function aggregateRangeByPrefix(cacheMap, prefix) {
 }
 
 /** Build (or reuse) the per-level θ cube for `month`. Requires T tiles at
- *  every LEVEL; returns null if any are missing. When `year` is set the cube
- *  is built from that year's T tiles (per-year tree); otherwise from the
- *  active 30-year climatology T tiles. */
-function buildThetaCube(month, year = null) {
-    const ck = `${month}:${year ?? '_'}`;
+ *  every LEVEL; returns null if any are missing. Source selection:
+ *    year set → per-year tiles for that year  (year-vs-* anomaly)
+ *    refPeriod set → that climatology's tiles (climate-change anomaly)
+ *    neither → active 30-year climatology (self-anomaly or total).
+ *  year and refPeriod are mutually exclusive; year takes precedence. */
+function buildThetaCube(month, year = null, refPeriod = null) {
+    const ck = `${month}:${year ?? '_'}:${refPeriod ?? '_'}`;
     const hit = _thetaCubeCache.get(ck);
     if (hit) return hit;
-    const tReq = year != null ? { period: 'per_year', year } : {};
+    const tReq = year != null
+        ? { period: 'per_year', year }
+        : (refPeriod ? { period: refPeriod } : {});
     const { nlat, nlon } = GRID;
     const N = nlat * nlon;
     const thetas = [];
@@ -497,53 +511,56 @@ function interpolateColumnToIsentrope(valsByLev, thetasByLev, theta0) {
  *  any required T or field tile is missing. Colorbar range (vmin/vmax) is
  *  aggregated across every cached month at the same (name, θ₀) so scrubbing
  *  months doesn't rescale the colormap. */
-function fieldOnIsentrope(name, month, theta0, year = null) {
-    // Cache keys gain a year suffix so climatology and per-year θ
-    // interpolations coexist without collision.
-    const ySfx = year ?? '_';
-    const tReq = year != null ? { period: 'per_year', year } : {};
+function fieldOnIsentrope(name, month, theta0, year = null, refPeriod = null) {
+    // Cache keys distinguish by both year (per-year) AND refPeriod
+    // (alternate climatology, e.g. 1961-1990) so all three sources
+    // (year, refPeriod, active-default) coexist cleanly.
+    const srcSfx = `${year ?? '_'}:${refPeriod ?? '_'}`;
+    const reqBase = year != null
+        ? { period: 'per_year', year }
+        : (refPeriod ? { period: refPeriod } : {});
+    const lookupPeriod = year != null ? 'per_year' : (refPeriod || 'default');
     // Opportunistic fill across all 12 months — needed for the cross-month
     // aggregate to be complete and the colorbar to stay stable as you scrub.
     for (let m = 1; m <= 12; m++) {
-        const ck = `${name}:${m}:${theta0}:${ySfx}`;
+        const ck = `${name}:${m}:${theta0}:${srcSfx}`;
         if (_isenFieldCache.has(ck)) continue;
         // Need t at every level (for θ cube) AND the field tile at every level.
         let allHere = true;
         for (const L of LEVELS) {
-            if (!cachedMonth('t', m, L, 'mean', year != null ? 'per_year' : 'default', year) ||
-                !cachedMonth(name, m, L, 'mean', year != null ? 'per_year' : 'default', year)) {
+            if (!cachedMonth('t', m, L, 'mean', lookupPeriod, year) ||
+                !cachedMonth(name, m, L, 'mean', lookupPeriod, year)) {
                 allHere = false; break;
             }
         }
         if (!allHere) continue;
-        const thetas = buildThetaCube(m, year);
+        const thetas = buildThetaCube(m, year, refPeriod);
         if (!thetas) continue;
         const valsByLev = [];
         for (const L of LEVELS) {
-            valsByLev.push(cachedMonth(name, m, L, 'mean',
-                year != null ? 'per_year' : 'default', year));
+            valsByLev.push(cachedMonth(name, m, L, 'mean', lookupPeriod, year));
         }
         _isenFieldCache.set(ck, interpolateColumnToIsentrope(valsByLev, thetas, theta0));
     }
 
-    const key = `${name}:${month}:${theta0}:${ySfx}`;
+    const key = `${name}:${month}:${theta0}:${srcSfx}`;
     let entry = _isenFieldCache.get(key);
     if (!entry) {
-        const thetas = buildThetaCube(month, year);
+        const thetas = buildThetaCube(month, year, refPeriod);
         if (!thetas) return null;
         const valsByLev = [];
         for (let k = 0; k < LEVELS.length; k++) {
-            const tile = requestEra5(name, { month, level: LEVELS[k], ...tReq });
+            const tile = requestEra5(name, { month, level: LEVELS[k], ...reqBase });
             if (!tile) return null;
             valsByLev.push(tile.values);
         }
         entry = interpolateColumnToIsentrope(valsByLev, thetas, theta0);
         _isenFieldCache.set(key, entry);
     }
-    // Aggregate range across every cached month at (name, θ₀, year).
+    // Aggregate range across every cached month at (name, θ₀, source).
     let vmin = Infinity, vmax = -Infinity;
     const prefix = `${name}:`;
-    const suffix = `:${theta0}:${ySfx}`;
+    const suffix = `:${theta0}:${srcSfx}`;
     for (const [k, v] of _isenFieldCache) {
         if (!k.startsWith(prefix) || !k.endsWith(suffix)) continue;
         if (v.vmin < vmin) vmin = v.vmin;
@@ -569,34 +586,34 @@ export function invalidateIsentropicCache() {
 // Legacy name kept for callers that still import it.
 export const invalidatePVCache = invalidateIsentropicCache;
 
-function computePVOnIsentrope(month, theta0, year = null) {
-    const ySfx = year ?? '_';
-    const period = year != null ? 'per_year' : 'default';
+function computePVOnIsentrope(month, theta0, year = null, refPeriod = null) {
+    const srcSfx = `${year ?? '_'}:${refPeriod ?? '_'}`;
+    const lookupPeriod = year != null ? 'per_year' : (refPeriod || 'default');
     // Opportunistic fill: build PV-on-θ for any month whose t and pv tiles
     // are all cached, so the aggregate colorbar stays stable as the user scrubs.
     for (let m = 1; m <= 12; m++) {
-        const ck = `${m}:${theta0}:${ySfx}`;
+        const ck = `${m}:${theta0}:${srcSfx}`;
         if (_pvCache.has(ck) && _pvCache.get(ck).ready) continue;
         let allHere = true;
         for (const L of LEVELS) {
-            if (!cachedMonth('t',  m, L, 'mean', period, year) ||
-                !cachedMonth('pv', m, L, 'mean', period, year)) {
+            if (!cachedMonth('t',  m, L, 'mean', lookupPeriod, year) ||
+                !cachedMonth('pv', m, L, 'mean', lookupPeriod, year)) {
                 allHere = false; break;
             }
         }
         if (!allHere) continue;
-        _pvComputeRaw(m, theta0, year);
+        _pvComputeRaw(m, theta0, year, refPeriod);
     }
 
-    const cacheKey = `${month}:${theta0}:${ySfx}`;
+    const cacheKey = `${month}:${theta0}:${srcSfx}`;
     let cached = _pvCache.get(cacheKey);
     if (!cached?.ready) {
-        cached = _pvComputeRaw(month, theta0, year);
+        cached = _pvComputeRaw(month, theta0, year, refPeriod);
         if (!cached) return null;
     }
-    // Aggregate range across every cached month at this (θ₀, year).
+    // Aggregate range across every cached month at this (θ₀, source).
     let vmin = Infinity, vmax = -Infinity;
-    const suffix = `:${theta0}:${ySfx}`;
+    const suffix = `:${theta0}:${srcSfx}`;
     for (const [k, v] of _pvCache) {
         if (!k.endsWith(suffix) || !v.ready) continue;
         if (v.vmin < vmin) vmin = v.vmin;
@@ -613,13 +630,15 @@ function computePVOnIsentrope(month, theta0, year = null) {
  *  (already in PVU after era5.js's unit conversion) to the requested θ surface,
  *  using the θ cube derived from T. Returns the cached entry or null if any
  *  required tile is missing. */
-function _pvComputeRaw(month, theta0, year = null) {
-    const thetas = buildThetaCube(month, year);
+function _pvComputeRaw(month, theta0, year = null, refPeriod = null) {
+    const thetas = buildThetaCube(month, year, refPeriod);
     if (!thetas) return null;
 
     const { nlat, nlon } = GRID;
     const nlev = LEVELS.length;
-    const pvReq = year != null ? { period: 'per_year', year } : {};
+    const pvReq = year != null
+        ? { period: 'per_year', year }
+        : (refPeriod ? { period: refPeriod } : {});
 
     // Pull the canonical ERA5 PV tiles (already PVU from the era5.js unit pass).
     // No need to compute ζ from u, v or to apply the ∂θ/∂p approximation
@@ -643,7 +662,7 @@ function _pvComputeRaw(month, theta0, year = null) {
         vmax: Math.min(interp.vmax,  DISPLAY_CAP),
         shape: [nlat, nlon], isReal: true, ready: true,
     };
-    _pvCache.set(`${month}:${theta0}:${year ?? '_'}`, result);
+    _pvCache.set(`${month}:${theta0}:${year ?? '_'}:${refPeriod ?? '_'}`, result);
     return result;
 }
 

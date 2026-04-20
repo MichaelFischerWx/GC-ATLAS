@@ -167,9 +167,20 @@ class GlobeApp {
                     period === s.climatologyPeriod ||
                     (!period && s.climatologyPeriod === 'default')));
             if (period && !isActivePeriod) {
+                // θ climate-change anomaly needs T (for the θ cube) + the
+                // field (for interpolation) + pv (when field is pv) at
+                // every level from the reference period. Any of those tiles
+                // landing should trigger a re-render so the θ interpolation
+                // can progress. name === s.field alone isn't enough on θ.
+                const thetaAnomalyWaiting = s.vCoord === 'theta'
+                    && s.decompose === 'anomaly'
+                    && s.referencePeriod === period
+                    && s.year == null
+                    && (name === s.field || name === 't' || name === 'pv');
                 const isRefForAnomaly = s.referencePeriod === period
                                      && s.decompose === 'anomaly'
-                                     && name === s.field && monthMatches;
+                                     && (thetaAnomalyWaiting ||
+                                         (name === s.field && monthMatches));
                 const isRefForCompare = s.compareMode
                                      && s.referencePeriod === period
                                      && s.compareYear == null
@@ -181,7 +192,13 @@ class GlobeApp {
                                       && period === 'per_year'
                                       && (year == null || year === s.compareYear)
                                       && name === s.field && monthMatches;
-                if (isRefForAnomaly || isRefForCompare || isYearForCompare) this.updateField();
+                if (isRefForAnomaly || isRefForCompare || isYearForCompare) {
+                    // Pressure tiles for θ interpolation change the θ cube
+                    // / isentropic caches for the reference period — bust
+                    // them so the next render rebuilds with fresh data.
+                    if (thetaAnomalyWaiting) invalidateIsentropicCache();
+                    this.updateField();
+                }
                 return;   // don't trigger any of the active-period logic
             }
             const isenActive  = (s.vCoord === 'theta');
@@ -1690,6 +1707,22 @@ class GlobeApp {
                     return;
                 }
                 prefetchField(this.state.field, { level: this.state.level, period: patch.referencePeriod });
+                // θ climate-change-anomaly needs T at every level + field
+                // at every level from the reference period so the θ-cube
+                // + interpolation can run without cold-start stalls.
+                if (this.state.vCoord === 'theta'
+                        && this.state.decompose === 'anomaly'
+                        && this.state.year == null) {
+                    for (const L of LEVELS) {
+                        prefetchField('t', { level: L, period: patch.referencePeriod });
+                        if (this.state.field !== 't') {
+                            prefetchField(this.state.field, { level: L, period: patch.referencePeriod });
+                        }
+                        if (this.state.field === 'pv') {
+                            prefetchField('pv', { level: L, period: patch.referencePeriod });
+                        }
+                    }
+                }
                 if (this.state.decompose === 'anomaly') this.updateField();
             })();
         }
@@ -2241,35 +2274,64 @@ class GlobeApp {
         let annualMeanForAgg = null;
         if (mode === 'anomaly') {
             if (this.state.vCoord === 'theta') {
-                // θ-mode anomaly, three sub-cases:
-                //   1. state.year set → year's θ-value minus climatology's
-                //      12-month mean on the same θ surface (year-vs-climo).
-                //   2. refPeriod set to an alternate period (not yet wired
-                //      for θ — falls through to self-anomaly for now).
-                //   3. self-anomaly → value minus 12-month mean of this field
-                //      on this θ surface (existing behaviour).
+                // θ-mode anomaly — four sub-cases based on state:
+                //   1. refPeriod set (non-default, !== active) + no year:
+                //      climate-change anomaly — current climo's θ-values
+                //      minus refPeriod's θ-values, matched month-by-month.
+                //   2. state.year set: year-vs-climo — year's θ-values
+                //      minus active-climatology's 12-month θ-mean (or
+                //      refPeriod's 12-month mean if refPeriod is set).
+                //   3. self-anomaly: value minus 12-month mean of the same
+                //      source on the same θ surface.
                 const theta = this.state.theta;
                 const fieldName = this.state.field;
-                // Reference = CLIMATOLOGY θ-values (year omitted), for all
-                // three sub-cases above (self and year-vs-climo coincide on
-                // the reference side — the left side is what differs).
-                const getMonthClimoIsen = (m) => {
-                    const g = getField(fieldName, {
-                        month: m, coord: 'theta', theta,
-                        // year omitted → climatology isentropic tiles
-                    });
-                    return g.isReal ? g.values : null;
-                };
-                const annualMeanTheta = annualMeanFrom(
-                    getMonthClimoIsen, GRID.nlat, GRID.nlon);
+                const refPeriod = this.state.referencePeriod;
+                const isClimateChange = this.state.year == null
+                    && refPeriod !== 'default'
+                    && refPeriod !== this.state.climatologyPeriod;
                 const fieldClamp = FIELDS[fieldName]?.clamp ?? null;
+
+                let annualMeanTheta = null;
+                let annualMeanForAgg = null;
+                if (isClimateChange) {
+                    // Climate-change: left side is active-climo θ-values
+                    // (f.values already holds the current month). Reference
+                    // is the SAME-MONTH θ-value from refPeriod. Per-month
+                    // aggregator matches each month to its refPeriod
+                    // counterpart so the seasonal cycle doesn't bleed in
+                    // (same pattern as the pressure-coord climate-change
+                    // aggregator fix from earlier).
+                    const refField = getField(fieldName, {
+                        month: this.state.month,
+                        coord: 'theta',
+                        theta,
+                        period: refPeriod,
+                    });
+                    annualMeanTheta = refField.isReal ? refField.values : null;
+                    annualMeanForAgg = (m) => {
+                        const rf = getField(fieldName, {
+                            month: m, coord: 'theta', theta, period: refPeriod,
+                        });
+                        return rf.isReal ? rf.values : null;
+                    };
+                } else {
+                    // Self / year-vs-climo: reference is the 12-month mean
+                    // of the ACTIVE climatology on this θ surface (climo
+                    // tiles — no year, no refPeriod).
+                    const getMonthClimoIsen = (m) => {
+                        const g = getField(fieldName, {
+                            month: m, coord: 'theta', theta,
+                        });
+                        return g.isReal ? g.values : null;
+                    };
+                    annualMeanTheta = annualMeanFrom(
+                        getMonthClimoIsen, GRID.nlat, GRID.nlon);
+                    annualMeanForAgg = annualMeanTheta;
+                }
+
                 const current = decompose(f.values, GRID.nlat, GRID.nlon, 'anomaly',
                                           annualMeanTheta, { clamp: fieldClamp });
                 if (!current.empty) {
-                    // Pool across months so the anomaly colorbar stays stable
-                    // as the user scrubs months on θ. When state.year is set,
-                    // the per-month getField below also carries the year so
-                    // each month's LEFT side is the year's θ-value.
                     const range = aggregatedDecompositionRange(
                         'anomaly',
                         (m) => {
@@ -2279,7 +2341,7 @@ class GlobeApp {
                             });
                             return g.isReal ? g : null;
                         },
-                        GRID.nlat, GRID.nlon, annualMeanTheta,
+                        GRID.nlat, GRID.nlon, annualMeanForAgg,
                         { symmetric: !!FIELDS[fieldName]?.symmetric, clamp: fieldClamp },
                     );
                     if (range) { current.vmin = range.vmin; current.vmax = range.vmax; }
