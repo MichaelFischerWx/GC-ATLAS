@@ -974,6 +974,42 @@ class GlobeApp {
         this.sun.setVisible(this.state.showSun && this.state.viewMode === 'globe');
     }
 
+    // ── reference-period dropdown labels ─────────────────────────────
+    // The "Self · 12-month mean" / "vs. 1991-2020" / "vs. 1961-1990"
+    // options mean different things depending on whether year mode is on
+    // and which 30-year window is the active climatology. Re-label and
+    // re-disable in place so the dropdown always reads honestly.
+    refreshRefPeriodLabels() {
+        const sel = document.getElementById('ref-period-select');
+        if (!sel) return;
+        const yearOn = this.state.year != null;
+        const active = this.state.climatologyPeriod;
+        const activeLabel = active === '1961-1990' ? '1961–1990' : '1991–2020';
+        for (const opt of sel.options) {
+            if (opt.value === 'default') {
+                // Year mode → "Self" subtracts the active climatology mean
+                // for the same month (the year-anomaly path). Climatology
+                // mode → it's the field's 12-month annual self-mean.
+                opt.textContent = yearOn
+                    ? `vs. ${activeLabel} mean (current climatology)`
+                    : 'Self · 12-month mean';
+            } else if (opt.value === '1991-2020') {
+                // Useless when active = 1991-2020 (subtracts itself); useful
+                // when active is 1961-1990 (lets you explicitly ask for the
+                // modern-baseline anomaly).
+                opt.disabled = (active === 'default' || active === '1991-2020');
+            } else if (opt.value === '1961-1990') {
+                // Same self-comparison guard as before.
+                opt.disabled = (active === '1961-1990');
+            }
+        }
+        // If the current selection just got disabled, fall back to default.
+        if (sel.options[sel.selectedIndex]?.disabled) {
+            sel.value = 'default';
+            this.state.referencePeriod = 'default';
+        }
+    }
+
     // ── year picker ──────────────────────────────────────────────────
     populateYearSelect() {
         const sel = document.getElementById('year-select');
@@ -1526,6 +1562,15 @@ class GlobeApp {
             // year — grey it out for clarity.
             const climoSel = document.getElementById('climo-period-select');
             if (climoSel) climoSel.disabled = (patch.year != null);
+            // Reference-period dropdown's "Self" option means different things
+            // in climatology vs year mode. Relabel so the user sees what the
+            // anomaly is actually subtracting.
+            this.refreshRefPeriodLabels();
+        }
+        if ('climatologyPeriod' in patch) {
+            // The "Self" label also depends on which 30-yr window is active
+            // when in climatology mode (changes "1991-2020" → "1961-1990").
+            this.refreshRefPeriodLabels();
         }
         if ('climatologyPeriod' in patch) {
             // Switch the active tile tree. Derived / isentropic caches don't
@@ -2444,6 +2489,9 @@ class GlobeApp {
                 this.setState({ year });
             });
         }
+        // Refresh the reference-period dropdown's label/disabled state once
+        // on load so it reflects the initial year + active climatology.
+        this.refreshRefPeriodLabels();
         // Swipe-compare toggle (Map view) — drives the right-half overlay.
         // Auto-switches to Map view when enabled, and auto-picks 1961–1990
         // as the reference period if the user hasn't set one, so the right

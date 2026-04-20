@@ -10,7 +10,10 @@ const IS_LOCAL = location.hostname === 'localhost' || location.hostname === '127
 // cache + manifest so reference-period anomalies can be computed without
 // confusing the primary loader.
 function tileBaseFor(period) {
-    if (period === 'default') {
+    // Literal alias for the 1991-2020 tile tree so callers can refer to it
+    // unambiguously (the 'default' sentinel resolves to whatever the user
+    // has chosen as the active climatology, which can be 1961-1990).
+    if (period === 'default' || period === '1991-2020') {
         return IS_LOCAL ? 'data/tiles' : 'https://storage.googleapis.com/gc-atlas-era5/tiles';
     }
     if (period === 'per_year') {
@@ -40,6 +43,13 @@ let activePeriod = 'default';
 export function setActivePeriod(p) { activePeriod = p || 'default'; }
 export function getActivePeriod() { return activePeriod; }
 function resolvePeriod(p) { return (p == null || p === 'default') ? activePeriod : p; }
+// Map the active-period sentinel back to its literal label so reference
+// dropdowns can show "Self · 1991-2020" / "Self · 1961-1990" honestly.
+export function activePeriodLabel() {
+    if (activePeriod === 'default' || activePeriod === '1991-2020') return '1991–2020';
+    if (activePeriod === '1961-1990') return '1961–1990';
+    return activePeriod;
+}
 
 const pad = (n) => String(n).padStart(2, '0');
 // Cache key includes period + kind + year so a single field can hold
@@ -86,7 +96,16 @@ export async function loadManifest(period = 'default') {
         }
         const m = await resp.json();
         manifests.set(period, m);
-        if (period === 'default') manifest = m;
+        // Alias the literal '1991-2020' name to the same manifest as
+        // 'default' (and vice versa) so callers can ask for the current
+        // climatology by its proper name.
+        if (period === 'default') {
+            manifest = m;
+            manifests.set('1991-2020', m);
+        } else if (period === '1991-2020') {
+            if (!manifests.get('default')) manifests.set('default', m);
+            if (!manifest) manifest = m;
+        }
         return true;
     } catch (_err) {
         manifests.set(period, null);

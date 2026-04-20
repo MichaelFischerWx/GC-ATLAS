@@ -1226,8 +1226,9 @@
             </div>
             <div style="margin-top:10px;">
                 <label class="field-label" for="ref-period-select" style="margin-bottom:4px; font-size:0.66rem;">Reference period</label>
-                <select id="ref-period-select" title="Drives three things: in Anomaly mode → climate-change anomaly (current minus reference); in ±1σ mode → Δσ (current σ minus reference σ); when Compare is on (Map view) → the period painted on the right half of the swipe.">
+                <select id="ref-period-select" title="Drives three things: in Anomaly mode → anomaly target (year-vs-climo, climate-change anomaly, or self); in ±1σ mode → Δσ (current σ minus reference σ); when Compare is on (Map view) → the period painted on the right half of the swipe.">
                     <option value="default">Self · 12-month mean</option>
+                    <option value="1991-2020">vs. 1991–2020 (current climatology)</option>
                     <option value="1961-1990">vs. 1961–1990 (climate change)</option>
                 </select>
             </div>

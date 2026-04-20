@@ -116,6 +116,73 @@ The Mean+Total swipe-compare landed in v1; remaining variants:
   per period). Currently the v1 swipe restricts to Mean+Total to keep the
   comparison apples-to-apples.
 
+### 0.5° tile resolution — playbook (revisit when ready)
+
+Currently every tile is **1°** (181×360 = 65k cells). Doubling to **0.5°** (361×720 = 261k cells) would sharpen jets, fronts, the Andes/Tibet temperature gradient, and tropical convection without re-downloading anything (CDS NetCDFs are already at 0.5° per `configs/era5_variables.yaml`). This section is the full rollout plan.
+
+**Storage / cost estimates** (us-east1 GCS Standard, late-2025 rates):
+
+| | 1° (now) | 0.5° |
+|---|---|---|
+| Per-year tree (1991→2026, f16+gz) | 7.7 GB | ~30 GB |
+| 1991–2020 climatology | 1.3 GB | ~5 GB |
+| 1961–1990 climatology | 1.0 GB | ~4 GB |
+| **Total** | **~10 GB** | **~40 GB** |
+| Storage cost | $0.20/mo | **$0.80/mo** |
+| Egress per session | ~1 MB | ~5 MB |
+| All-in @ 1k sessions/mo | <$2 | **~$1.40** |
+| All-in @ 10k sessions/mo | <$5 | **~$7** |
+
+**Pipeline rebuild** (~30–50 min wall-clock total, no re-download):
+
+```bash
+# All three steps re-run with --resolution 0.5
+python pipeline/build_tiles.py     --per-year --resolution 0.5
+python pipeline/build_helmholtz.py --per-year --resolution 0.5
+python pipeline/compress_tiles.py  --root data/tiles_per_year   # f16+gz pass
+# Same for the climatology + 1961-1990 trees if you want them sharpened too:
+python pipeline/build_tiles.py     --resolution 0.5
+python pipeline/build_tiles.py     --resolution 0.5 --period 1961-1990
+python pipeline/build_helmholtz.py --resolution 0.5
+python pipeline/build_helmholtz.py --resolution 0.5 --period 1961-1990
+python pipeline/compress_tiles.py  --root data/tiles
+python pipeline/compress_tiles.py  --root data/tiles_1961_1990
+```
+
+**Frontend changes** (the real engineering — ~half a day):
+
+The renderer hard-codes `GRID = { nlat: 181, nlon: 360 }` (data.js) and that constant flows through every diagnostic, decomposition helper, particle field, contour shader, hover-sample logic, etc. To support 0.5° we need one of:
+
+- **Option A (cleanest, more work):** make `GRID` dynamic per-tile, sourced from the manifest's `shape: [nlat, nlon]`. Touches ~15 files. Allows mixed 1°/0.5° trees served from the same site.
+- **Option B (pragmatic):** add a global "high-detail mode" toggle that swaps the tile root and the `GRID` constant atomically. All tiles in a session are uniformly 1° or uniformly 0.5°. ~3 hours, low risk.
+- **Option C (incremental):** ship 0.5° only in Map view at high zoom; Globe + Orbit stay 1°. Map-view code path reads its own GRID from the active manifest. ~half day, intermediate complexity.
+
+**Recommendation:** Option B for v1 (a "Sharper detail" toggle in the Climatology section), Option A as a Phase-2 cleanup if 0.5° gets popular usage.
+
+**Performance considerations at 0.5°:**
+
+- **Texture upload:** 720×361 RGBA = ~1.04 MB per repaint vs 360×181 = ~260 kB. Modern GPUs handle 4× upload size fine; budget ~5 ms per `texture.needsUpdate`.
+- **Particle / contour shaders:** sampling cost scales with output pixels (canvas), not tile resolution — no change.
+- **Cross-section + zonal-mean computation:** O(nlat × nlon) work per panel update → 4× longer. Currently ~10 ms; would be ~40 ms. Still imperceptible.
+- **Decomposition helpers:** zonalMean / decompose loops scale 4×. Currently sub-ms; would be a few ms. Fine.
+- **Hover bilinear sample:** O(1), unchanged.
+
+**Risks / gotchas:**
+
+1. The `applyClampToEntry` percentile-bounds compute in `data.js` does an in-place sort of a length-N array per derived tile. At 4× N (260k vs 65k cells) the sort is ~5× slower (n log n). Still <50 ms, but could feel sluggish during MSE/wspd month-scrubs. Easy fix: switch to a quickselect or histogram-based percentile if it bites.
+2. The `aggregatedDecompositionRange` function pools across cached months; with 4× cells per tile, each month iteration does 4× work. Same 5× rule of thumb — measure before optimizing.
+3. Reference geojson coastlines (`ne_50m_coastline`, `ne_50m_lakes`) stay at the same density. They'd visibly under-resolve relative to a 0.5° heatmap; consider pulling `ne_10m` for the high-detail mode (~5 MB extra on GCS).
+4. Wind particle density (`PARTICLE_COUNT` in particles.js) is currently tuned for 1° smoothness. At 0.5° the particles look sparse for the sharper field — consider doubling.
+
+**Pre-flight checklist when picking this up:**
+
+- [ ] Decide A vs B vs C (recommend B unless dual-resolution serving is needed)
+- [ ] Smoke-test 0.5° pipeline on one var (`--var sst --group single_levels`) before churning the full tree
+- [ ] Verify GCS bucket has enough quota / no per-prefix limits at 30 GB
+- [ ] Update `ne_50m` references to `ne_10m` if going for visual consistency
+- [ ] Bump particle count + maybe contour-label density for the high-detail view
+- [ ] Re-validate diagnostics that are sensitive to grid spacing (ψ, EP-flux, M-budget) at 0.5° — the spectral/finite-diff numerics should be cleaner, but spot-check Hadley cell strength against published values
+
 ### Bigger lift — Phase-4 daily-data unlock
 
 These five all share one data pipeline:
