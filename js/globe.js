@@ -1788,30 +1788,41 @@ class GlobeApp {
         }
         if ('showTimeseries' in patch) {
             const panel = document.getElementById('timeseries-panel');
-            if (panel) panel.hidden = !patch.showTimeseries;
+            const r = this.state.timeseriesRegion;
+            // Panel shows only when the user has BOTH opted into the feature
+            // AND a region has been picked. Without that gate, the panel
+            // would cover the map while the user is trying to draw the box.
+            if (panel) panel.hidden = !(patch.showTimeseries && r);
             if (patch.showTimeseries) {
-                // Kick the per-year manifest so populateYearSelect ran (it
-                // usually has by now) and we know which years to query.
-                loadManifest('per_year').then(() => this.renderTimeseries());
-                const r = this.state.timeseriesRegion;
-                if (r) {
-                    this._prefetchTimeseriesTiles();
-                    // Restore the rectangle overlay (may have been hidden
-                    // on last close).
-                    this._drawTimeseriesRegionOverlay(
-                        { lat: r.latMin, lon: r.lonMin },
-                        { lat: r.latMax, lon: r.lonMax },
-                    );
-                    const lbl = document.getElementById('ts-region-label');
-                    if (lbl) lbl.textContent = tsBboxLabel(r);
-                }
+                loadManifest('per_year').then(() => {
+                    if (!this.state.timeseriesRegion) {
+                        // First-time: drop straight into picking mode so the
+                        // map stays visible. The panel reveals itself once
+                        // the region is committed.
+                        this._enterTimeseriesPicking();
+                    } else {
+                        this._prefetchTimeseriesTiles();
+                        this._drawTimeseriesRegionOverlay(
+                            { lat: r.latMin, lon: r.lonMin },
+                            { lat: r.latMax, lon: r.lonMax },
+                        );
+                        const lbl = document.getElementById('ts-region-label');
+                        if (lbl) lbl.textContent = tsBboxLabel(r);
+                        this.renderTimeseries();
+                    }
+                });
             } else {
                 this._exitTimeseriesPicking();
                 if (this._tsRegionLine) this._tsRegionLine.visible = false;
             }
         }
         if ('timeseriesRegion' in patch) {
-            // New region → fresh fetch for (field, level) across all years.
+            // Region just committed (or replaced) — reveal the panel if the
+            // user had opted in, fetch tiles, and kick a render.
+            if (this.state.showTimeseries) {
+                const panel = document.getElementById('timeseries-panel');
+                if (panel) panel.hidden = false;
+            }
             this._prefetchTimeseriesTiles();
             this._scheduleTimeseriesRender();
         }
