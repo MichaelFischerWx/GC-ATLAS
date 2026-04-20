@@ -129,6 +129,16 @@ class GlobeApp {
         // apply it BEFORE the first render so init pulls the right tiles.
         // Unknown keys and malformed values fall back silently.
         const urlPatch = decodeHashToPatch(location.hash);
+        // viewMode has side-effects (group visibility, reparenting particles
+        // / barbs / contour labels) that only run inside setViewMode().
+        // Bulk-assigning state.viewMode='map' here would make the later
+        // setViewMode('map') a no-op (early-return "already this view"),
+        // leaving the globeGroup visible and particles parented to the
+        // invisible mapGroup. Pull viewMode aside and apply via setViewMode
+        // once the scene is up.
+        const pendingView = (urlPatch.viewMode && urlPatch.viewMode !== 'globe')
+            ? urlPatch.viewMode : null;
+        delete urlPatch.viewMode;
         if (Object.keys(urlPatch).length) Object.assign(this.state, urlPatch);
 
         this.initScene();
@@ -137,6 +147,13 @@ class GlobeApp {
         this.initCoastlines();
         this.initParticles();
         this.bindUI();
+        if (pendingView) {
+            this.setViewMode(pendingView);
+            // _syncUIFromState ran inside bindUI() with state.viewMode still
+            // 'globe', so re-highlight the correct view-toggle button.
+            document.querySelectorAll('.view-toggle button').forEach(b =>
+                b.classList.toggle('active', b.id === `view-${pendingView}`));
+        }
         this.updateField();
         this.animate();
         this.bootstrapEra5();
