@@ -3457,7 +3457,14 @@ class GlobeApp {
             return;
         }
         if (descDiv) descDiv.textContent = ix.description || '';
-        if (srcDiv)  srcDiv.textContent  = `Source: ${ix.source}`;
+        if (srcDiv) {
+            // Clickable "Source →" link so users can read the provenance
+            // of each index (NOAA PSL / CPC pages with methodology notes).
+            const safe = String(ix.source || '').replace(/"/g, '&quot;');
+            srcDiv.innerHTML = safe
+                ? `Source: <a href="${safe}" target="_blank" rel="noopener noreferrer" class="ts-source-link">${safe}</a>`
+                : '';
+        }
 
         const cmp       = cmpSel ? cmpSel.value : 'ge';
         const threshold = thresh ? Number(thresh.value) : NaN;

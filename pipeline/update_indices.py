@@ -96,6 +96,28 @@ SOURCES = {
         "url": "https://psl.noaa.gov/data/correlation/ao.data",
         "parser": "psl",
     },
+    "amm": {
+        "label": "AMM",
+        "long_name": "Atlantic Meridional Mode",
+        "description": "Cross-equatorial SST + trade-wind mode in the "
+                       "tropical Atlantic. Positive = warm N, cool S, "
+                       "ITCZ pulled north → stronger W-African monsoon "
+                       "and more-active Atlantic hurricane season. "
+                       "Chiang & Vimont (2004).",
+        "url": "https://psl.noaa.gov/data/timeseries/monthly/AMM/ammsst.data",
+        "parser": "psl",
+    },
+    "pmm": {
+        "label": "PMM",
+        "long_name": "Pacific Meridional Mode",
+        "description": "Subtropical-Pacific analogue of the AMM — "
+                       "extratropical stochastic forcing projects onto a "
+                       "cross-equatorial SST/trade-wind pattern that can "
+                       "seed ENSO through the seasonal footprinting "
+                       "mechanism. Chiang & Vimont (2004).",
+        "url": "https://psl.noaa.gov/data/timeseries/monthly/PMM/pmmsst.data",
+        "parser": "psl",
+    },
 }
 
 
