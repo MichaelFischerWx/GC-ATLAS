@@ -107,7 +107,9 @@ function formatV(v) {
 }
 
 /** Paint the series onto a canvas. `meta` carries field name + units +
- *  symmetric flag (forces vmin = −vmax for anomaly-style plots). */
+ *  symmetric flag (forces vmin = −vmax for anomaly-style plots).
+ *  Returns the plot transform so callers can implement hover readouts
+ *  (tMin/tMax for x, vMin/vMax for y, plus the inset box coords). */
 export function renderSeries(canvas, series, meta) {
     const ctx = canvas.getContext('2d');
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -133,7 +135,7 @@ export function renderSeries(canvas, series, meta) {
         ctx.textBaseline = 'middle';
         ctx.fillText(finite.length === 0 ? 'Loading tiles…' : 'Insufficient data',
                      cssW / 2, cssH / 2);
-        return;
+        return null;
     }
 
     let tMin = Infinity, tMax = -Infinity;
@@ -213,6 +215,31 @@ export function renderSeries(canvas, series, meta) {
         ctx.font = '10px ui-monospace, Menlo, monospace';
         ctx.fillText(meta.units, cssW - padR, padT - 2);
     }
+
+    return {
+        padL, padR, padT, padB, w, h, cssW, cssH,
+        tMin, tMax, vMin, vMax,
+    };
+}
+
+/** Given a hover context from renderSeries + a CSS-pixel mouse x,y,
+ *  return the nearest series point + its plot coordinates, or null if
+ *  the cursor is outside the plot area. */
+export function hoverLookup(hctx, series, mx, my) {
+    if (!hctx) return null;
+    const { padL, padT, w, h, tMin, tMax, vMin, vMax } = hctx;
+    if (mx < padL || mx > padL + w || my < padT || my > padT + h) return null;
+    const t = tMin + (mx - padL) / w * (tMax - tMin);
+    let best = null, bestD = Infinity;
+    for (const p of series) {
+        if (p.value == null || !Number.isFinite(p.value)) continue;
+        const d = Math.abs(p.t - t);
+        if (d < bestD) { bestD = d; best = p; }
+    }
+    if (!best) return null;
+    const xOnPlot = padL + (best.t - tMin) / (tMax - tMin) * w;
+    const yOnPlot = padT + (vMax - best.value) / (vMax - vMin) * h;
+    return { point: best, xOnPlot, yOnPlot };
 }
 
 /** Human-readable bbox label: "10°S–10°N, 170°W–120°W". */

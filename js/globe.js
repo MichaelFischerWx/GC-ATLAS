@@ -30,7 +30,7 @@ import { buildHBudgetView } from './h_budget.js';
 import { ParcelField } from './parcels.js';
 import { GifExporter, downloadBlob } from './gif_export.js';
 import { encodeStateToHash, decodeHashToPatch, writeHashDebounced } from './url_state.js';
-import { computeSeries as tsComputeSeries, renderSeries as tsRenderSeries, bboxLabel as tsBboxLabel, seriesToCSV as tsSeriesToCSV } from './timeseries.js';
+import { computeSeries as tsComputeSeries, renderSeries as tsRenderSeries, hoverLookup as tsHoverLookup, bboxLabel as tsBboxLabel, seriesToCSV as tsSeriesToCSV, MONTH_NAMES as TS_MONTH_NAMES } from './timeseries.js';
 
 const PLAY_INTERVAL_MS = 900;
 
@@ -457,6 +457,7 @@ class GlobeApp {
         // Globe-mode shift-drag: draw a great-circle arc for the cross-section.
         this.installArcDrag();
         this._installTimeseriesPicker();
+        this._installTimeseriesHover();
 
         window.addEventListener('resize', () => this.onResize());
     }
@@ -3556,6 +3557,84 @@ class GlobeApp {
         }
     }
 
+    _installTimeseriesHover() {
+        const canvas = document.getElementById('ts-canvas');
+        if (!canvas) return;
+        const tip = document.getElementById('ts-hover-tip');
+        canvas.addEventListener('pointermove', (e) => {
+            if (!this._tsHoverCtx || !this._tsLastSeries) { this._clearTimeseriesHover(); return; }
+            const rect = canvas.getBoundingClientRect();
+            const mx = e.clientX - rect.left;
+            const my = e.clientY - rect.top;
+            const hit = tsHoverLookup(this._tsHoverCtx, this._tsLastSeries, mx, my);
+            if (!hit) { this._clearTimeseriesHover(); return; }
+            this._tsHoverHit = hit;
+            this._paintTimeseriesHoverMarker();
+            if (tip) {
+                const meta = FIELDS[this.state.field] || {};
+                const p = hit.point;
+                tip.innerHTML = `${TS_MONTH_NAMES[p.month - 1]} ${p.year}<span class="hv-sep">·</span><span class="hv-value">${fmtValue(p.value)}</span><span class="hv-unit">${meta.units || ''}</span>`;
+                // Shares the .hover-tooltip class → position:fixed with
+                // viewport-relative clientX/Y. Offset above-right of cursor,
+                // flip if that would clip the viewport.
+                const pad = 14;
+                const w = tip.offsetWidth || 180;
+                const h = tip.offsetHeight || 28;
+                let x = e.clientX + pad;
+                let y = e.clientY - h - pad;
+                if (x + w > window.innerWidth)  x = e.clientX - w - pad;
+                if (y < 0)                      y = e.clientY + pad;
+                tip.style.left = `${x}px`;
+                tip.style.top  = `${y}px`;
+                tip.classList.remove('hidden');
+            }
+        });
+        canvas.addEventListener('pointerleave', () => this._clearTimeseriesHover());
+    }
+
+    _clearTimeseriesHover() {
+        this._tsHoverHit = null;
+        const tip = document.getElementById('ts-hover-tip');
+        if (tip) tip.classList.add('hidden');
+        // Re-paint the chart to erase the marker.
+        const canvas = document.getElementById('ts-canvas');
+        if (canvas && this._tsLastSeries && this._tsHoverCtx) {
+            const meta = FIELDS[this.state.field] || {};
+            this._tsHoverCtx = tsRenderSeries(canvas, this._tsLastSeries, {
+                units: meta.units,
+                symmetric: this.state.timeseriesMode === 'anomaly',
+            });
+        }
+    }
+
+    _paintTimeseriesHoverMarker() {
+        const hit = this._tsHoverHit;
+        if (!hit || !this._tsHoverCtx) return;
+        const canvas = document.getElementById('ts-canvas');
+        if (!canvas) return;
+        const ctx = canvas.getContext('2d');
+        const dpr = Math.min(window.devicePixelRatio || 1, 2);
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        const { padT, h } = this._tsHoverCtx;
+        // Vertical guideline
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.35)';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([3, 3]);
+        ctx.beginPath();
+        ctx.moveTo(hit.xOnPlot, padT);
+        ctx.lineTo(hit.xOnPlot, padT + h);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        // Marker dot
+        ctx.fillStyle = '#f0f6f2';
+        ctx.beginPath();
+        ctx.arc(hit.xOnPlot, hit.yOnPlot, 3.2, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = '#4fd1a5';
+        ctx.lineWidth = 1.4;
+        ctx.stroke();
+    }
+
     _installTimeseriesPicker() {
         // One-time install — wired alongside the arc-drag handler.
         const el = this.renderer.domElement;
@@ -3726,10 +3805,12 @@ class GlobeApp {
             period: this.state.climatologyPeriod === 'default'
                 ? 'default' : this.state.climatologyPeriod,
         });
-        tsRenderSeries(canvas, series, {
+        this._tsHoverCtx = tsRenderSeries(canvas, series, {
             units: meta.units,
             symmetric: this.state.timeseriesMode === 'anomaly',
         });
+        // Re-stack any existing hover marker on top of the fresh paint.
+        this._paintTimeseriesHoverMarker();
         // Status line: loaded / total months + extrema.
         const statsEl = document.getElementById('ts-stats');
         if (statsEl) {
