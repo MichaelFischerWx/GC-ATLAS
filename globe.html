@@ -219,6 +219,21 @@
             text-align: right;
         }
         .year-display.is-climo { color: var(--paper-dim); font-weight: 500; }
+        .year-display:focus { outline: 1px solid var(--emerald-bright); outline-offset: 2px; border-radius: 3px; }
+        .year-step {
+            background: transparent;
+            border: 1px solid var(--thalo-line);
+            color: var(--paper-dim);
+            font-size: 0.72rem;
+            padding: 3px 8px;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: color 0.15s, border-color 0.15s;
+            line-height: 1;
+            font-family: 'JetBrains Mono', monospace;
+        }
+        .year-step:hover:not(:disabled) { color: var(--paper); border-color: var(--emerald); }
+        .year-step:disabled { opacity: 0.35; cursor: default; }
         .icon-btn {
             flex-shrink: 0;
             width: 36px;
@@ -1219,34 +1234,6 @@
         </section>
 
         <section class="control-group">
-            <label class="field-label" for="month-select">Month</label>
-            <select id="month-select"></select>
-            <div class="slider-row">
-                <button id="month-play" class="icon-btn" type="button" aria-label="play through months" title="Play through the seasonal cycle">▶</button>
-                <input id="month-slider" class="slider" type="range" min="1" max="12" step="1" value="1" aria-label="scrub month">
-            </div>
-            <div style="margin-top:10px;">
-                <label class="field-label" style="margin-bottom:4px; font-size:0.66rem;">Year</label>
-                <div class="year-row">
-                    <button id="year-climo-btn" type="button" class="year-pill active"
-                            title="Show the climatology mean for the active 30-year window">
-                        Climatology
-                    </button>
-                    <span id="year-display" class="year-display" aria-live="polite">—</span>
-                </div>
-                <input id="year-slider" class="slider" type="range"
-                       min="1991" max="2026" step="1" value="2015"
-                       aria-label="scrub year" disabled
-                       title="Drag to pick a specific year. The Climatology pill on the left toggles back to the 30-year mean.">
-            </div>
-        </section>
-
-        <section class="control-group">
-            <label class="field-label" for="cmap-select">Colormap</label>
-            <select id="cmap-select"></select>
-        </section>
-
-        <section class="control-group">
             <h4>Climatology</h4>
             <div class="segmented kind-seg" id="kind-toggle">
                 <button type="button" data-kind="mean" class="active" title="Climatological mean">Mean</button>
@@ -1259,6 +1246,37 @@
                     <option value="1961-1990">1961–1990 (previous)</option>
                 </select>
             </div>
+            <div style="margin-top:10px;">
+                <label class="field-label" style="margin-bottom:4px; font-size:0.66rem;">Year</label>
+                <div class="year-row" role="group" aria-label="year picker">
+                    <button id="year-climo-btn" type="button" class="year-pill active"
+                            title="Show the climatology mean for the active 30-year window">
+                        Climatology
+                    </button>
+                    <button id="year-prev" type="button" class="year-step"
+                            aria-label="previous year"
+                            title="Step back one year (← also works)" disabled>◀</button>
+                    <span id="year-display" class="year-display" aria-live="polite"
+                          tabindex="0" title="Use ◀ ▶ buttons or ← → keys to step through years">—</span>
+                    <button id="year-next" type="button" class="year-step"
+                            aria-label="next year"
+                            title="Step forward one year (→ also works)" disabled>▶</button>
+                </div>
+            </div>
+        </section>
+
+        <section class="control-group">
+            <label class="field-label" for="month-select">Month</label>
+            <select id="month-select"></select>
+            <div class="slider-row">
+                <button id="month-play" class="icon-btn" type="button" aria-label="play through months" title="Play through the seasonal cycle">▶</button>
+                <input id="month-slider" class="slider" type="range" min="1" max="12" step="1" value="1" aria-label="scrub month">
+            </div>
+        </section>
+
+        <section class="control-group">
+            <label class="field-label" for="cmap-select">Colormap</label>
+            <select id="cmap-select"></select>
         </section>
 
         <section class="control-group" id="decompose-group">
