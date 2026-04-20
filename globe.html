@@ -652,6 +652,26 @@
             border-radius: 4px;
         }
         .xs-close:hover { color: var(--paper); background: rgba(255,255,255,0.07); }
+        /* Time-series panel: reuses .xsection chrome but parks bottom-left
+           so it doesn't collide with the default bottom-right cross-section. */
+        .timeseries {
+            left: 24px;
+            right: auto;
+            bottom: 24px;
+            min-width: 520px;
+            max-width: 640px;
+        }
+        .timeseries canvas {
+            width: 100%;
+            display: block;
+            background: rgba(255,255,255,0.015);
+            border: 1px solid var(--thalo-line);
+            border-radius: 4px;
+        }
+        .timeseries.picking {
+            outline: 1px dashed var(--emerald-bright);
+            outline-offset: -4px;
+        }
         .xs-expand {
             background: none;
             border: none;
@@ -1523,6 +1543,7 @@
             <h4>Panels</h4>
             <label class="check"><input type="checkbox" id="toggle-xsection"> Cross-section</label>
             <label class="check"><input type="checkbox" id="toggle-lorenz"> Lorenz energy cycle</label>
+            <label class="check"><input type="checkbox" id="toggle-timeseries"> Area-mean time series</label>
         </section>
 
         <section class="control-group" id="parcels-section">
@@ -1792,6 +1813,33 @@ C(P_M→K_M) = -(R/g) ∫ [ω][T] / p dp</pre>
             <div class="xs-footer">
                 <span id="xs-hint"><span class="xs-kbd">⇧</span> + drag globe to draw an arc</span>
                 <button class="xs-reset" id="xs-reset" type="button" hidden>Reset to zonal mean</button>
+            </div>
+        </div>
+
+        <!-- Area-mean time series panel -->
+        <div class="xsection timeseries" id="timeseries-panel" hidden>
+            <div class="xs-header">
+                <span id="ts-title">Area-mean time series</span>
+                <span style="display:flex; gap:6px; align-items:center;">
+                    <button class="xs-reset" id="ts-pick-btn" type="button"
+                            style="padding:4px 10px; margin:0; width:auto; font-size:0.68rem;"
+                            title="Click, then drag a rectangle on the Map view to define the area.">Pick region</button>
+                    <button class="xs-expand" id="ts-download-btn" type="button"
+                            aria-label="Download CSV" title="Download the time series as CSV">⬇</button>
+                    <button class="xs-close"  id="ts-close" aria-label="Close panel">&times;</button>
+                </span>
+            </div>
+            <div style="display:flex; gap:8px; align-items:center; margin-bottom:6px;">
+                <span id="ts-region-label" class="xs-kbd" style="font-size:0.66rem; letter-spacing:0.03em;">no region selected</span>
+                <div class="segmented" id="ts-mode-toggle" style="margin-left:auto; font-size:0.62rem;" role="tablist" aria-label="Series mode">
+                    <button type="button" data-ts-mode="total" class="active">Total</button>
+                    <button type="button" data-ts-mode="anomaly" title="Subtract the same-month 30-year climatology from each month">Anomaly</button>
+                </div>
+            </div>
+            <canvas id="ts-canvas" width="520" height="230"></canvas>
+            <div class="xs-footer" style="margin-top:6px;">
+                <span id="ts-hint">Click <b>Pick region</b>, then drag on the Map view to set bounds.</span>
+                <span id="ts-stats" style="margin-left:auto;"></span>
             </div>
         </div>
     </section>

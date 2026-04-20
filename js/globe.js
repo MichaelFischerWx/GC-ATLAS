@@ -30,6 +30,7 @@ import { buildHBudgetView } from './h_budget.js';
 import { ParcelField } from './parcels.js';
 import { GifExporter, downloadBlob } from './gif_export.js';
 import { encodeStateToHash, decodeHashToPatch, writeHashDebounced } from './url_state.js';
+import { computeSeries as tsComputeSeries, renderSeries as tsRenderSeries, bboxLabel as tsBboxLabel, seriesToCSV as tsSeriesToCSV } from './timeseries.js';
 
 const PLAY_INTERVAL_MS = 900;
 
@@ -117,6 +118,10 @@ class GlobeApp {
             mapCenterLon: 0,         // central meridian for the flat map (-180..180)
             showXSection: false,
             showLorenz: false,
+            showTimeseries: false,    // area-mean time-series panel
+            // bbox for the area-mean timeseries: { latMin, latMax, lonMin, lonMax }
+            timeseriesRegion: null,
+            timeseriesMode: 'total',  // 'total' | 'anomaly' (subtract same-month climo)
             lorenzRef: 'lorenz',     // 'lorenz' (sorted) | 'simple' (area-mean)
             xsArc: null,             // { start:{lat,lon}, end:{lat,lon} } or null for zonal-mean
             xsDiag: 'field',         // 'field' | 'psi' | 'M' | 'N2' | 'epflux' | 'mbudget'
@@ -311,6 +316,13 @@ class GlobeApp {
                     if (thetaAnomalyWaiting) invalidateIsentropicCache();
                     this.updateField();
                 }
+                // Timeseries panel feeds from per-year tiles that aren't
+                // "active period" for the main renderer — don't miss them.
+                if (s.showTimeseries && s.timeseriesRegion
+                    && name === s.field && levelMatches
+                    && period === 'per_year') {
+                    this._scheduleTimeseriesRender();
+                }
                 return;   // don't trigger any of the active-period logic
             }
             const isenActive  = (s.vCoord === 'theta');
@@ -373,6 +385,21 @@ class GlobeApp {
             if (s.showLorenz && lorenzIngredient && monthMatches) {
                 this.updateLorenz();
             }
+            // Area-mean time-series: any per-year tile of the displayed
+            // field (at the displayed level if level-stratified) feeds the
+            // series. Anomaly mode additionally consumes the climatology
+            // tiles of the active period, which arrive with period ==
+            // s.climatologyPeriod (or null for the default). Debounced
+            // render so we don't redraw 792 times during the initial tile
+            // burst.
+            if (s.showTimeseries && s.timeseriesRegion
+                && name === s.field
+                && levelMatches
+                && (period === 'per_year'
+                    || (s.timeseriesMode === 'anomaly' && (!period
+                        || period === s.climatologyPeriod)))) {
+                this._scheduleTimeseriesRender();
+            }
         });
         // Prime: ask for the current field, which triggers a fetch.
         this.updateField();
@@ -429,6 +456,7 @@ class GlobeApp {
         this.installMapDrag();
         // Globe-mode shift-drag: draw a great-circle arc for the cross-section.
         this.installArcDrag();
+        this._installTimeseriesPicker();
 
         window.addEventListener('resize', () => this.onResize());
     }
@@ -1757,6 +1785,42 @@ class GlobeApp {
                     prefetchField('t', { level: L });
                 }
             }
+        }
+        if ('showTimeseries' in patch) {
+            const panel = document.getElementById('timeseries-panel');
+            if (panel) panel.hidden = !patch.showTimeseries;
+            if (patch.showTimeseries) {
+                // Kick the per-year manifest so populateYearSelect ran (it
+                // usually has by now) and we know which years to query.
+                loadManifest('per_year').then(() => this.renderTimeseries());
+                const r = this.state.timeseriesRegion;
+                if (r) {
+                    this._prefetchTimeseriesTiles();
+                    // Restore the rectangle overlay (may have been hidden
+                    // on last close).
+                    this._drawTimeseriesRegionOverlay(
+                        { lat: r.latMin, lon: r.lonMin },
+                        { lat: r.latMax, lon: r.lonMax },
+                    );
+                    const lbl = document.getElementById('ts-region-label');
+                    if (lbl) lbl.textContent = tsBboxLabel(r);
+                }
+            } else {
+                this._exitTimeseriesPicking();
+                if (this._tsRegionLine) this._tsRegionLine.visible = false;
+            }
+        }
+        if ('timeseriesRegion' in patch) {
+            // New region → fresh fetch for (field, level) across all years.
+            this._prefetchTimeseriesTiles();
+            this._scheduleTimeseriesRender();
+        }
+        if ('timeseriesMode' in patch) this._scheduleTimeseriesRender();
+        if (this.state.showTimeseries
+            && ('field' in patch || 'level' in patch
+                || 'vCoord' in patch || 'theta' in patch)) {
+            this._prefetchTimeseriesTiles();
+            this._scheduleTimeseriesRender();
         }
         if ('level' in patch || 'month' in patch || 'vCoord' in patch || 'theta' in patch || 'field' in patch) this.windCache.stale = true;
         if ('month' in patch && this.parcels) this.parcels.invalidateCube();
@@ -3096,6 +3160,28 @@ class GlobeApp {
             this.setState({ showLorenz: e.target.checked });
             if (e.target.checked) this.updateLorenz();
         });
+        document.getElementById('toggle-timeseries')?.addEventListener('change', (e) => {
+            this.setState({ showTimeseries: e.target.checked });
+        });
+        document.getElementById('ts-close')?.addEventListener('click', () => {
+            const cb = document.getElementById('toggle-timeseries');
+            if (cb) cb.checked = false;
+            this.setState({ showTimeseries: false });
+        });
+        document.getElementById('ts-pick-btn')?.addEventListener('click', () => {
+            this._enterTimeseriesPicking();
+        });
+        document.querySelectorAll('#ts-mode-toggle button').forEach((btn) => {
+            btn.addEventListener('click', () => {
+                const mode = btn.dataset.tsMode;
+                document.querySelectorAll('#ts-mode-toggle button').forEach(b =>
+                    b.classList.toggle('active', b === btn));
+                this.setState({ timeseriesMode: mode });
+            });
+        });
+        document.getElementById('ts-download-btn')?.addEventListener('click', () => {
+            this._downloadTimeseriesCSV();
+        });
         document.getElementById('lorenz-close')?.addEventListener('click', () => {
             const cb = document.getElementById('toggle-lorenz');
             if (cb) cb.checked = false;
@@ -3410,6 +3496,279 @@ class GlobeApp {
         this.refreshCompositeUI();
     }
 
+    // ── area-mean time series ─────────────────────────────────────────
+    _availablePerYears() {
+        const mfst = getManifest('per_year');
+        for (const grp of Object.values(mfst?.groups || {})) {
+            for (const v of Object.values(grp)) {
+                if (Array.isArray(v.years) && v.years.length) return v.years;
+            }
+        }
+        return [];
+    }
+
+    _enterTimeseriesPicking() {
+        const panel = document.getElementById('timeseries-panel');
+        const btn   = document.getElementById('ts-pick-btn');
+        const hint  = document.getElementById('ts-hint');
+        this._tsPicking = true;
+        if (panel) panel.classList.add('picking');
+        if (btn)   btn.textContent = 'Picking…';
+        if (hint)  hint.textContent = 'Drag a rectangle on the Map view. ESC to cancel.';
+        // Auto-switch to map view — box-select only makes sense there
+        // in v1 (globe-view picking would need a spherical box overlay).
+        if (this.state.viewMode !== 'map') this.setViewMode('map');
+        // Suppress orbit-controls pan/zoom while picking.
+        this.controls.enabled = false;
+        // One-shot ESC to cancel.
+        this._tsEscHandler = (e) => {
+            if (e.key === 'Escape') this._exitTimeseriesPicking();
+        };
+        window.addEventListener('keydown', this._tsEscHandler);
+    }
+
+    _exitTimeseriesPicking() {
+        const panel = document.getElementById('timeseries-panel');
+        const btn   = document.getElementById('ts-pick-btn');
+        const hint  = document.getElementById('ts-hint');
+        this._tsPicking = false;
+        this._tsPickStart = null;
+        if (panel) panel.classList.remove('picking');
+        if (btn)   btn.textContent = 'Pick region';
+        if (hint)  hint.textContent = this.state.timeseriesRegion
+            ? 'Drag again to redraw. ESC cancels.'
+            : 'Click Pick region, then drag on the Map view to set bounds.';
+        this.controls.enabled = true;
+        if (this._tsEscHandler) {
+            window.removeEventListener('keydown', this._tsEscHandler);
+            this._tsEscHandler = null;
+        }
+    }
+
+    _installTimeseriesPicker() {
+        // One-time install — wired alongside the arc-drag handler.
+        const el = this.renderer.domElement;
+        const raycaster = new THREE.Raycaster();
+        const ndc = new THREE.Vector2();
+        const mapPoint = (e) => {
+            if (this.state.viewMode !== 'map' || !this.mapMesh) return null;
+            const rect = el.getBoundingClientRect();
+            ndc.x =  ((e.clientX - rect.left) / rect.width)  * 2 - 1;
+            ndc.y = -((e.clientY - rect.top)  / rect.height) * 2 + 1;
+            raycaster.setFromCamera(ndc, this.camera);
+            const hits = raycaster.intersectObject(this.mapMesh);
+            if (!hits.length) return null;
+            let lon = hits[0].point.x * (360 / MAP_W) + this.state.mapCenterLon;
+            const lat = hits[0].point.y * (180 / MAP_H);
+            lon = ((lon + 180) % 360 + 360) % 360 - 180;
+            if (lat < -90 || lat > 90) return null;
+            return { lat, lon };
+        };
+        el.addEventListener('pointerdown', (e) => {
+            if (!this._tsPicking) return;
+            const p = mapPoint(e);
+            if (!p) return;
+            e.preventDefault();
+            e.stopPropagation();
+            this._tsPickStart = p;
+            el.setPointerCapture(e.pointerId);
+        }, true);
+        el.addEventListener('pointermove', (e) => {
+            if (!this._tsPicking || !this._tsPickStart) return;
+            const p = mapPoint(e);
+            if (!p) return;
+            this._tsPickCurrent = p;
+            this._drawTimeseriesRegionOverlay(this._tsPickStart, p);
+        }, true);
+        el.addEventListener('pointerup', (e) => {
+            if (!this._tsPicking || !this._tsPickStart) return;
+            const p = mapPoint(e) || this._tsPickCurrent;
+            if (p) {
+                const region = {
+                    latMin: Math.min(this._tsPickStart.lat, p.lat),
+                    latMax: Math.max(this._tsPickStart.lat, p.lat),
+                    lonMin: this._tsPickStart.lon,
+                    lonMax: p.lon,
+                };
+                // Degenerate box guard — require at least ~0.5° span either way.
+                if (Math.abs(region.latMax - region.latMin) > 0.4
+                    && Math.abs(region.lonMax - region.lonMin) > 0.4) {
+                    this.setState({ timeseriesRegion: region });
+                    this._drawTimeseriesRegionOverlay(
+                        { lat: region.latMin, lon: region.lonMin },
+                        { lat: region.latMax, lon: region.lonMax },
+                    );
+                    const lbl = document.getElementById('ts-region-label');
+                    if (lbl) lbl.textContent = tsBboxLabel(region);
+                }
+            }
+            this._tsPickStart = null;
+            this._tsPickCurrent = null;
+            try { el.releasePointerCapture(e.pointerId); } catch (_) { /* already gone */ }
+            this._exitTimeseriesPicking();
+        }, true);
+    }
+
+    _drawTimeseriesRegionOverlay(a, b) {
+        // Simple rectangle in mapGroup at z slightly above the map plane so
+        // it doesn't z-fight. Rebuilt on each call. Globe-view visualization
+        // is deferred — users pick on the map which is the v1 scope.
+        if (this.state.viewMode !== 'map') return;
+        if (!this._tsRegionLine) {
+            const geom = new LineGeometry();
+            const mat = new LineMaterial({
+                color: 0x4fd1a5,
+                linewidth: 2.0,
+                dashed: false,
+                transparent: true,
+                opacity: 0.85,
+            });
+            mat.resolution.set(window.innerWidth, window.innerHeight);
+            this._tsRegionLine = new Line2(geom, mat);
+            this._tsRegionLine.renderOrder = 10;
+            this.mapGroup.add(this._tsRegionLine);
+        }
+        // Convert (lat, lon) back to map-plane coordinates. Reverse of
+        // mapPoint: lon' = lon - mapCenterLon (shortest wrap), x = lon' / (360/MAP_W).
+        const mc = this.state.mapCenterLon;
+        const wrap = (lon) => {
+            let d = lon - mc;
+            d = ((d + 180) % 360 + 360) % 360 - 180;
+            return d;
+        };
+        const xA = wrap(a.lon) / (360 / MAP_W);
+        const xB = wrap(b.lon) / (360 / MAP_W);
+        const yA = a.lat / (180 / MAP_H);
+        const yB = b.lat / (180 / MAP_H);
+        const z = 0.0013;
+        const pts = [
+            xA, yA, z,  xB, yA, z,  xB, yB, z,  xA, yB, z,  xA, yA, z,
+        ];
+        this._tsRegionLine.geometry.setPositions(pts);
+        this._tsRegionLine.computeLineDistances();
+        this._tsRegionLine.visible = true;
+    }
+
+    _prefetchTimeseriesTiles() {
+        const region = this.state.timeseriesRegion;
+        if (!region) return;
+        const years = this._availablePerYears();
+        if (!years.length) return;
+        const meta = FIELDS[this.state.field];
+        if (!meta || meta.derived) return;   // v1: raw-tile fields only
+        const level = meta.type === 'pl' ? this.state.level : null;
+        for (const y of years) {
+            prefetchField(this.state.field, {
+                level, period: 'per_year', year: y,
+            });
+        }
+        // Also prefetch the climatology tiles (for anomaly mode).
+        prefetchField(this.state.field, { level });
+    }
+
+    _scheduleTimeseriesRender() {
+        clearTimeout(this._tsRenderTimer);
+        this._tsRenderTimer = setTimeout(() => this.renderTimeseries(), 180);
+    }
+
+    renderTimeseries() {
+        if (!this.state.showTimeseries) return;
+        const canvas = document.getElementById('ts-canvas');
+        if (!canvas) return;
+        const region = this.state.timeseriesRegion;
+        if (!region) {
+            // Clear to "no region" placeholder.
+            const ctx = canvas.getContext('2d');
+            const cssW = canvas.clientWidth || 520, cssH = canvas.clientHeight || 230;
+            ctx.setTransform(1, 0, 0, 1, 0, 0);
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.fillStyle = '#8bb0a1';
+            ctx.font = '13px ui-monospace, "JetBrains Mono", Menlo, monospace';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText('Click Pick region, then drag on the map.', cssW / 2, cssH / 2);
+            return;
+        }
+        const years = this._availablePerYears();
+        if (!years.length) return;
+        const meta = FIELDS[this.state.field];
+        if (!meta || meta.derived) {
+            const ctx = canvas.getContext('2d');
+            ctx.setTransform(1, 0, 0, 1, 0, 0);
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.fillStyle = '#ffa0a0';
+            ctx.font = '12px ui-monospace, Menlo, monospace';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText('Derived fields not supported for time series (v1).',
+                         canvas.clientWidth / 2, canvas.clientHeight / 2);
+            return;
+        }
+        const level = meta.type === 'pl' ? this.state.level : null;
+        const series = tsComputeSeries(getField, region, {
+            field: this.state.field,
+            level,
+            coord: this.state.vCoord,
+            theta: this.state.theta,
+            years,
+            anomaly: this.state.timeseriesMode === 'anomaly',
+            period: this.state.climatologyPeriod === 'default'
+                ? 'default' : this.state.climatologyPeriod,
+        });
+        tsRenderSeries(canvas, series, {
+            units: meta.units,
+            symmetric: this.state.timeseriesMode === 'anomaly',
+        });
+        // Status line: loaded / total months + extrema.
+        const statsEl = document.getElementById('ts-stats');
+        if (statsEl) {
+            const finite = series.filter(p => p.value != null && Number.isFinite(p.value));
+            if (finite.length === 0) {
+                statsEl.textContent = 'fetching tiles…';
+            } else {
+                const pct = Math.round(finite.length / series.length * 100);
+                const mean = finite.reduce((s, p) => s + p.value, 0) / finite.length;
+                statsEl.textContent = `${finite.length}/${series.length} months · mean ${mean.toFixed(2)}${meta.units ? ' ' + meta.units : ''}${pct < 100 ? ` (${pct}%)` : ''}`;
+            }
+        }
+        // Title: reflect field + region + mode.
+        const title = document.getElementById('ts-title');
+        if (title) {
+            const suffix = this.state.timeseriesMode === 'anomaly' ? ' anomaly' : '';
+            const coord = meta.type === 'pl'
+                ? (this.state.vCoord === 'theta'
+                    ? ` · θ=${this.state.theta} K` : ` · ${this.state.level} hPa`)
+                : '';
+            title.textContent = `${meta.name}${coord}${suffix}`;
+        }
+        // Cache the series for CSV download.
+        this._tsLastSeries = series;
+    }
+
+    _downloadTimeseriesCSV() {
+        const series = this._tsLastSeries;
+        if (!series || !series.length) return;
+        const meta = FIELDS[this.state.field];
+        const level = meta.type === 'pl' ? this.state.level : null;
+        const csv = tsSeriesToCSV(series, {
+            field: this.state.field,
+            level,
+            region: this.state.timeseriesRegion
+                ? tsBboxLabel(this.state.timeseriesRegion) : '',
+            mode: this.state.timeseriesMode,
+            units: meta.units,
+        });
+        const blob = new Blob([csv], { type: 'text/csv' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        const stamp = new Date().toISOString().replace(/:/g, '-').slice(0, 19);
+        a.href = url;
+        a.download = `gc-atlas-${this.state.field}-timeseries-${stamp}.csv`;
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(() => { a.remove(); URL.revokeObjectURL(url); }, 100);
+    }
+
     startPlay() {
         const btn = document.getElementById('month-play');
         const monthSel = document.getElementById('month-select');
@@ -3557,6 +3916,7 @@ class GlobeApp {
         check('toggle-sun',        s.showSun);
         check('toggle-xsection',   s.showXSection);
         check('toggle-lorenz',     s.showLorenz);
+        check('toggle-timeseries', s.showTimeseries);
         check('toggle-compare',    s.compareMode);
         // Dropdown selects.
         const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = v; };
