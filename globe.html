@@ -774,6 +774,87 @@
         }
         .ts-pick-banner.hidden { display: none; }
         .ts-pick-banner b { color: #f0f6f2; font-weight: 700; }
+
+        /* Keyboard-shortcut help overlay (toggled by `?`) */
+        .shortcut-help {
+            position: fixed;
+            inset: 0;
+            background: rgba(4, 12, 10, 0.7);
+            backdrop-filter: blur(4px);
+            -webkit-backdrop-filter: blur(4px);
+            z-index: 200;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .shortcut-help[hidden] { display: none; }
+        .shortcut-help .sc-card {
+            background: rgba(12, 36, 32, 0.97);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg);
+            padding: 18px 22px 16px;
+            max-width: 540px;
+            min-width: 420px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.55);
+        }
+        .shortcut-help .sc-head {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+            color: var(--paper);
+            font-weight: 600;
+            font-size: 0.92rem;
+        }
+        .shortcut-help .sc-close {
+            background: none;
+            border: none;
+            color: var(--sage);
+            font-size: 1.3rem;
+            cursor: pointer;
+            line-height: 1;
+            padding: 0 4px;
+            border-radius: 4px;
+        }
+        .shortcut-help .sc-close:hover { color: var(--paper); background: rgba(255,255,255,0.06); }
+        .shortcut-help .sc-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.78rem;
+            color: var(--paper);
+        }
+        .shortcut-help .sc-table td {
+            padding: 5px 8px;
+            border-bottom: 1px solid var(--thalo-line);
+        }
+        .shortcut-help .sc-table td:first-child {
+            white-space: nowrap;
+            color: var(--emerald-bright);
+        }
+        .shortcut-help .sc-table tr:last-child td { border-bottom: none; }
+        .shortcut-help kbd {
+            display: inline-block;
+            padding: 2px 6px;
+            margin: 0 2px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.72rem;
+            background: rgba(255,255,255,0.06);
+            border: 1px solid var(--thalo-line);
+            border-bottom-width: 2px;
+            border-radius: 3px;
+            color: var(--paper);
+        }
+        .shortcut-help .sc-foot {
+            margin: 12px 0 0;
+            font-size: 0.7rem;
+            color: var(--sage);
+            line-height: 1.5;
+        }
+        .shortcut-help .sc-kbd {
+            font-family: 'JetBrains Mono', monospace;
+            color: var(--emerald-bright);
+        }
         /* Override the default `cursor: grab` on the globe canvas while the
            user is in time-series picking mode. !important beats both the
            base rule and the :active variant. */

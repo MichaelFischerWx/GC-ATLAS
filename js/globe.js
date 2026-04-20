@@ -469,6 +469,7 @@ class GlobeApp {
         this.installArcDrag();
         this._installTimeseriesPicker();
         this._installTimeseriesHover();
+        this._installKeyboardShortcuts();
 
         window.addEventListener('resize', () => this.onResize());
     }
@@ -697,7 +698,7 @@ class GlobeApp {
         this.tipsContent.innerHTML = rows.map(r =>
             `<div class="tips-row"><span class="tips-kbd">${r.kbd}</span>` +
             `<span class="tips-desc">${r.desc}</span></div>`,
-        ).join('');
+        ).join('') + '<div class="tips-row"><span class="tips-kbd">?</span><span class="tips-desc">keyboard shortcuts</span></div>';
     }
 
     size() {
@@ -3723,6 +3724,147 @@ class GlobeApp {
             window.removeEventListener('keydown', this._tsEscHandler);
             this._tsEscHandler = null;
         }
+    }
+
+    // ── keyboard shortcuts ────────────────────────────────────────────
+    _installKeyboardShortcuts() {
+        // Step the month with wrap (Dec → Jan, Jan → Dec).
+        const stepMonth = (delta) => {
+            const next = ((this.state.month - 1 + delta + 12) % 12) + 1;
+            if (this._syncMonthUI) this._syncMonthUI(next);
+            this.setState({ month: next });
+        };
+        // Step the vertical level by one in the direction of altitude.
+        // delta=+1 = up in altitude (lower pressure / higher θ).
+        // LEVELS is sorted ascending in pressure (10 → 1000 hPa) so up
+        // means decrementing the index; THETA_LEVELS is ascending in θ
+        // (warmer = higher altitude) so up means incrementing.
+        const clamp = (i, n) => Math.max(0, Math.min(n - 1, i));
+        const stepLevel = (delta) => {
+            if (this.state.vCoord === 'theta') {
+                const i = THETA_LEVELS.indexOf(this.state.theta);
+                if (i < 0) return;
+                this.setState({ theta: THETA_LEVELS[clamp(i + delta, THETA_LEVELS.length)] });
+            } else {
+                const i = LEVELS.indexOf(this.state.level);
+                if (i < 0) return;
+                this.setState({ level: LEVELS[clamp(i - delta, LEVELS.length)] });
+            }
+        };
+        const cycleDecompose = () => {
+            const order = ['total', 'anomaly', 'zonal', 'eddy'];
+            const i = order.indexOf(this.state.decompose);
+            const next = order[((i < 0 ? 0 : i) + 1) % order.length];
+            this.setState({ decompose: next });
+            this._syncUIFromState();
+        };
+
+        window.addEventListener('keydown', (e) => {
+            // Skip when modifier keys are held — leaves Cmd-S, Ctrl-F, etc.
+            // free for the browser.
+            if (e.metaKey || e.ctrlKey || e.altKey) return;
+            // Skip when typing in any form control so the bounds inputs +
+            // year inputs + threshold input keep accepting numbers.
+            const t = e.target;
+            const tag = t?.tagName;
+            if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA' || t?.isContentEditable) return;
+
+            // Esc clears the help overlay or any other dismissible state
+            // (timeseries-picker has its own ESC handler installed at
+            // pick-mode start).
+            if (e.key === 'Escape') {
+                const help = document.getElementById('shortcut-help');
+                if (help && !help.hidden) { help.hidden = true; e.preventDefault(); return; }
+                return;
+            }
+
+            switch (e.key) {
+                case ' ':
+                    e.preventDefault();
+                    if (this.playTimer) this.stopPlay();
+                    else                this.startPlay();
+                    break;
+                case 'ArrowLeft':
+                    e.preventDefault();
+                    stepMonth(-1);
+                    break;
+                case 'ArrowRight':
+                    e.preventDefault();
+                    stepMonth(+1);
+                    break;
+                case 'ArrowUp':
+                    e.preventDefault();
+                    stepLevel(+1);
+                    break;
+                case 'ArrowDown':
+                    e.preventDefault();
+                    stepLevel(-1);
+                    break;
+                case 'g': case 'G':
+                    this.setViewMode('globe');
+                    document.querySelectorAll('.view-toggle button').forEach(b =>
+                        b.classList.toggle('active', b.id === 'view-globe'));
+                    break;
+                case 'm': case 'M':
+                    this.setViewMode('map');
+                    document.querySelectorAll('.view-toggle button').forEach(b =>
+                        b.classList.toggle('active', b.id === 'view-map'));
+                    break;
+                case 'o': case 'O':
+                    this.setViewMode('orbit');
+                    document.querySelectorAll('.view-toggle button').forEach(b =>
+                        b.classList.toggle('active', b.id === 'view-orbit'));
+                    break;
+                case 'c': case 'C': {
+                    const next = !this.state.showContours;
+                    this.setState({ showContours: next });
+                    const cb = document.getElementById('toggle-contours');
+                    if (cb) cb.checked = next;
+                    const row = document.getElementById('contour-field-row');
+                    if (row) row.hidden = !next;
+                    break;
+                }
+                case 'a': case 'A':
+                    cycleDecompose();
+                    break;
+                case '?':
+                    e.preventDefault();
+                    this._toggleShortcutHelp();
+                    break;
+            }
+        });
+    }
+
+    _toggleShortcutHelp(force) {
+        let panel = document.getElementById('shortcut-help');
+        if (!panel) {
+            panel = document.createElement('div');
+            panel.id = 'shortcut-help';
+            panel.className = 'shortcut-help';
+            panel.innerHTML = `
+                <div class="sc-card">
+                    <div class="sc-head">
+                        <span>Keyboard shortcuts</span>
+                        <button class="sc-close" aria-label="Close">&times;</button>
+                    </div>
+                    <table class="sc-table">
+                        <tr><td><kbd>Space</kbd></td><td>Play / pause months</td></tr>
+                        <tr><td><kbd>←</kbd> <kbd>→</kbd></td><td>Previous / next month</td></tr>
+                        <tr><td><kbd>↑</kbd> <kbd>↓</kbd></td><td>Up / down a vertical level (altitude direction)</td></tr>
+                        <tr><td><kbd>G</kbd> <kbd>M</kbd> <kbd>O</kbd></td><td>Globe / Map / Orbit view</td></tr>
+                        <tr><td><kbd>C</kbd></td><td>Toggle contours</td></tr>
+                        <tr><td><kbd>A</kbd></td><td>Cycle decomposition (total → anomaly → zonal → eddy)</td></tr>
+                        <tr><td><kbd>?</kbd></td><td>Toggle this help</td></tr>
+                        <tr><td><kbd>Esc</kbd></td><td>Cancel picking / close this help</td></tr>
+                    </table>
+                    <p class="sc-foot">Shortcuts pause while typing in any input. <span class="sc-kbd">⇧</span>+drag draws cross-section arcs · <span class="sc-kbd">⌥</span>+click globe releases parcels.</p>
+                </div>
+            `;
+            document.body.appendChild(panel);
+            panel.querySelector('.sc-close').addEventListener('click', () => { panel.hidden = true; });
+            panel.addEventListener('click', (e) => { if (e.target === panel) panel.hidden = true; });
+        }
+        panel.hidden = (force === false) ? true : (force === true ? false : !panel.hidden);
     }
 
     _installTimeseriesHover() {
