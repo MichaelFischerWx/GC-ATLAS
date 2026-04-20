@@ -146,17 +146,25 @@ class GlobeApp {
         loadManifest('per_year').then((ok) => {
             if (ok) this.populateYearSelect();
         });
-        onFieldLoaded(({ name, month, level, period }) => {
+        onFieldLoaded(({ name, month, level, period, year }) => {
             const s = this.state;
             const levelMatches = (level == null || level === s.level);
             const monthMatches = (month === s.month);
+            // Per-year tile arrivals are the active source whenever the user
+            // has a year selected. Treat them like any active-period arrival
+            // so updateField fires when the displayed (field, month, level)
+            // match.
+            const perYearActive = s.year != null
+                && period === 'per_year' && (year == null || year === s.year);
             // Tile arrival from a non-active period is useful for either
             // the climate-change-anomaly view OR the swipe-compare overlay
             // (both subtract / draw the same-month tile from a reference
             // period). Active-period tiles fall through to the regular
             // display-update logic below.
-            const isActivePeriod = (period === s.climatologyPeriod) ||
-                                   (!period && s.climatologyPeriod === 'default');
+            const isActivePeriod = perYearActive
+                || (s.year == null && (
+                    period === s.climatologyPeriod ||
+                    (!period && s.climatologyPeriod === 'default')));
             if (period && !isActivePeriod) {
                 const isRefForAnomaly = s.referencePeriod === period
                                      && s.decompose === 'anomaly'
