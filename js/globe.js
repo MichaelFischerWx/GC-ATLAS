@@ -1010,14 +1010,16 @@ class GlobeApp {
         }
     }
 
-    // ── year picker ──────────────────────────────────────────────────
+    // ── year picker (slider + Climatology pill) ──────────────────────
+    // Reads the per-year manifest's `years` list and configures the year
+    // slider's min/max to match. Slider stays disabled until the manifest
+    // arrives. Re-callable safely after period switches / manifest reloads.
     populateYearSelect() {
-        const sel = document.getElementById('year-select');
-        if (!sel) return;
+        const slider = document.getElementById('year-slider');
+        const display = document.getElementById('year-display');
+        if (!slider) return;
         const mfst = getManifest('per_year');
         if (!mfst) return;
-        // Pull `years` from the first per-year variable that carries it
-        // (any var works — they were all built from the same merged time axis).
         let years = null;
         for (const grp of Object.values(mfst.groups || {})) {
             for (const v of Object.values(grp)) {
@@ -1025,14 +1027,21 @@ class GlobeApp {
             }
             if (years) break;
         }
-        if (!years) return;
-        const current = sel.value;
-        sel.innerHTML = '<option value="">Climatology (mean)</option>';
-        for (const y of [...years].reverse()) {
-            sel.appendChild(Object.assign(document.createElement('option'),
-                { value: String(y), textContent: String(y) }));
+        if (!years || !years.length) return;
+        const minY = years[0];
+        const maxY = years[years.length - 1];
+        slider.min = String(minY);
+        slider.max = String(maxY);
+        slider.disabled = false;
+        // Default the slider to the most recent year so the first drag feels
+        // immediate, but don't activate year-mode unless the user clicks.
+        if (this.state.year != null) {
+            slider.value = String(Math.max(minY, Math.min(maxY, this.state.year)));
+            if (display) { display.textContent = slider.value; display.classList.remove('is-climo'); }
+        } else {
+            slider.value = String(maxY);
+            if (display) { display.textContent = 'Climatology'; display.classList.add('is-climo'); }
         }
-        sel.value = current;
     }
 
     // ── swipe compare helpers ────────────────────────────────────────
@@ -2480,13 +2489,40 @@ class GlobeApp {
         // climatology dropdown semantically — when a year is set, the
         // climatology-period control is greyed out (no meaning when
         // showing a single year's tile).
-        const yearSel = document.getElementById('year-select');
-        if (yearSel) {
-            yearSel.value = this.state.year != null ? String(this.state.year) : '';
-            yearSel.addEventListener('change', () => {
-                const v = yearSel.value;
-                const year = v === '' ? null : Number(v);
+        const yearSlider  = document.getElementById('year-slider');
+        const yearClimoBtn = document.getElementById('year-climo-btn');
+        const yearDisplay  = document.getElementById('year-display');
+        const setYearUI = (year) => {
+            if (yearClimoBtn) yearClimoBtn.classList.toggle('active', year == null);
+            if (yearDisplay) {
+                if (year == null) {
+                    yearDisplay.textContent = 'Climatology';
+                    yearDisplay.classList.add('is-climo');
+                } else {
+                    yearDisplay.textContent = String(year);
+                    yearDisplay.classList.remove('is-climo');
+                    if (yearSlider) yearSlider.value = String(year);
+                }
+            }
+        };
+        // Drag the slider → switch into year mode at that year. Continuous
+        // updates ('input') drive the value; the heavyweight setState call
+        // happens on each commit but the cache makes month/year scrub fast.
+        if (yearSlider) {
+            setYearUI(this.state.year);
+            yearSlider.addEventListener('input', () => {
+                const year = Number(yearSlider.value);
+                setYearUI(year);
                 this.setState({ year });
+            });
+        }
+        // Click "Climatology" → drop year mode (state.year = null) and
+        // restore the climatology-period dropdown's normal behaviour.
+        if (yearClimoBtn) {
+            yearClimoBtn.addEventListener('click', () => {
+                if (this.state.year == null) return;
+                setYearUI(null);
+                this.setState({ year: null });
             });
         }
         // Refresh the reference-period dropdown's label/disabled state once

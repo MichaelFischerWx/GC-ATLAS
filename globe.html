@@ -182,6 +182,43 @@
         }
 
         .slider-row { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
+
+        /* ── Year picker (slider + Climatology toggle) ─────────── */
+        .year-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            margin-bottom: 6px;
+        }
+        .year-pill {
+            background: transparent;
+            border: 1px solid var(--thalo-line);
+            color: var(--paper-dim);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.7rem;
+            letter-spacing: 0.04em;
+            padding: 4px 10px;
+            border-radius: 999px;
+            cursor: pointer;
+            transition: all 0.15s;
+            white-space: nowrap;
+        }
+        .year-pill:hover { border-color: var(--emerald); color: var(--paper); }
+        .year-pill.active {
+            background: rgba(14, 140, 110, 0.18);
+            border-color: var(--emerald);
+            color: var(--emerald-bright);
+        }
+        .year-display {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.95rem;
+            font-weight: 600;
+            color: var(--amber);
+            min-width: 48px;
+            text-align: right;
+        }
+        .year-display.is-climo { color: var(--paper-dim); font-weight: 500; }
         .icon-btn {
             flex-shrink: 0;
             width: 36px;
@@ -1189,10 +1226,18 @@
                 <input id="month-slider" class="slider" type="range" min="1" max="12" step="1" value="1" aria-label="scrub month">
             </div>
             <div style="margin-top:10px;">
-                <label class="field-label" for="year-select" style="margin-bottom:4px; font-size:0.66rem;">Year</label>
-                <select id="year-select" title="Default = the climatology mean (active period). Pick a specific year to see that single year's snapshot — backed by the per-year tile tree (1991 → present).">
-                    <option value="">Climatology (mean)</option>
-                </select>
+                <label class="field-label" style="margin-bottom:4px; font-size:0.66rem;">Year</label>
+                <div class="year-row">
+                    <button id="year-climo-btn" type="button" class="year-pill active"
+                            title="Show the climatology mean for the active 30-year window">
+                        Climatology
+                    </button>
+                    <span id="year-display" class="year-display" aria-live="polite">—</span>
+                </div>
+                <input id="year-slider" class="slider" type="range"
+                       min="1991" max="2026" step="1" value="2015"
+                       aria-label="scrub year" disabled
+                       title="Drag to pick a specific year. The Climatology pill on the left toggles back to the 30-year mean.">
             </div>
         </section>
 
