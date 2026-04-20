@@ -83,6 +83,58 @@ function pendingField() {
     return { values: PENDING_VALUES, vmin: 0, vmax: 1 };
 }
 
+// ── Custom-range composite cache ──────────────────────────────────
+// Browser-side mean of per-year tiles for an arbitrary [start, end] year
+// range. The composite surfaces to the rest of the app as if it were a
+// climatology — same values/vmin/vmax shape. Cache keyed by
+// (name, level, month, start, end); entries persist across month-scrubs
+// so users can scrub through a custom-window composite without refetching.
+const _customRangeCache = new Map();
+export function invalidateCustomRangeCache() { _customRangeCache.clear(); }
+
+/** Compose a custom-range mean from per-year tiles. Returns
+ *    { values, vmin, vmax, isReal: true }  when all tiles are cached,
+ *    null when any is still loading (subscriber will re-call on arrival).
+ *  `level` is the pressure level or null for single-level fields. */
+function composeCustomRangeMean(name, month, level, start, end) {
+    const key = level == null
+        ? `${name}:sl:${month}:${start}-${end}`
+        : `${name}:${level}:${month}:${start}-${end}`;
+    const hit = _customRangeCache.get(key);
+    if (hit) return hit;
+    const { nlat, nlon } = GRID;
+    const N = nlat * nlon;
+    const sum = new Float32Array(N);
+    const count = new Uint16Array(N);
+    let anyMissing = false;
+    for (let y = start; y <= end; y++) {
+        const tile = requestEra5(name, {
+            month, level, period: 'per_year', year: y, kind: 'mean',
+        });
+        if (!tile) { anyMissing = true; continue; }   // still loading
+        const vals = tile.values;
+        for (let i = 0; i < N; i++) {
+            const v = vals[i];
+            if (Number.isFinite(v)) { sum[i] += v; count[i] += 1; }
+        }
+    }
+    if (anyMissing) return null;
+    const out = new Float32Array(N);
+    let vmin = Infinity, vmax = -Infinity;
+    for (let i = 0; i < N; i++) {
+        out[i] = count[i] > 0 ? sum[i] / count[i] : NaN;
+        if (Number.isFinite(out[i])) {
+            if (out[i] < vmin) vmin = out[i];
+            if (out[i] > vmax) vmax = out[i];
+        }
+    }
+    if (!Number.isFinite(vmin)) { vmin = 0; vmax = 1; }
+    const entry = { values: out, vmin, vmax, isReal: true };
+    _customRangeCache.set(key, entry);
+    return entry;
+}
+export { composeCustomRangeMean };
+
 // Force [-A, +A] when meta.symmetric so RdBu_r centres white on zero. Applied
 // at getField return so it covers raw + derived + isentropic paths uniformly.
 function symmetricRange(vmin, vmax, meta) {
@@ -131,9 +183,47 @@ function applyClampToEntry(entry, meta) {
  * tiles to the requested θ surface per column; tropics near low θ and the
  * upper stratosphere near high θ return NaN where θ₀ is out of range.
  */
-export function getField(name, { month = 1, level = 500, coord = 'pressure', theta = 330, kind = 'mean', period = 'default', year = null } = {}) {
+export function getField(name, { month = 1, level = 500, coord = 'pressure', theta = 330, kind = 'mean', period = 'default', year = null, customRange = null } = {}) {
     const meta = FIELDS[name];
     if (!meta) throw new Error(`unknown field: ${name}`);
+
+    // Custom-range composite: browser-side mean of per-year tiles over an
+    // arbitrary [start, end] year range. Surfaces to the rest of the app
+    // as if it were a climatology (same shape). v1 scope: pressure-coord
+    // raw fields + single-level fields only — derived and isentropic
+    // composites are a follow-up (would need per-year θ cubes averaged
+    // into a composite θ cube, which is doable but heavier).
+    if (customRange && !meta.derived && (coord !== 'theta' || meta.type !== 'pl')) {
+        const useLevel = meta.type === 'pl' ? level : null;
+        const composed = composeCustomRangeMean(
+            name, month, useLevel, customRange.start, customRange.end);
+        if (composed) {
+            const r = symmetricRange(composed.vmin, composed.vmax, meta);
+            return {
+                values: composed.values,
+                vmin: r.vmin, vmax: r.vmax,
+                shape: [GRID.nlat, GRID.nlon],
+                lats: LATS, lons: LONS,
+                ...meta,
+                long_name: meta.name,
+                units: meta.units,
+                isReal: true,
+                kind: 'mean',
+                period: 'custom_range',
+                customRange,
+            };
+        }
+        // Not all tiles cached yet — fall through to pending below.
+        return {
+            ...pendingField(),
+            shape: [GRID.nlat, GRID.nlon],
+            lats: LATS, lons: LONS,
+            ...meta,
+            isReal: false, kind: 'mean',
+            period: 'custom_range',
+            customRange,
+        };
+    }
 
     const isenMode = (coord === 'theta') && meta.type === 'pl';
 

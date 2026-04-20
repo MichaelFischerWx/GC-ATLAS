@@ -107,6 +107,7 @@ class GlobeApp {
             referencePeriod: 'default',  // 'default' (1991-2020) | '1961-1990' | …
             climatologyPeriod: 'default', // active climatology — drives mean + std + decomp reference
             year: null,              // null = climatology mean; integer (e.g. 2003) = single-year snapshot
+            customRange: null,       // null = off; {start, end} = composite mean over those years (incl.)
             compareMode: false,      // swipe-compare overlay (Map view only)
             compareSplit: 0.5,       // split position in [0,1] — uv-x of the divider
             compareYear: null,       // when set, swipe right-half draws this year's tile (year-vs-* compare)
@@ -174,13 +175,20 @@ class GlobeApp {
             // match.
             const perYearActive = s.year != null
                 && period === 'per_year' && (year == null || year === s.year);
+            // Custom-range composite: any per-year tile within the range
+            // feeds the mean and should trigger a repaint attempt.
+            const customRangeActive = s.customRange
+                && period === 'per_year'
+                && year != null
+                && year >= s.customRange.start
+                && year <= s.customRange.end;
             // Tile arrival from a non-active period is useful for either
             // the climate-change-anomaly view OR the swipe-compare overlay
             // (both subtract / draw the same-month tile from a reference
             // period). Active-period tiles fall through to the regular
             // display-update logic below.
-            const isActivePeriod = perYearActive
-                || (s.year == null && (
+            const isActivePeriod = perYearActive || customRangeActive
+                || (s.year == null && !s.customRange && (
                     period === s.climatologyPeriod ||
                     (!period && s.climatologyPeriod === 'default')));
             if (period && !isActivePeriod) {
@@ -1666,16 +1674,18 @@ class GlobeApp {
         if ('level' in patch || 'month' in patch || 'vCoord' in patch || 'theta' in patch || 'field' in patch) this.windCache.stale = true;
         if ('month' in patch && this.parcels) this.parcels.invalidateCube();
         if ('vCoord' in patch || 'theta' in patch) invalidateIsentropicCache();
-        if ('year' in patch) {
-            // Year change invalidates derived/isentropic caches (their keys
-            // don't include year) and the wind cache; trigger a re-render.
+        if ('year' in patch || 'customRange' in patch) {
+            // Time-slice change (year / customRange) invalidates derived +
+            // isentropic caches (their keys don't include those) and the
+            // wind cache; trigger a re-render.
             invalidateIsentropicCache();
             this.windCache.stale = true;
             if (this.parcels) this.parcels.invalidateCube();
-            // Climatology-period control is meaningless when viewing a single
-            // year — grey it out for clarity.
+            // Climatology-period control is meaningless when viewing a
+            // single year OR a custom-range composite — grey it out.
             const climoSel = document.getElementById('climo-period-select');
-            if (climoSel) climoSel.disabled = (patch.year != null);
+            const altActive = (this.state.year != null) || !!this.state.customRange;
+            if (climoSel) climoSel.disabled = altActive;
             // Reference-period dropdown's "Self" option means different things
             // in climatology vs year mode. Relabel so the user sees what the
             // anomaly is actually subtracting.
@@ -2144,7 +2154,11 @@ class GlobeApp {
 
     updateField() {
         const { field, level, theta, vCoord, month, cmap, decompose: mode, kind } = this.state;
-        const f = getField(field, { month, level, coord: vCoord, theta, kind, year: this.state.year });
+        const f = getField(field, {
+            month, level, coord: vCoord, theta, kind,
+            year: this.state.year,
+            customRange: this.state.customRange,
+        });
         this.setLoadingOverlay(!f.isReal);
 
         // Decide the effective decomposition for paint. Three transforms
@@ -2461,12 +2475,13 @@ class GlobeApp {
         const range = aggregatedDecompositionRange(
             mode,
             (m) => {
-                // Year mode: each iteration fetches the per-year tile for
-                // month m of the chosen year. Climatology mode: per-month
-                // climatology tile (existing behaviour).
+                // Each iteration fetches the active time-slice tile for
+                // month m (year, custom-range composite, or climatology
+                // mean, per the current mode).
                 const fm = getField(field, {
                     month: m, level, coord: vCoord, theta,
                     year: this.state.year,
+                    customRange: this.state.customRange,
                 });
                 return fm.isReal ? fm : null;
             },
@@ -2728,15 +2743,15 @@ class GlobeApp {
         // climatology dropdown semantically — when a year is set, the
         // climatology-period control is greyed out (no meaning when
         // showing a single year's tile).
-        // Time-mode toggle: Climatology vs Single year.
-        // Climatology mode shows the Period dropdown (active 30-year window).
-        // Single year mode shows a slider over the per-year manifest's years.
-        // Switching to Climatology drops state.year (back to mean tiles);
-        // switching to Single year sets state.year to the slider's value
-        // (defaults to the most recent year on first activation).
+        // Time-mode toggle: Climatology vs Single year vs Custom range.
+        //   Climatology mode → Period dropdown (active 30-year window)
+        //   Single year mode → slider over the per-year manifest's years
+        //   Custom range  → [start, end] year inputs + Compute button
+        // Each mode clears the state of the others so only one is active.
         const timeModeButtons = document.querySelectorAll('#time-mode-toggle button');
         const climoOptions    = document.getElementById('time-climo-options');
         const yearOptions     = document.getElementById('time-year-options');
+        const rangeOptions    = document.getElementById('time-range-options');
         const yearSlider      = document.getElementById('year-slider');
         const yearDisplay     = document.getElementById('year-display');
         const setTimeMode = (mode) => {
@@ -2744,21 +2759,75 @@ class GlobeApp {
                 b.classList.toggle('active', b.dataset.timeMode === mode));
             if (climoOptions) climoOptions.hidden = (mode !== 'climo');
             if (yearOptions)  yearOptions.hidden  = (mode !== 'year');
+            if (rangeOptions) rangeOptions.hidden = (mode !== 'range');
         };
         timeModeButtons.forEach(btn => {
             btn.addEventListener('click', () => {
                 const mode = btn.dataset.timeMode;
                 setTimeMode(mode);
                 if (mode === 'climo') {
-                    if (this.state.year != null) this.setState({ year: null });
-                } else {
-                    // Use the slider's current value as the starting year;
-                    // populateYearSelect already set it sensibly on manifest load.
+                    const patch = {};
+                    if (this.state.year != null) patch.year = null;
+                    if (this.state.customRange) patch.customRange = null;
+                    if (Object.keys(patch).length) this.setState(patch);
+                } else if (mode === 'year') {
+                    const patch = { customRange: null };
                     const y = yearSlider ? Number(yearSlider.value) : null;
-                    if (Number.isFinite(y) && y !== this.state.year) this.setState({ year: y });
+                    if (Number.isFinite(y) && y !== this.state.year) patch.year = y;
+                    this.setState(patch);
+                } else if (mode === 'range') {
+                    // Don't auto-compute; user clicks the button to kick it.
+                    if (this.state.year != null) this.setState({ year: null });
                 }
             });
         });
+        // Custom-range inputs + compute button. We DON'T auto-compute on
+        // input change (would fire a potentially large prefetch with every
+        // keystroke). User clicks "Compute mean" to trigger — sets
+        // state.customRange, which routes through composeCustomRangeMean
+        // and prefetches the needed per-year tiles.
+        const rangeStart  = document.getElementById('range-start');
+        const rangeEnd    = document.getElementById('range-end');
+        const rangeBtn    = document.getElementById('range-compute-btn');
+        const rangeLabel  = document.getElementById('range-compute-label');
+        const rangeStatus = document.getElementById('range-status');
+        const updateRangeBtnLabel = () => {
+            if (!rangeBtn || !rangeLabel || !rangeStart || !rangeEnd) return;
+            const s = Number(rangeStart.value), e = Number(rangeEnd.value);
+            if (!Number.isFinite(s) || !Number.isFinite(e) || s > e) {
+                rangeLabel.textContent = 'Enter a valid range';
+                rangeBtn.disabled = true;
+                return;
+            }
+            rangeBtn.disabled = false;
+            const active = this.state.customRange;
+            const matches = active && active.start === s && active.end === e;
+            rangeLabel.textContent = matches
+                ? `Active · ${s}–${e} (${e - s + 1} yrs)`
+                : `Compute ${s}–${e} mean (${e - s + 1} yrs)`;
+            rangeBtn.classList.toggle('is-done', !!matches);
+        };
+        rangeStart?.addEventListener('input', updateRangeBtnLabel);
+        rangeEnd  ?.addEventListener('input', updateRangeBtnLabel);
+        rangeBtn  ?.addEventListener('click', () => {
+            const s = Number(rangeStart.value), e = Number(rangeEnd.value);
+            if (!Number.isFinite(s) || !Number.isFinite(e) || s > e) return;
+            // Prefetch the per-year tiles for every year in range at the
+            // current (field, level). They land asynchronously and the
+            // onFieldLoaded listener re-paints as each arrives.
+            for (let y = s; y <= e; y++) {
+                prefetchField(this.state.field, {
+                    level: this.state.level,
+                    period: 'per_year',
+                    year: y,
+                });
+            }
+            if (rangeStatus) rangeStatus.textContent =
+                `Fetching ${e - s + 1} years × 12 months of ${this.state.field}… the globe will paint when all tiles arrive.`;
+            this.setState({ customRange: { start: s, end: e }, year: null });
+            updateRangeBtnLabel();
+        });
+        updateRangeBtnLabel();
         if (yearSlider) {
             // 'input' fires continuously during drag, so the globe scrubs
             // through years live (cache hits make subsequent scrubs instant).
@@ -3207,7 +3276,8 @@ class GlobeApp {
         seg('.decomp-seg button',          'decompose',   s.decompose);
         seg('#vcoord-toggle button',       'coord',       s.vCoord);
         seg('.wind-mode .segmented button','windMode',    s.windMode);
-        seg('#time-mode-toggle button',    'timeMode',    s.year != null ? 'year' : 'climo');
+        seg('#time-mode-toggle button',    'timeMode',
+            s.customRange ? 'range' : (s.year != null ? 'year' : 'climo'));
         seg('#compare-mode-toggle button', 'compareMode', s.compareYear != null ? 'year' : 'ref');
         // Checkboxes for overlay toggles + panels + compare.
         const check = (id, v) => { const el = document.getElementById(id); if (el) el.checked = !!v; };
@@ -3238,11 +3308,22 @@ class GlobeApp {
         if (xsPanel) xsPanel.hidden = !s.showXSection;
         const lzPanel = document.getElementById('lorenz-panel');
         if (lzPanel) lzPanel.hidden = !s.showLorenz;
-        // Compare-time-mode options visibility.
+        // Time-mode options visibility — mirror the three-way mode.
+        const timeMode = s.customRange ? 'range' : (s.year != null ? 'year' : 'climo');
         const climoOpts = document.getElementById('time-climo-options');
         const yearOpts  = document.getElementById('time-year-options');
-        if (climoOpts) climoOpts.hidden = (s.year != null);
-        if (yearOpts)  yearOpts.hidden  = (s.year == null);
+        const rangeOpts = document.getElementById('time-range-options');
+        if (climoOpts) climoOpts.hidden = (timeMode !== 'climo');
+        if (yearOpts)  yearOpts.hidden  = (timeMode !== 'year');
+        if (rangeOpts) rangeOpts.hidden = (timeMode !== 'range');
+        // Custom-range inputs — restore start/end from state when loading a
+        // shared URL that carries them.
+        if (s.customRange) {
+            const rs = document.getElementById('range-start');
+            const re = document.getElementById('range-end');
+            if (rs) rs.value = String(s.customRange.start);
+            if (re) re.value = String(s.customRange.end);
+        }
         const cmpYearOpts = document.getElementById('compare-year-options');
         if (cmpYearOpts) cmpYearOpts.hidden = (s.compareYear == null);
         // Re-apply label for the reference-period dropdown and any state-

@@ -197,6 +197,48 @@
             font-weight: 600;
             color: var(--amber);
         }
+
+        /* ── Custom-range year inputs + compute button ─────────── */
+        .range-row {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            flex-wrap: wrap;
+            margin-bottom: 6px;
+        }
+        .range-row .field-label { margin: 0; font-size: 0.66rem; }
+        .range-input {
+            width: 68px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.78rem;
+            color: var(--paper);
+            background: rgba(255,255,255,0.04);
+            border: 1px solid var(--thalo-line);
+            border-radius: 4px;
+            padding: 4px 6px;
+            text-align: center;
+        }
+        .range-input:focus { outline: none; border-color: var(--emerald-bright); }
+        .range-compute {
+            width: 100%;
+            background: rgba(14,140,110,0.18);
+            border: 1px solid var(--emerald);
+            color: var(--emerald-bright);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.72rem;
+            letter-spacing: 0.06em;
+            padding: 6px 10px;
+            border-radius: 5px;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        .range-compute:hover { background: rgba(14,140,110,0.28); color: var(--paper); }
+        .range-compute:disabled { opacity: 0.5; cursor: wait; }
+        .range-compute.is-done {
+            background: rgba(255,255,255,0.04);
+            border-color: var(--thalo-line);
+            color: var(--sage);
+        }
         .icon-btn {
             flex-shrink: 0;
             width: 36px;
@@ -1225,12 +1267,14 @@
                 <button type="button" data-kind="mean" class="active" title="Climatological mean">Mean</button>
                 <button type="button" data-kind="std" title="Inter-annual standard deviation across the 30-year window — highlights ENSO, monsoon variability, storm-track regions">±1σ variability</button>
             </div>
-            <!-- Top-level mode toggle: a 30-year window vs a single year -->
+            <!-- Top-level mode toggle: a 30-year window, one year, or a custom range -->
             <div class="segmented" id="time-mode-toggle" style="margin-top:10px;" role="tablist" aria-label="Time mode">
                 <button type="button" data-time-mode="climo" class="active"
                         title="View the 30-year climatological mean for the chosen window">Climatology</button>
                 <button type="button" data-time-mode="year"
                         title="View an individual year's snapshot from the per-year tile tree">Single year</button>
+                <button type="button" data-time-mode="range"
+                        title="Average over a custom [start, end] range of years (e.g. 2010-2024, or 1979-2000)">Custom range</button>
             </div>
             <!-- Climatology-mode options: which 30-year window -->
             <div id="time-climo-options" style="margin-top:10px;">
@@ -1250,6 +1294,23 @@
                        min="1991" max="2026" step="1" value="2015"
                        aria-label="scrub year"
                        title="Drag to pick a year. ← / → keys also step through years.">
+            </div>
+            <!-- Custom-range-mode options: start/end year + Compute button -->
+            <div id="time-range-options" hidden style="margin-top:10px;">
+                <div class="range-row">
+                    <label class="field-label" for="range-start">Start</label>
+                    <input id="range-start" type="number" class="range-input"
+                           min="1961" max="2026" step="1" value="2010">
+                    <label class="field-label" for="range-end" style="margin-left:6px;">End</label>
+                    <input id="range-end" type="number" class="range-input"
+                           min="1961" max="2026" step="1" value="2024">
+                </div>
+                <button id="range-compute-btn" type="button" class="range-compute">
+                    <span id="range-compute-label">Compute mean</span>
+                </button>
+                <p class="field-help" id="range-status" style="margin-top:6px; line-height:1.45;">
+                    Pick a year range. "Compute mean" fetches the per-year tiles and averages them in the browser — the result acts like a climatology (can be anomaly-referenced, compared, etc.).
+                </p>
             </div>
         </section>
 

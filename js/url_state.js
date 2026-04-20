@@ -42,6 +42,17 @@ const SPEC = [
             if (s === '' || s === 'null') return null;
             const n = Number(s); return Number.isFinite(n) ? n : undefined;
         }],
+    ['customRange',        'cr',
+        // Encode as "start-end" (e.g. "2010-2024"). Null → omitted.
+        v => v == null ? null : `${v.start}-${v.end}`,
+        s => {
+            const m = /^(\d{4})-(\d{4})$/.exec(s || '');
+            if (!m) return undefined;
+            const start = Number(m[1]), end = Number(m[2]);
+            return (end >= start && start >= 1900 && end <= 2100)
+                ? { start, end }
+                : undefined;
+        }],
     ['cmap',               'cm',
         v => v,
         s => COLORMAPS.includes(s) ? s : undefined],
