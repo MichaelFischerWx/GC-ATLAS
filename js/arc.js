@@ -43,6 +43,28 @@ export function gcDistanceKm(lat1, lon1, lat2, lon2) {
  * to (lat2, lon2). Returns an array of { lat, lon }. For identical endpoints
  * returns a single point. Uses slerp for numerical stability on short arcs.
  */
+/**
+ * Linear-in-(lat, lon) interpolation between two points. Unlike the
+ * great-circle arc, this traces a line that's STRAIGHT on an
+ * equirectangular map projection — useful for map-view cross-sections
+ * where "straight on the map" is what the user expects. Handles the
+ * longitude seam by picking the shortest direction (|Δlon| ≤ 180°).
+ */
+export function linearLatLonArc(lat1, lon1, lat2, lon2, nSegments = 128) {
+    let dlon = lon2 - lon1;
+    if (dlon >  180) dlon -= 360;
+    if (dlon < -180) dlon += 360;
+    const out = [];
+    for (let i = 0; i <= nSegments; i++) {
+        const t = i / nSegments;
+        out.push({
+            lat: lat1 + t * (lat2 - lat1),
+            lon: ((lon1 + t * dlon + 540) % 360) - 180,
+        });
+    }
+    return out;
+}
+
 export function greatCircleArc(lat1, lon1, lat2, lon2, nSegments = 128) {
     const v1 = latLonToVec3(lat1, lon1);
     const v2 = latLonToVec3(lat2, lon2);

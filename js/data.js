@@ -194,7 +194,13 @@ export function getField(name, { month = 1, level = 500, coord = 'pressure', the
             year: effYear,
         });
         if (era) {
-            const r = symmetricRange(era.vmin, era.vmax, meta);
+            // Skip symmetric forcing for std tiles — they're non-negative by
+            // definition, so a ±max range wastes half the colormap on values
+            // that can't exist. Same for per-year tiles (single snapshots).
+            const forceSym = meta.symmetric && effKind !== 'std';
+            const r = forceSym
+                ? symmetricRange(era.vmin, era.vmax, meta)
+                : { vmin: era.vmin, vmax: era.vmax };
             return {
                 values: era.values,
                 vmin: r.vmin, vmax: r.vmax,

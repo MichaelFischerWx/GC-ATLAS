@@ -16,7 +16,7 @@ import { ContourLabels } from './contour_labels.js';
 import { SunLight } from './sun.js';
 import { OrbitScene, ORBIT_RADIUS } from './orbit.js';
 import { computeZonalMean, computeArcCrossSection, renderCrossSection, samplePanel } from './cross_section.js';
-import { greatCircleArc, latLonToVec3, gcDistanceKm } from './arc.js';
+import { greatCircleArc, linearLatLonArc, latLonToVec3, gcDistanceKm } from './arc.js';
 import { loadManifest, onFieldLoaded, isReady as era5Ready, prefetchField, cachedMonth, registerClamps, setActivePeriod, getManifest } from './era5.js';
 import { decompose, annualMeanFrom, aggregatedDecompositionRange } from './decompose.js';
 import { HoverProbe } from './hover.js';
@@ -277,6 +277,12 @@ class GlobeApp {
         this.controls.minDistance = 1.4;
         this.controls.maxDistance = 8;
         this.controls.enablePan = false;
+        // Pause particle stepping while the user is orbiting / zooming so
+        // the advected field doesn't scramble across frames while the view
+        // geometry shifts. Resume once interaction ends.
+        this._interactingControls = false;
+        this.controls.addEventListener('start', () => { this._interactingControls = true; });
+        this.controls.addEventListener('end',   () => { this._interactingControls = false; });
 
         // Tips card in the bottom-right. Persistent (doesn't fade on
         // interaction) until the user clicks the × — it's a reference for
@@ -435,6 +441,7 @@ class GlobeApp {
             // here too), or interacting with a panel above the canvas.
             if (e.shiftKey || e.altKey) return;
             dragging = true;
+            this._interactingControls = true;   // pause particle stepping while panning
             lastX = e.clientX;
             lastY = e.clientY;
             el.setPointerCapture(e.pointerId);
@@ -486,6 +493,7 @@ class GlobeApp {
         const endDrag = (e) => {
             if (!dragging) return;
             dragging = false;
+            this._interactingControls = false;
             try { el.releasePointerCapture(e.pointerId); } catch { /* ignore */ }
         };
         el.addEventListener('pointerup', endDrag);
@@ -1908,7 +1916,12 @@ class GlobeApp {
                 zm.suppressContours = true;
             }
         } else if (xsArc) {
-            const arc = greatCircleArc(
+            // Map view: straight-line-in-(lat, lon) sampling — reads as a
+            // straight line on the equirectangular projection. Globe view:
+            // great-circle — reads as straight on the sphere.
+            const arcFn = (this.state.viewMode === 'map')
+                ? linearLatLonArc : greatCircleArc;
+            const arc = arcFn(
                 xsArc.start.lat, xsArc.start.lon,
                 xsArc.end.lat,   xsArc.end.lon,
                 192,
@@ -1997,7 +2010,10 @@ class GlobeApp {
         if (!this.arcGroup) return;
         const a = this.state.xsArc;
         if (!a) { this.arcGroup.visible = false; return; }
-        const arc = greatCircleArc(a.start.lat, a.start.lon, a.end.lat, a.end.lon, 96);
+        // Same arc type as the cross-section sampling (see updateField).
+        const arcFn = (this.state.viewMode === 'map')
+            ? linearLatLonArc : greatCircleArc;
+        const arc = arcFn(a.start.lat, a.start.lon, a.end.lat, a.end.lon, 96);
         const LIFT = 1.015;
         const pts = arc.map(({ lat, lon }) => this.project(lat, lon, LIFT));
         const flat = new Float32Array(pts.length * 3);
@@ -2188,8 +2204,41 @@ class GlobeApp {
         let annualMeanForAgg = null;
         if (mode === 'anomaly') {
             if (this.state.vCoord === 'theta') {
-                // θ-mode doesn't support anomaly — fall back to total with the
-                // same aggregated range as the explicit total path above.
+                // θ-mode self-anomaly: compute the 12-month annual mean from
+                // isentropic tiles for this field on this θ surface, then
+                // subtract. (Climate-change-anomaly on θ would need
+                // reference-period isentropic tiles too — TODO.)
+                const theta = this.state.theta;
+                const fieldName = this.state.field;
+                const getMonthIsen = (m) => {
+                    const g = getField(fieldName, {
+                        month: m,
+                        coord: 'theta',
+                        theta,
+                    });
+                    return g.isReal ? g.values : null;
+                };
+                const annualMeanTheta = annualMeanFrom(getMonthIsen, GRID.nlat, GRID.nlon);
+                const fieldClamp = FIELDS[fieldName]?.clamp ?? null;
+                const current = decompose(f.values, GRID.nlat, GRID.nlon, 'anomaly',
+                                          annualMeanTheta, { clamp: fieldClamp });
+                if (!current.empty) {
+                    // Pool across months so the anomaly colorbar stays stable
+                    // as the user scrubs months on θ.
+                    const range = aggregatedDecompositionRange(
+                        'anomaly',
+                        (m) => {
+                            const g = getField(fieldName, { month: m, coord: 'theta', theta });
+                            return g.isReal ? g : null;
+                        },
+                        GRID.nlat, GRID.nlon, annualMeanTheta,
+                        { symmetric: !!FIELDS[fieldName]?.symmetric, clamp: fieldClamp },
+                    );
+                    if (range) { current.vmin = range.vmin; current.vmax = range.vmax; }
+                    return current;
+                }
+                // Couldn't compute (no cached months yet) — fall back to total
+                // so the map keeps painting while tiles load in the background.
                 return { values: f.values, vmin: f.vmin, vmax: f.vmax, symmetric: false, empty: false };
             }
             const meta = FIELDS[this.state.field] || {};
@@ -3033,7 +3082,8 @@ class GlobeApp {
     animate() {
         const tick = () => {
             this.controls.update();
-            if (this.state.windMode === 'particles' && this.particles) this.particles.step();
+            if (this.state.windMode === 'particles' && this.particles
+                && !this._interactingControls) this.particles.step();
             // Lagrangian parcels only step when there are active ones and
             // when the globe is the active view.
             if (this.state.viewMode === 'globe' &&
