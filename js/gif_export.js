@@ -13,9 +13,11 @@
 // Output is a Blob the caller downloads as a .gif.
 
 import { GIFEncoder, quantize, applyPalette } from 'https://unpkg.com/gifenc@1.0.3/dist/gifenc.esm.js';
+import { FIELDS } from './data.js';
 
 const DEFAULT_FPS = 15;
 const CAPTURE_MAX_WIDTH = 900;   // downscale to keep file size reasonable
+const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 
 export class GifExporter {
     /** app: { renderer, state, setState, updateField, getIsReady } */
@@ -23,8 +25,98 @@ export class GifExporter {
         this.app = app;
     }
 
+    /** Build the caption strings from current app state. Rebuilt each
+     *  frame so the annual loop's month label advances per-frame and any
+     *  composite / year / climatology context is always current. */
+    _buildCaption() {
+        const s = this.app.state;
+        const meta = FIELDS[s.field] || {};
+        let title = meta.name || s.field;
+        if (meta.type === 'pl') {
+            title += s.vCoord === 'theta'
+                ? ` · θ=${s.theta} K`
+                : ` · ${s.level} hPa`;
+        }
+        if (s.kind === 'std') {
+            title += ' · ±1σ';
+        } else if (s.decompose && s.decompose !== 'total') {
+            title += ` · ${s.decompose}`;
+        }
+
+        const subParts = [MONTHS[s.month - 1]];
+        const cr = s.customRange;
+        if (s.year != null) {
+            subParts.push(String(s.year));
+        } else if (cr && cr.label) {
+            const n = Array.isArray(cr.years) ? cr.years.length : 0;
+            subParts.push(`${cr.label}${n ? ` · ${n} events` : ''}`);
+        } else if (cr && Number.isFinite(cr.start) && Number.isFinite(cr.end)) {
+            subParts.push(`${cr.start}–${cr.end} mean`);
+        } else if (s.climatologyPeriod && s.climatologyPeriod !== 'default') {
+            subParts.push(s.climatologyPeriod);
+        } else {
+            subParts.push('1991–2020');
+        }
+        if (s.decompose === 'anomaly'
+            && s.referencePeriod && s.referencePeriod !== 'default'
+            && s.referencePeriod !== s.climatologyPeriod) {
+            subParts.push(`vs ${s.referencePeriod}`);
+        }
+        return { title, sub: subParts.join(' · ') };
+    }
+
+    _roundRect(ctx, x, y, w, h, r) {
+        ctx.beginPath();
+        ctx.moveTo(x + r, y);
+        ctx.lineTo(x + w - r, y);
+        ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+        ctx.lineTo(x + w, y + h - r);
+        ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+        ctx.lineTo(x + r, y + h);
+        ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+        ctx.lineTo(x, y + r);
+        ctx.quadraticCurveTo(x, y, x + r, y);
+        ctx.closePath();
+    }
+
+    /** Paint the caption ribbon onto the capture canvas (top-left). */
+    _drawCaption(ctx) {
+        const { title, sub } = this._buildCaption();
+        const padX = 10, padY = 8;
+        const lineHTitle = 18;
+        const lineHSub   = 15;
+        const fontTitle  = 'bold 14px ui-monospace, "JetBrains Mono", Menlo, monospace';
+        const fontSub    = '12px ui-monospace, "JetBrains Mono", Menlo, monospace';
+
+        ctx.font = fontTitle;
+        const wTitle = ctx.measureText(title).width;
+        ctx.font = fontSub;
+        const wSub = ctx.measureText(sub).width;
+        const boxW = Math.ceil(Math.max(wTitle, wSub)) + 2 * padX;
+        const boxH = padY * 2 + lineHTitle + lineHSub + 2;
+
+        ctx.save();
+        ctx.fillStyle = 'rgba(6, 16, 14, 0.78)';
+        ctx.strokeStyle = 'rgba(139, 176, 161, 0.35)';
+        ctx.lineWidth = 1;
+        this._roundRect(ctx, 12, 12, boxW, boxH, 5);
+        ctx.fill();
+        ctx.stroke();
+
+        ctx.textBaseline = 'top';
+        ctx.font = fontTitle;
+        ctx.fillStyle = '#f0f6f2';
+        ctx.fillText(title, 12 + padX, 12 + padY);
+        ctx.font = fontSub;
+        ctx.fillStyle = '#8bb0a1';
+        ctx.fillText(sub, 12 + padX, 12 + padY + lineHTitle + 2);
+        ctx.restore();
+    }
+
     /** Grab the current renderer canvas into an ImageData. Downscales to
-     *  `maxWidth` so 4K monitors don't blow the file size. */
+     *  `maxWidth` so 4K monitors don't blow the file size. Overlays a
+     *  caption ribbon with field / level / time context so the exported
+     *  GIF is self-describing. */
     _captureFrame(maxWidth = CAPTURE_MAX_WIDTH) {
         const src = this.app.renderer.domElement;
         const srcW = src.width;
@@ -40,6 +132,7 @@ export class GifExporter {
         ctx.fillStyle = '#0a1a18';
         ctx.fillRect(0, 0, w, h);
         ctx.drawImage(src, 0, 0, w, h);
+        this._drawCaption(ctx);
         return ctx.getImageData(0, 0, w, h);
     }
 
