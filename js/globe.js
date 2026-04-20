@@ -144,9 +144,9 @@ class GlobeApp {
         registerClamps(FIELDS);
         // Eagerly load the per-year manifest in the background so the Year
         // dropdown can populate as soon as it's available. Doesn't block.
-        loadManifest('per_year').then((ok) => {
-            if (ok) this.populateYearSelect();
-        });
+        loadManifest('per_year')
+            .then((ok) => { if (ok) this.populateYearSelect(); })
+            .catch((err) => console.warn('[era5] per-year manifest load failed:', err));
         onFieldLoaded(({ name, month, level, period, year }) => {
             const s = this.state;
             const levelMatches = (level == null || level === s.level);
@@ -1192,16 +1192,10 @@ class GlobeApp {
     sampleDisplayed(lat, lon) {
         // In compare mode the cursor may be over either side of the divider.
         // Pick which painted-values array to sample from based on which side
-        // of the split this lon falls on. For map view: longitude → plane-uv.
-        // For globe view: same plane-uv mapping (the meridian split angle was
-        // derived from compareSplit using the same formula).
+        // of the split this lon falls on.
         let vals = this._displayedValues;
         if (this.state.compareMode && this._referenceValues) {
-            const planeU = ((((lon + 180) / 360) - this.state.mapCenterLon / 360) % 1 + 1) % 1;
-            const onRight = this.state.viewMode === 'globe'
-                ? (planeU > this.state.compareSplit)   // same uv split for sphere
-                : (planeU > this.state.compareSplit);
-            if (onRight) vals = this._referenceValues;
+            if (this._cursorOnReferenceSide(lon)) vals = this._referenceValues;
         }
         if (!vals) return null;
         const { nlat, nlon } = GRID;
@@ -1227,15 +1221,39 @@ class GlobeApp {
         return vT * (1 - fi) + vB * fi;
     }
 
+    // Is the cursor on the reference side of the compare divider? Map view
+    // and Globe view use different split geometries (plane-uv vs world-x
+    // meridian), so route each through its own check. Used by both hover
+    // value sampling and the hover period-label tag.
+    _cursorOnReferenceSide(lon) {
+        const s = this.state.compareSplit;
+        if (this.state.viewMode === 'globe') {
+            // Globe clipping plane: normal = (-cos θ, 0, sin θ) with
+            // θ = (s - 0.5) * 2π. The reference shell paints where
+            // -cos(θ)·x + sin(θ)·z > 0, i.e. sin(θ - lon) > 0.
+            const theta = (s - 0.5) * 2 * Math.PI;
+            const phi = lon * Math.PI / 180;
+            return Math.sin(theta - phi) > 0;
+        }
+        // Map view: plane-uv-x > compareSplit means right of the divider.
+        const planeU = ((((lon + 180) / 360) - this.state.mapCenterLon / 360) % 1 + 1) % 1;
+        return planeU > s;
+    }
+
     // For the hover label: which period is the cursor over right now?
     // null = not in compare mode (no period suffix needed).
     sampledPeriodLabel(lat, lon) {
         if (!this.state.compareMode || !this._referenceValues) return null;
-        const planeU = ((((lon + 180) / 360) - this.state.mapCenterLon / 360) % 1 + 1) % 1;
-        const onRight = planeU > this.state.compareSplit;
+        const onReference = this._cursorOnReferenceSide(lon);
         const fmt = (p) => p === 'default' ? '1991–2020'
                        : (p === '1961-1990' ? '1961–1990' : p);
-        return onRight ? fmt(this.compareRefPeriod()) : fmt(this.state.climatologyPeriod);
+        if (onReference) {
+            if (this.state.compareYear != null) return String(this.state.compareYear);
+            return fmt(this.compareRefPeriod());
+        }
+        // Active side — either the current year or the active climatology.
+        if (this.state.year != null) return String(this.state.year);
+        return fmt(this.state.climatologyPeriod);
     }
 
     formatHoverLabel(lat, lon, v) {
