@@ -131,7 +131,7 @@ function applyClampToEntry(entry, meta) {
  * tiles to the requested θ surface per column; tropics near low θ and the
  * upper stratosphere near high θ return NaN where θ₀ is out of range.
  */
-export function getField(name, { month = 1, level = 500, coord = 'pressure', theta = 330, kind = 'mean', period = 'default' } = {}) {
+export function getField(name, { month = 1, level = 500, coord = 'pressure', theta = 330, kind = 'mean', period = 'default', year = null } = {}) {
     const meta = FIELDS[name];
     if (!meta) throw new Error(`unknown field: ${name}`);
 
@@ -145,9 +145,10 @@ export function getField(name, { month = 1, level = 500, coord = 'pressure', the
     const effKind = stdUnsupported ? 'mean' : kind;
     // Reference-period (non-default) only supported for raw fields. Derived /
     // isentropic paths collapse back to default period so existing diagnostic
-    // logic keeps working.
+    // logic keeps working. Same applies to per-year tiles (year != null).
     const periodUnsupported = period !== 'default' && (meta.derived || isenMode);
     const effPeriod = periodUnsupported ? 'default' : period;
+    const effYear = (year != null && (meta.derived || isenMode)) ? null : year;
 
     // Derived fields (e.g. wind speed, PV) — compute from component tiles.
     if (meta.derived) {
@@ -181,7 +182,17 @@ export function getField(name, { month = 1, level = 500, coord = 'pressure', the
             };
         }
     } else {
-        const era = requestEra5(name, { month, level, kind: effKind, period: effPeriod });
+        // When `year` is set we use the per-year tile tree; route via the
+        // 'per_year' period sentinel so era5.js picks the right base URL +
+        // file naming. Falls back to the regular climatology path otherwise.
+        const usePerYear = effYear != null;
+        const requestPeriod = usePerYear ? 'per_year' : effPeriod;
+        const era = requestEra5(name, {
+            month, level,
+            kind: usePerYear ? 'mean' : effKind,    // per-year tiles have no std
+            period: requestPeriod,
+            year: effYear,
+        });
         if (era) {
             const r = symmetricRange(era.vmin, era.vmax, meta);
             return {
@@ -196,7 +207,8 @@ export function getField(name, { month = 1, level = 500, coord = 'pressure', the
                 units: meta.units,
                 isReal: true,
                 kind: effKind,
-                period: effPeriod,
+                period: requestPeriod,
+                year: effYear,
             };
         }
     }

@@ -17,7 +17,7 @@ import { SunLight } from './sun.js';
 import { OrbitScene, ORBIT_RADIUS } from './orbit.js';
 import { computeZonalMean, computeArcCrossSection, renderCrossSection, samplePanel } from './cross_section.js';
 import { greatCircleArc, latLonToVec3, gcDistanceKm } from './arc.js';
-import { loadManifest, onFieldLoaded, isReady as era5Ready, prefetchField, cachedMonth, registerClamps, setActivePeriod } from './era5.js';
+import { loadManifest, onFieldLoaded, isReady as era5Ready, prefetchField, cachedMonth, registerClamps, setActivePeriod, getManifest } from './era5.js';
 import { decompose, annualMeanFrom, aggregatedDecompositionRange } from './decompose.js';
 import { HoverProbe } from './hover.js';
 import { computeMassStreamfunction, computeAngularMomentum, computeBruntVaisala, computeGeostrophicWind } from './diagnostics.js';
@@ -105,6 +105,7 @@ class GlobeApp {
             kind: 'mean',            // 'mean' (climatology) | 'std' (inter-annual ±1σ)
             referencePeriod: 'default',  // 'default' (1991-2020) | '1961-1990' | …
             climatologyPeriod: 'default', // active climatology — drives mean + std + decomp reference
+            year: null,              // null = climatology mean; integer (e.g. 2003) = single-year snapshot
             compareMode: false,      // swipe-compare overlay (Map view only)
             compareSplit: 0.5,       // split position in [0,1] — uv-x of the divider
             userVmin: null,          // manual colorbar min override; null = auto
@@ -140,6 +141,11 @@ class GlobeApp {
         // get colorbars based on their bulk distribution rather than isolated
         // topographic / convective extremes.
         registerClamps(FIELDS);
+        // Eagerly load the per-year manifest in the background so the Year
+        // dropdown can populate as soon as it's available. Doesn't block.
+        loadManifest('per_year').then((ok) => {
+            if (ok) this.populateYearSelect();
+        });
         onFieldLoaded(({ name, month, level, period }) => {
             const s = this.state;
             const levelMatches = (level == null || level === s.level);
@@ -960,6 +966,31 @@ class GlobeApp {
         this.sun.setVisible(this.state.showSun && this.state.viewMode === 'globe');
     }
 
+    // ── year picker ──────────────────────────────────────────────────
+    populateYearSelect() {
+        const sel = document.getElementById('year-select');
+        if (!sel) return;
+        const mfst = getManifest('per_year');
+        if (!mfst) return;
+        // Pull `years` from the first per-year variable that carries it
+        // (any var works — they were all built from the same merged time axis).
+        let years = null;
+        for (const grp of Object.values(mfst.groups || {})) {
+            for (const v of Object.values(grp)) {
+                if (Array.isArray(v.years) && v.years.length) { years = v.years; break; }
+            }
+            if (years) break;
+        }
+        if (!years) return;
+        const current = sel.value;
+        sel.innerHTML = '<option value="">Climatology (mean)</option>';
+        for (const y of [...years].reverse()) {
+            sel.appendChild(Object.assign(document.createElement('option'),
+                { value: String(y), textContent: String(y) }));
+        }
+        sel.value = current;
+    }
+
     // ── swipe compare helpers ────────────────────────────────────────
     applyCompareSplit(split) {
         const s = Math.max(0.02, Math.min(0.98, split));
@@ -1477,6 +1508,17 @@ class GlobeApp {
         if ('level' in patch || 'month' in patch || 'vCoord' in patch || 'theta' in patch || 'field' in patch) this.windCache.stale = true;
         if ('month' in patch && this.parcels) this.parcels.invalidateCube();
         if ('vCoord' in patch || 'theta' in patch) invalidateIsentropicCache();
+        if ('year' in patch) {
+            // Year change invalidates derived/isentropic caches (their keys
+            // don't include year) and the wind cache; trigger a re-render.
+            invalidateIsentropicCache();
+            this.windCache.stale = true;
+            if (this.parcels) this.parcels.invalidateCube();
+            // Climatology-period control is meaningless when viewing a single
+            // year — grey it out for clarity.
+            const climoSel = document.getElementById('climo-period-select');
+            if (climoSel) climoSel.disabled = (patch.year != null);
+        }
         if ('climatologyPeriod' in patch) {
             // Switch the active tile tree. Derived / isentropic caches don't
             // include period in their keys, so wipe them to force rebuild from
@@ -1867,7 +1909,7 @@ class GlobeApp {
 
     updateField() {
         const { field, level, theta, vCoord, month, cmap, decompose: mode, kind } = this.state;
-        const f = getField(field, { month, level, coord: vCoord, theta, kind });
+        const f = getField(field, { month, level, coord: vCoord, theta, kind, year: this.state.year });
         this.setLoadingOverlay(!f.isReal);
 
         // Decide the effective decomposition for paint. Three transforms
@@ -2333,6 +2375,21 @@ class GlobeApp {
                 this.setState({ climatologyPeriod: climoSel.value });
             });
         }
+        // Year picker — null = climatology mean (existing tile trees);
+        // a specific year (e.g. 2003) routes to data/tiles_per_year/ for
+        // that single-year snapshot. Mutually exclusive with the
+        // climatology dropdown semantically — when a year is set, the
+        // climatology-period control is greyed out (no meaning when
+        // showing a single year's tile).
+        const yearSel = document.getElementById('year-select');
+        if (yearSel) {
+            yearSel.value = this.state.year != null ? String(this.state.year) : '';
+            yearSel.addEventListener('change', () => {
+                const v = yearSel.value;
+                const year = v === '' ? null : Number(v);
+                this.setState({ year });
+            });
+        }
         // Swipe-compare toggle (Map view) — drives the right-half overlay.
         // Auto-switches to Map view when enabled, and auto-picks 1961–1990
         // as the reference period if the user hasn't set one, so the right
@@ -2704,12 +2761,15 @@ class GlobeApp {
                 ? ` · θ = ${this.state.theta} K`
                 : ` · ${this.state.level} hPa`)
             : '';
-        // Make the active climatology period explicit in the colorbar title
-        // when it's not the default 1991–2020 — so a user can tell at a glance
-        // which 30-year window they're viewing.
-        const periodSuffix = (this.state.climatologyPeriod !== 'default')
-            ? ` · ${this.state.climatologyPeriod}`
-            : '';
+        // Period / year suffix in the colorbar title — explicit when not on
+        // the default 1991–2020 climatology so the user always knows which
+        // tile they're viewing.
+        let periodSuffix = '';
+        if (this.state.year != null) {
+            periodSuffix = ` · ${this.state.year}`;
+        } else if (this.state.climatologyPeriod !== 'default') {
+            periodSuffix = ` · ${this.state.climatologyPeriod}`;
+        }
         set('cb-title', field.name + coordSuffix + periodSuffix + modeSuffix);
         set('cb-units', field.units);
     }

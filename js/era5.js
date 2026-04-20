@@ -13,6 +13,12 @@ function tileBaseFor(period) {
     if (period === 'default') {
         return IS_LOCAL ? 'data/tiles' : 'https://storage.googleapis.com/gc-atlas-era5/tiles';
     }
+    if (period === 'per_year') {
+        // The per-year tree spans the merged 1991 → present span (raw +
+        // raw_2021_*) and is keyed by both year and month. Tiles are
+        // float16+gzip per pipeline/compress_tiles.py.
+        return IS_LOCAL ? 'data/tiles_per_year' : 'https://storage.googleapis.com/gc-atlas-era5/tiles_per_year';
+    }
     // Period like '1961-1990' → folder 'tiles_1961_1990'.
     const folder = `tiles_${period.replace('-', '_')}`;
     return IS_LOCAL ? `data/${folder}` : `https://storage.googleapis.com/gc-atlas-era5/${folder}`;
@@ -36,12 +42,35 @@ export function getActivePeriod() { return activePeriod; }
 function resolvePeriod(p) { return (p == null || p === 'default') ? activePeriod : p; }
 
 const pad = (n) => String(n).padStart(2, '0');
-// Cache key includes period + kind so a single field can hold mean/std and
-// multiple base periods concurrently for the same (month, level).
-const keyOf = (name, month, level, kind = 'mean', period = 'default') =>
+// Cache key includes period + kind + year so a single field can hold
+// mean/std, multiple base periods, and any number of individual years
+// concurrently for the same (month, level).
+const keyOf = (name, month, level, kind = 'mean', period = 'default', year = null) =>
     level == null
-        ? `${period}|${name}|sl|${month}|${kind}`
-        : `${period}|${name}|${level}|${month}|${kind}`;
+        ? `${period}|${name}|sl|${month}|${year ?? '_'}|${kind}`
+        : `${period}|${name}|${level}|${month}|${year ?? '_'}|${kind}`;
+
+// Build the URL for a tile. Honours per-year naming (year_month) and the
+// f16-gz encoding (.bin.gz extension) declared in the variable's manifest.
+function tilePathFor(meta, group, name, level, month, kind, period, year) {
+    const base = tileBaseFor(period);
+    const ext = meta.encoding === 'f16-gz' ? '.bin.gz' : '.bin';
+    if (period === 'per_year' && year != null) {
+        if (meta.levels) return `${base}/${group}/${name}/${level}_${year}_${pad(month)}${ext}`;
+        return `${base}/${group}/${name}/${year}_${pad(month)}${ext}`;
+    }
+    const stdPrefix = kind === 'std' ? 'std_' : '';
+    if (meta.levels) return `${base}/${group}/${name}/${stdPrefix}${level}_${pad(month)}${ext}`;
+    return `${base}/${group}/${name}/${stdPrefix}${pad(month)}${ext}`;
+}
+
+// Per-tile metadata key (matches the pipeline's tile basename).
+function tileMetaKey(meta, level, month, period, year) {
+    if (period === 'per_year' && year != null) {
+        return meta.levels ? `${level}_${year}_${pad(month)}` : `${year}_${pad(month)}`;
+    }
+    return meta.levels ? `${level}_${pad(month)}` : `${pad(month)}`;
+}
 
 /** Load the manifest for a period (default or a reference). Returns true if found. */
 export async function loadManifest(period = 'default') {
@@ -66,6 +95,10 @@ export async function loadManifest(period = 'default') {
 }
 
 export function isReady(period = 'default') { return !!manifests.get(period); }
+
+/** Read-only view of a loaded manifest (or null). For UI code that wants to
+ *  enumerate available years / levels / vars without round-tripping fetch. */
+export function getManifest(period = 'default') { return manifests.get(period) || null; }
 
 /** Return { group, meta } for a short name in a given period's manifest. */
 function resolveField(name, period = 'default') {
@@ -94,12 +127,12 @@ export function availableLevels(name) {
 }
 
 /** Cached-only lookup — no fetch side-effect. Returns Float32Array | null. */
-export function cachedMonth(name, month, level = null, kind = 'mean', period = 'default') {
+export function cachedMonth(name, month, level = null, kind = 'mean', period = 'default', year = null) {
     const eff = resolvePeriod(period);
     const r = resolveField(name, eff);
     if (!r) return null;
     const useLevel = r.meta.levels ? level : null;
-    const hit = cache.get(keyOf(name, month, useLevel, kind, eff));
+    const hit = cache.get(keyOf(name, month, useLevel, kind, eff, year));
     return hit && hit !== 'pending' ? hit.values : null;
 }
 
@@ -107,15 +140,18 @@ export function cachedMonth(name, month, level = null, kind = 'mean', period = '
  * Return the field synchronously if cached; otherwise kick off a fetch,
  * return null, and notify subscribers when the tile arrives.
  */
-export function requestField(name, { month, level, kind = 'mean', period = 'default' } = {}) {
+export function requestField(name, { month, level, kind = 'mean', period = 'default', year = null } = {}) {
     const eff = resolvePeriod(period);
     const r = resolveField(name, eff);
     if (!r) return null;
     const useLevel = r.meta.levels ? level : null;
-    const key = keyOf(name, month, useLevel, kind, eff);
+    const key = keyOf(name, month, useLevel, kind, eff, year);
     const hit = cache.get(key);
     if (hit && hit !== 'pending') {
-        const agg = aggregateStats(name, useLevel, kind, eff);
+        // Aggregate-across-cached-months only makes sense for climatology
+        // tiles; per-year tiles are single snapshots, so use the per-tile
+        // range directly.
+        const agg = (year == null) ? aggregateStats(name, useLevel, kind, eff) : null;
         return {
             values: hit.values,
             vmin: agg ? agg.vmin : hit.vmin,
@@ -127,25 +163,39 @@ export function requestField(name, { month, level, kind = 'mean', period = 'defa
             isReal: true,
             kind,
             period: eff,
+            year,
         };
     }
-    if (!hit) fetchTile(name, r.group, r.meta, month, useLevel, kind, eff);
+    if (!hit) fetchTile(name, r.group, r.meta, month, useLevel, kind, eff, year);
     return null;
 }
 
-async function fetchTile(name, group, meta, month, level, kind = 'mean', period = 'default') {
-    const key = keyOf(name, month, level, kind, period);
+async function fetchTile(name, group, meta, month, level, kind = 'mean', period = 'default', year = null) {
+    const key = keyOf(name, month, level, kind, period, year);
     cache.set(key, 'pending');
-    const stdPrefix = kind === 'std' ? 'std_' : '';
-    const base = tileBaseFor(period);
-    const url = meta.levels
-        ? `${base}/${group}/${name}/${stdPrefix}${level}_${pad(month)}.bin`
-        : `${base}/${group}/${name}/${stdPrefix}${pad(month)}.bin`;
+    const url = tilePathFor(meta, group, name, level, month, kind, period, year);
     try {
         const resp = await fetch(url);
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-        const buf = await resp.arrayBuffer();
-        const values = new Float32Array(buf);
+        let values;
+        if (meta.encoding === 'f16-gz') {
+            // Stream-decompress gzip → uint16 → dequantize to float32 using
+            // per-tile vmin/vmax recorded in meta.tiles by compress_tiles.py.
+            const decompressed = resp.body.pipeThrough(new DecompressionStream('gzip'));
+            const buf = await new Response(decompressed).arrayBuffer();
+            const u16 = new Uint16Array(buf);
+            const tk = tileMetaKey(meta, level, month, period, year);
+            const t = meta.tiles?.[tk];
+            if (!t) throw new Error(`no per-tile metadata for ${tk}`);
+            const range = (t.vmax - t.vmin) / 65534;
+            values = new Float32Array(u16.length);
+            for (let i = 0; i < u16.length; i++) {
+                values[i] = u16[i] === 0xFFFF ? NaN : t.vmin + u16[i] * range;
+            }
+        } else {
+            const buf = await resp.arrayBuffer();
+            values = new Float32Array(buf);
+        }
         // Apply the same unit conversions to std tiles — std of a linear
         // transform is the same transform of the std (modulo abs sign), so
         // multiplying by 1000 (q) or dividing by DAY (radiative fluxes) is
@@ -169,7 +219,7 @@ async function fetchTile(name, group, meta, month, level, kind = 'mean', period 
             }
         }
         cache.set(key, { values, vmin, vmax });
-        for (const fn of subscribers) fn({ name, month, level, period });
+        for (const fn of subscribers) fn({ name, month, level, period, year });
     } catch (err) {
         console.warn(`[era5] tile failed ${url}:`, err);
         cache.delete(key);
@@ -220,15 +270,15 @@ function aggregateStats(name, level, kind = 'mean', period = 'default') {
 }
 
 /** Kick off fetches for many months in parallel (for the "play" seasonal cycle). */
-export function prefetchField(name, { level = null, months = [1,2,3,4,5,6,7,8,9,10,11,12], kind = 'mean', period = 'default' } = {}) {
+export function prefetchField(name, { level = null, months = [1,2,3,4,5,6,7,8,9,10,11,12], kind = 'mean', period = 'default', year = null } = {}) {
     const eff = resolvePeriod(period);
     const r = resolveField(name, eff);
     if (!r) return;
     if (kind === 'std' && r.meta.has_std === false) return;
     const useLevel = r.meta.levels ? level : null;
     for (const m of months) {
-        const key = keyOf(name, m, useLevel, kind, eff);
-        if (!cache.has(key)) fetchTile(name, r.group, r.meta, m, useLevel, kind, eff);
+        const key = keyOf(name, m, useLevel, kind, eff, year);
+        if (!cache.has(key)) fetchTile(name, r.group, r.meta, m, useLevel, kind, eff, year);
     }
 }
 
