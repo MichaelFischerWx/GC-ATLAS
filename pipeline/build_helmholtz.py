@@ -30,6 +30,10 @@ Usage:
     python pipeline/build_helmholtz.py             # compute both, all levels, with std
     python pipeline/build_helmholtz.py --no-std    # skip std (faster)
     python pipeline/build_helmholtz.py --force     # overwrite existing tiles
+    python pipeline/build_helmholtz.py --period 1961-1990
+    python pipeline/build_helmholtz.py --per-year \\
+        --raw-dirs data/raw,data/raw_2021_2026     # per-(year, month) tiles into
+                                                    # data/tiles_per_year/
 """
 from __future__ import annotations
 
@@ -53,6 +57,12 @@ SRC_RES = 0.5    # ERA5 native (CDS download) grid
 def parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--period", help="START-END, e.g. 1961-1990 (reads data/raw_START_END/, writes data/tiles_START_END/)")
+    ap.add_argument("--per-year", action="store_true",
+                    help="emit per-(year, month) χ/ψ tiles into data/tiles_per_year/. "
+                         "Skips climatology averaging and std; combines with --raw-dirs.")
+    ap.add_argument("--raw-dirs",
+                    help="comma-separated raw NetCDF dirs to merge along time (per-year only). "
+                         "Default: data/raw + any data/raw_YYYY_YYYY siblings except raw_1961_1990.")
     ap.add_argument("--resolution", type=float, default=1.0,
                     help="target grid spacing in degrees (default 1.0; source is 0.5)")
     ap.add_argument("--no-std", action="store_true", help="skip std-across-years tiles")
@@ -70,14 +80,34 @@ def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(message)s", datefmt="%H:%M:%S")
     args = parse_args()
 
-    if args.period:
+    if args.period and args.per_year:
+        LOG.error("--period and --per-year are mutually exclusive")
+        return 2
+
+    if args.per_year:
+        out_root = ROOT / "data" / "tiles_per_year"
+        out_dir = out_root / "pressure_levels"
+        if args.raw_dirs:
+            raw_dirs = [ROOT / d.strip() if not Path(d.strip()).is_absolute() else Path(d.strip())
+                        for d in args.raw_dirs.split(",") if d.strip()]
+        else:
+            raw_dirs = [DEFAULT_RAW_DIR]
+            for sib in sorted((ROOT / "data").glob("raw_*")):
+                if sib.is_dir() and sib.name != "raw_1961_1990":
+                    raw_dirs.append(sib)
+        LOG.info("per-year mode → %s", out_dir.parent.name)
+        for d in raw_dirs:
+            LOG.info("  raw dir: %s", d.relative_to(ROOT) if d.is_relative_to(ROOT) else d)
+    elif args.period:
         start, end = (int(x) for x in args.period.split("-"))
         raw_dir = ROOT / "data" / f"raw_{start}_{end}"
         out_dir = ROOT / "data" / f"tiles_{start}_{end}" / "pressure_levels"
+        raw_dirs = [raw_dir]
         LOG.info("period  %d–%d  (%s → %s)", start, end, raw_dir.name, out_dir.parent.name)
     else:
         raw_dir = DEFAULT_RAW_DIR
         out_dir = DEFAULT_OUT_DIR
+        raw_dirs = [raw_dir]
 
     try:
         from windspharm.xarray import VectorWind
@@ -88,15 +118,26 @@ def main() -> int:
         )
         return 1
 
-    u_path = raw_dir / "era5_pressure_levels_u.nc"
-    v_path = raw_dir / "era5_pressure_levels_v.nc"
-    if not u_path.exists() or not v_path.exists():
-        LOG.error("Need both %s and %s", u_path, v_path)
+    # Open u and v across all raw dirs and concat along time. For single-dir
+    # mode this is just open_dataset; for multi-dir per-year mode it's
+    # open_mfdataset which transparently merges by time.
+    u_paths = [d / "era5_pressure_levels_u.nc" for d in raw_dirs]
+    v_paths = [d / "era5_pressure_levels_v.nc" for d in raw_dirs]
+    u_paths = [p for p in u_paths if p.exists()]
+    v_paths = [p for p in v_paths if p.exists()]
+    if not u_paths or not v_paths:
+        LOG.error("Missing u/v NetCDFs in raw dirs %s", [str(d) for d in raw_dirs])
         return 1
 
-    LOG.info("open  %s + %s", u_path.name, v_path.name)
-    ds_u = _rename_time(xr.open_dataset(u_path))
-    ds_v = _rename_time(xr.open_dataset(v_path))
+    LOG.info("open  u: %d file(s), v: %d file(s)", len(u_paths), len(v_paths))
+    if len(u_paths) == 1:
+        ds_u = _rename_time(xr.open_dataset(u_paths[0]))
+        ds_v = _rename_time(xr.open_dataset(v_paths[0]))
+    else:
+        ds_u = _rename_time(xr.open_mfdataset(
+            [str(p) for p in u_paths], combine="by_coords", preprocess=_rename_time))
+        ds_v = _rename_time(xr.open_mfdataset(
+            [str(p) for p in v_paths], combine="by_coords", preprocess=_rename_time))
 
     u = ds_u["u"]
     v = ds_v["v"]
@@ -117,16 +158,24 @@ def main() -> int:
     psi = w.streamfunction()         # m² s⁻¹
     LOG.info("done   helmholtz in %.0fs", time.time() - t0)
 
-    LOG.info("clim   month-of-year mean / std")
-    grouped_chi = chi.groupby("time.month")
-    grouped_psi = psi.groupby("time.month")
-    chi_mean = grouped_chi.mean("time")
-    psi_mean = grouped_psi.mean("time")
-    if args.no_std:
+    if args.per_year:
+        # Per-year mode: skip climatology grouping entirely. We pass the raw
+        # (time × level × lat × lon) chi/psi arrays straight to the writer,
+        # which iterates over time and emits one tile per (level, year, month).
+        chi_mean = chi
+        psi_mean = psi
         chi_std = psi_std = None
     else:
-        chi_std = grouped_chi.std("time")
-        psi_std = grouped_psi.std("time")
+        LOG.info("clim   month-of-year mean / std")
+        grouped_chi = chi.groupby("time.month")
+        grouped_psi = psi.groupby("time.month")
+        chi_mean = grouped_chi.mean("time")
+        psi_mean = grouped_psi.mean("time")
+        if args.no_std:
+            chi_std = psi_std = None
+        else:
+            chi_std = grouped_chi.std("time")
+            psi_std = grouped_psi.std("time")
 
     lev_name = "pressure_level" if "pressure_level" in chi_mean.dims else "level"
     lat_name = "latitude" if "latitude" in chi_mean.dims else "lat"
@@ -139,6 +188,15 @@ def main() -> int:
     lon_vals = chi_mean[lon_name].values
     lat_desc = bool(lat_vals[0] > lat_vals[-1])
 
+    if args.per_year:
+        # Force-load to memory once so the per-tile slicing in the loop below
+        # doesn't keep reaching back to the source NetCDFs / spectral output.
+        chi_mean = chi_mean.load()
+        psi_mean = psi_mean.load()
+        years = sorted(set(int(t) for t in chi_mean.time.dt.year.values))
+        ymonths = sorted({(int(t.dt.year.item()), int(t.dt.month.item())) for t in chi_mean.time})
+        LOG.info("peryr  years=%d–%d  months=%d  levels=%d", years[0], years[-1], len(ymonths), len(levels))
+
     for short, mean_da, std_da, long_name, units in [
         ("chi", chi_mean, chi_std, "Velocity potential", "m**2 s**-1"),
         ("psi", psi_mean, psi_std, "Streamfunction",      "m**2 s**-1"),
@@ -149,13 +207,22 @@ def main() -> int:
             continue
         out_subdir.mkdir(parents=True, exist_ok=True)
 
-        for lev in levels:
-            for month in range(1, 13):
-                arr = mean_da.sel({lev_name: lev, "month": month}).values.astype("<f4")
-                (out_subdir / f"{lev}_{month:02d}.bin").write_bytes(arr.tobytes())
-                if std_da is not None:
-                    arrS = std_da.sel({lev_name: lev, "month": month}).values.astype("<f4")
-                    (out_subdir / f"std_{lev}_{month:02d}.bin").write_bytes(arrS.tobytes())
+        if args.per_year:
+            for ti in range(mean_da.sizes["time"]):
+                year  = int(mean_da.time.dt.year[ti].item())
+                month = int(mean_da.time.dt.month[ti].item())
+                snap = mean_da.isel(time=ti)
+                for lev in levels:
+                    arr = snap.sel({lev_name: lev}).values.astype("<f4")
+                    (out_subdir / f"{lev}_{year}_{month:02d}.bin").write_bytes(arr.tobytes())
+        else:
+            for lev in levels:
+                for month in range(1, 13):
+                    arr = mean_da.sel({lev_name: lev, "month": month}).values.astype("<f4")
+                    (out_subdir / f"{lev}_{month:02d}.bin").write_bytes(arr.tobytes())
+                    if std_da is not None:
+                        arrS = std_da.sel({lev_name: lev, "month": month}).values.astype("<f4")
+                        (out_subdir / f"std_{lev}_{month:02d}.bin").write_bytes(arrS.tobytes())
 
         meta = {
             "var": short,
@@ -177,6 +244,10 @@ def main() -> int:
             "resolution_deg": args.resolution,
             "source_nc": "derived from era5_pressure_levels_{u,v}.nc",
         }
+        if args.per_year:
+            meta["years"] = years
+            meta["year_months"] = [[y, m] for (y, m) in ymonths]
+            meta["source_dirs"] = [str(d.name) for d in raw_dirs]
         (out_subdir / "meta.json").write_text(json.dumps(meta, indent=2))
         LOG.info("done   %s   range=[%.3g, %.3g]", short, meta["vmin"], meta["vmax"])
 
