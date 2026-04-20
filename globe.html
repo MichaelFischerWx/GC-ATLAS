@@ -1266,10 +1266,31 @@
             <h4>Compare <span style="color:var(--paper-dim); font-weight:400; text-transform:none; letter-spacing:0; font-size:0.7rem;">— Map view</span></h4>
             <label class="check">
                 <input type="checkbox" id="toggle-compare">
-                Swipe-compare against the Reference period
+                Swipe-compare with...
             </label>
+            <!-- Compare-target sub-controls — mirror the main Climatology
+                 mode toggle so users can swipe between two 30-year windows
+                 OR between two specific years (or one of each). -->
+            <div id="compare-target" style="margin-top:8px;">
+                <div class="segmented" id="compare-mode-toggle" role="tablist" aria-label="Compare target">
+                    <button type="button" data-compare-mode="ref" class="active"
+                            title="Right half draws the Reference period chosen in the Decomposition section">Reference period</button>
+                    <button type="button" data-compare-mode="year"
+                            title="Right half draws a specific year — pick with the slider below">Specific year</button>
+                </div>
+                <div id="compare-year-options" hidden style="margin-top:8px;">
+                    <div class="year-row">
+                        <label class="field-label" style="margin:0; font-size:0.66rem;">Compare-against year</label>
+                        <span id="compare-year-display" class="year-display">—</span>
+                    </div>
+                    <input id="compare-year-slider" class="slider" type="range"
+                           min="1961" max="2026" step="1" value="2015"
+                           aria-label="compare-against year"
+                           title="Drag to pick the year painted on the right half of the swipe.">
+                </div>
+            </div>
             <p class="field-help" style="margin-top:6px; line-height:1.45;">
-                Drag anywhere on the map to slide the divider. Left half = active climatology, right half = Reference period. Works for Mean (raw / zonal / eddy) and ±1σ; toggling Compare suppresses the climate-change anomaly and Δσ transforms (the swipe IS the comparison).
+                Drag anywhere on the map to slide the divider. Left half = active view, right half = the target chosen above. Toggling Compare suppresses the climate-change anomaly and Δσ transforms (the swipe IS the comparison).
             </p>
             <div id="map-center-group" hidden style="margin-top:10px;">
                 <label class="field-label" for="map-center-slider" style="font-size:0.66rem; margin-bottom:4px;">

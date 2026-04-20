@@ -108,6 +108,7 @@ class GlobeApp {
             year: null,              // null = climatology mean; integer (e.g. 2003) = single-year snapshot
             compareMode: false,      // swipe-compare overlay (Map view only)
             compareSplit: 0.5,       // split position in [0,1] — uv-x of the divider
+            compareYear: null,       // when set, swipe right-half draws this year's tile (year-vs-* compare)
             userVmin: null,          // manual colorbar min override; null = auto
             userVmax: null,          // manual colorbar max override; null = auto
             mapCenterLon: 0,         // central meridian for the flat map (-180..180)
@@ -171,8 +172,16 @@ class GlobeApp {
                                      && name === s.field && monthMatches;
                 const isRefForCompare = s.compareMode
                                      && s.referencePeriod === period
+                                     && s.compareYear == null
                                      && name === s.field && monthMatches;
-                if (isRefForAnomaly || isRefForCompare) this.updateField();
+                // Year-tile arrivals also drive the swipe right-half when
+                // the user has compareYear set (year-vs-* compare mode).
+                const isYearForCompare = s.compareMode
+                                      && s.compareYear != null
+                                      && period === 'per_year'
+                                      && (year == null || year === s.compareYear)
+                                      && name === s.field && monthMatches;
+                if (isRefForAnomaly || isRefForCompare || isYearForCompare) this.updateField();
                 return;   // don't trigger any of the active-period logic
             }
             const isenActive  = (s.vCoord === 'theta');
@@ -1010,13 +1019,10 @@ class GlobeApp {
         }
     }
 
-    // ── year picker (slider, only visible in Single-year mode) ───────
-    // Reads the per-year manifest's `years` list to size the slider's
-    // min/max. Re-callable safely after period switches / manifest reloads.
+    // ── year sliders (main + compare) ────────────────────────────────
+    // Both the Single-year picker (Climatology section) and the Compare
+    // year-target slider read their range from the per-year manifest.
     populateYearSelect() {
-        const slider = document.getElementById('year-slider');
-        const display = document.getElementById('year-display');
-        if (!slider) return;
         const mfst = getManifest('per_year');
         if (!mfst) return;
         let years = null;
@@ -1029,16 +1035,34 @@ class GlobeApp {
         if (!years || !years.length) return;
         const minY = years[0];
         const maxY = years[years.length - 1];
-        slider.min = String(minY);
-        slider.max = String(maxY);
-        slider.disabled = false;
-        // Default the slider position to the user's current year, or to the
-        // most recent year if they haven't set one yet.
-        const v = this.state.year != null
-            ? Math.max(minY, Math.min(maxY, this.state.year))
-            : maxY;
-        slider.value = String(v);
-        if (display) display.textContent = String(v);
+        // Main year slider in the Climatology section.
+        const slider = document.getElementById('year-slider');
+        const display = document.getElementById('year-display');
+        if (slider) {
+            slider.min = String(minY);
+            slider.max = String(maxY);
+            slider.disabled = false;
+            const v = this.state.year != null
+                ? Math.max(minY, Math.min(maxY, this.state.year))
+                : maxY;
+            slider.value = String(v);
+            if (display) display.textContent = String(v);
+        }
+        // Compare-against year slider in the Compare section. Default to the
+        // most recent year - 10 so users get a nontrivial comparison out of
+        // the box (e.g. 2026 vs 2016) when they pick "Specific year" mode.
+        const cmpSlider = document.getElementById('compare-year-slider');
+        const cmpDisplay = document.getElementById('compare-year-display');
+        if (cmpSlider) {
+            cmpSlider.min = String(minY);
+            cmpSlider.max = String(maxY);
+            cmpSlider.disabled = false;
+            const v = this.state.compareYear != null
+                ? Math.max(minY, Math.min(maxY, this.state.compareYear))
+                : Math.max(minY, maxY - 10);
+            cmpSlider.value = String(v);
+            if (cmpDisplay) cmpDisplay.textContent = String(v);
+        }
     }
 
     // ── swipe compare helpers ────────────────────────────────────────
@@ -1088,9 +1112,19 @@ class GlobeApp {
         }
         const fmt = (p) => p === 'default' ? '1991–2020'
                        : (p === '1961-1990' ? '1961–1990' : p);
-        lEl.textContent = fmt(this.state.climatologyPeriod);
-        const refP = this.compareRefPeriod();
-        rEl.textContent = refP ? fmt(refP) : '—';
+        // Left half labels the active climatology OR the active year if
+        // the user is viewing a single-year snapshot.
+        lEl.textContent = this.state.year != null
+            ? String(this.state.year)
+            : fmt(this.state.climatologyPeriod);
+        // Right half labels the compare target — a specific year wins over
+        // the reference-period dropdown when both are set.
+        if (this.state.compareYear != null) {
+            rEl.textContent = String(this.state.compareYear);
+        } else {
+            const refP = this.compareRefPeriod();
+            rEl.textContent = refP ? fmt(refP) : '—';
+        }
 
         // Project the divider's world position to screen coords so the
         // labels stay centred on each visible half regardless of zoom or
@@ -1136,6 +1170,13 @@ class GlobeApp {
         if (!r || r === 'default') return null;
         if (r === this.state.climatologyPeriod) return null;
         return r;
+    }
+
+    // Compare needs SOMETHING valid to paint on the right half: either a
+    // specific year (state.compareYear) or a non-self reference period.
+    // Returns true when at least one path will produce a tile.
+    compareHasTarget() {
+        return (this.state.compareYear != null) || !!this.compareRefPeriod();
     }
 
     // NaN-safe bilinear sample of the currently-displayed field (after
@@ -1626,7 +1667,7 @@ class GlobeApp {
                 if (this.state.decompose === 'anomaly') this.updateField();
             })();
         }
-        if ('field' in patch || 'level' in patch || 'vCoord' in patch || 'theta' in patch || 'kind' in patch || 'year' in patch) {
+        if ('field' in patch || 'level' in patch || 'vCoord' in patch || 'theta' in patch || 'kind' in patch || 'year' in patch || 'compareYear' in patch) {
             const isen = this.state.vCoord === 'theta';
             const kind = this.state.kind;
             prefetchField(this.state.field, { level: this.state.level, kind });
@@ -1645,6 +1686,14 @@ class GlobeApp {
                     level: this.state.level,
                     period: 'per_year',
                     year: this.state.year,
+                });
+            }
+            // Also prefetch the compare-target year when in year-vs-* mode.
+            if (this.state.compareMode && this.state.compareYear != null) {
+                prefetchField(this.state.field, {
+                    level: this.state.level,
+                    period: 'per_year',
+                    year: this.state.compareYear,
                 });
             }
             prefetchField('u', { level: this.state.level });
@@ -2009,21 +2058,26 @@ class GlobeApp {
             ? 'magma'
             : (decomp.symmetric ? 'RdBu_r' : cmap);
 
-        // Swipe-compare: with a genuine alternate reference period selected,
-        // fetch the same field at that period and pool its range with the
-        // active so both halves share a colorbar (visual differences = real
-        // differences, not normalisation artefacts). Works in any kind
-        // (mean / std) and any effMode (total / zonal / eddy). When effMode
-        // is not 'total', the reference side independently decomposes its
-        // own data with the same mode (apples-to-apples per side).
-        const compareRef = this.state.compareMode ? this.compareRefPeriod() : null;
-        const compareActive = !!compareRef;
+        // Swipe-compare: paint the right half with a different time slice
+        // (a specific year, or the chosen Reference period's climatology).
+        // Pool the cmap range so both halves share a scale. Works in any
+        // kind (mean / std) and any effMode (total / zonal / eddy). For
+        // non-total effMode each side decomposes its own data independently.
+        const compareYear = this.state.compareMode ? this.state.compareYear : null;
+        const compareRef = this.state.compareMode && compareYear == null
+            ? this.compareRefPeriod() : null;
+        const compareActive = !!compareRef || compareYear != null;
         let refValues = null;
         if (compareActive) {
-            const refField = getField(field, {
-                month, level, coord: vCoord, theta,
-                kind, period: compareRef,
-            });
+            const refField = compareYear != null
+                ? getField(field, {
+                    month, level, coord: vCoord, theta,
+                    kind: 'mean', year: compareYear,   // year tiles are mean-only
+                })
+                : getField(field, {
+                    month, level, coord: vCoord, theta,
+                    kind, period: compareRef,
+                });
             if (refField.isReal) {
                 let refDec;
                 if (effMode === 'total' || !effMode) {
@@ -2537,6 +2591,50 @@ class GlobeApp {
         // as the reference period if the user hasn't set one, so the right
         // half is never blank on first toggle.
         const compareToggle = document.getElementById('toggle-compare');
+        const compareModeButtons = document.querySelectorAll('#compare-mode-toggle button');
+        const compareYearOpts    = document.getElementById('compare-year-options');
+        const compareYearSlider  = document.getElementById('compare-year-slider');
+        const compareYearDisplay = document.getElementById('compare-year-display');
+        const setCompareMode = (mode) => {
+            compareModeButtons.forEach(b =>
+                b.classList.toggle('active', b.dataset.compareMode === mode));
+            if (compareYearOpts) compareYearOpts.hidden = (mode !== 'year');
+        };
+        compareModeButtons.forEach(btn => {
+            btn.addEventListener('click', () => {
+                const mode = btn.dataset.compareMode;
+                setCompareMode(mode);
+                if (mode === 'ref') {
+                    // Drop compareYear; existing referencePeriod path takes
+                    // over for the right-half target.
+                    if (this.state.compareYear != null) this.setState({ compareYear: null });
+                    // If no ref is currently set, auto-pick one so the right
+                    // half doesn't go blank.
+                    if (this.state.compareMode && !this.compareRefPeriod()
+                        && this.state.climatologyPeriod !== '1961-1990') {
+                        this.setState({ referencePeriod: '1961-1990' });
+                        const refSel = document.getElementById('ref-period-select');
+                        if (refSel) refSel.value = '1961-1990';
+                    }
+                } else {
+                    // Year mode: use the slider's current value. If the
+                    // slider hasn't been initialized yet, fall back to a
+                    // sensible default.
+                    const y = compareYearSlider ? Number(compareYearSlider.value)
+                                                : this.state.compareYear;
+                    if (Number.isFinite(y) && y !== this.state.compareYear) {
+                        this.setState({ compareYear: y });
+                    }
+                }
+            });
+        });
+        if (compareYearSlider) {
+            compareYearSlider.addEventListener('input', () => {
+                const year = Number(compareYearSlider.value);
+                if (compareYearDisplay) compareYearDisplay.textContent = String(year);
+                this.setState({ compareYear: year });
+            });
+        }
         if (compareToggle) {
             compareToggle.checked = this.state.compareMode;
             compareToggle.addEventListener('change', (e) => {
@@ -2544,12 +2642,25 @@ class GlobeApp {
                 const patch = { compareMode: on };
                 if (on) {
                     if (this.state.viewMode !== 'map') patch.viewMode = 'map';
-                    if (!this.compareRefPeriod() && this.state.climatologyPeriod !== '1961-1990') {
-                        patch.referencePeriod = '1961-1990';
+                    // Default mode: year-vs-* if the user is currently
+                    // viewing a single year (compares it against another
+                    // year), otherwise the existing reference-period path.
+                    const startMode = (this.state.year != null) ? 'year' : 'ref';
+                    setCompareMode(startMode);
+                    if (startMode === 'year') {
+                        const y = compareYearSlider ? Number(compareYearSlider.value)
+                                                    : (this._yearMax ?? 2015);
+                        if (Number.isFinite(y) && this.state.compareYear !== y) {
+                            patch.compareYear = y;
+                        }
+                    } else {
+                        if (!this.compareRefPeriod() && this.state.climatologyPeriod !== '1961-1990') {
+                            patch.referencePeriod = '1961-1990';
+                        }
                     }
-                    // Reset the "first drag" hint flag so the handle hint shows
-                    // again the next time the user toggles compare on.
                     this._compareDragged = false;
+                } else {
+                    if (this.state.compareYear != null) patch.compareYear = null;
                 }
                 this.setState(patch);
                 if (patch.referencePeriod) {
@@ -2557,6 +2668,8 @@ class GlobeApp {
                     if (refSel) refSel.value = patch.referencePeriod;
                 }
             });
+            // Initial mode reflects whether the user has a compareYear set.
+            setCompareMode(this.state.compareYear != null ? 'year' : 'ref');
         }
         // Mean | ±1σ display toggle. ±1σ disables decomposition (no anomaly
         // of stddev) and forces a sequential colormap.
