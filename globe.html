@@ -183,57 +183,20 @@
 
         .slider-row { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
 
-        /* ── Year picker (slider + Climatology toggle) ─────────── */
+        /* ── Single-year picker (label + amber year + slider) ────── */
         .year-row {
             display: flex;
-            align-items: center;
+            align-items: baseline;
             justify-content: space-between;
             gap: 10px;
             margin-bottom: 6px;
         }
-        .year-pill {
-            background: transparent;
-            border: 1px solid var(--thalo-line);
-            color: var(--paper-dim);
-            font-family: 'JetBrains Mono', monospace;
-            font-size: 0.7rem;
-            letter-spacing: 0.04em;
-            padding: 4px 10px;
-            border-radius: 999px;
-            cursor: pointer;
-            transition: all 0.15s;
-            white-space: nowrap;
-        }
-        .year-pill:hover { border-color: var(--emerald); color: var(--paper); }
-        .year-pill.active {
-            background: rgba(14, 140, 110, 0.18);
-            border-color: var(--emerald);
-            color: var(--emerald-bright);
-        }
         .year-display {
             font-family: 'JetBrains Mono', monospace;
-            font-size: 0.95rem;
+            font-size: 1rem;
             font-weight: 600;
             color: var(--amber);
-            min-width: 48px;
-            text-align: right;
         }
-        .year-display.is-climo { color: var(--paper-dim); font-weight: 500; }
-        .year-display:focus { outline: 1px solid var(--emerald-bright); outline-offset: 2px; border-radius: 3px; }
-        .year-step {
-            background: transparent;
-            border: 1px solid var(--thalo-line);
-            color: var(--paper-dim);
-            font-size: 0.72rem;
-            padding: 3px 8px;
-            border-radius: 4px;
-            cursor: pointer;
-            transition: color 0.15s, border-color 0.15s;
-            line-height: 1;
-            font-family: 'JetBrains Mono', monospace;
-        }
-        .year-step:hover:not(:disabled) { color: var(--paper); border-color: var(--emerald); }
-        .year-step:disabled { opacity: 0.35; cursor: default; }
         .icon-btn {
             flex-shrink: 0;
             width: 36px;
@@ -1239,29 +1202,31 @@
                 <button type="button" data-kind="mean" class="active" title="Climatological mean">Mean</button>
                 <button type="button" data-kind="std" title="Inter-annual standard deviation across the 30-year window — highlights ENSO, monsoon variability, storm-track regions">±1σ variability</button>
             </div>
-            <div style="margin-top:10px;">
+            <!-- Top-level mode toggle: a 30-year window vs a single year -->
+            <div class="segmented" id="time-mode-toggle" style="margin-top:10px;" role="tablist" aria-label="Time mode">
+                <button type="button" data-time-mode="climo" class="active"
+                        title="View the 30-year climatological mean for the chosen window">Climatology</button>
+                <button type="button" data-time-mode="year"
+                        title="View an individual year's snapshot from the per-year tile tree">Single year</button>
+            </div>
+            <!-- Climatology-mode options: which 30-year window -->
+            <div id="time-climo-options" style="margin-top:10px;">
                 <label class="field-label" for="climo-period-select" style="margin-bottom:4px; font-size:0.66rem;">Period</label>
-                <select id="climo-period-select" title="Which 30-year window to use as the active climatology — drives the Mean tile, the ±1σ tile, and the decomposition reference. Use the Reference period dropdown below to compare against a different window.">
+                <select id="climo-period-select" title="Which 30-year window to use as the active climatology — drives the Mean tile, the ±1σ tile, and the decomposition reference.">
                     <option value="default">1991–2020 (current)</option>
                     <option value="1961-1990">1961–1990 (previous)</option>
                 </select>
             </div>
-            <div style="margin-top:10px;">
-                <label class="field-label" style="margin-bottom:4px; font-size:0.66rem;">Year</label>
-                <div class="year-row" role="group" aria-label="year picker">
-                    <button id="year-climo-btn" type="button" class="year-pill active"
-                            title="Show the climatology mean for the active 30-year window">
-                        Climatology
-                    </button>
-                    <button id="year-prev" type="button" class="year-step"
-                            aria-label="previous year"
-                            title="Step back one year (← also works)" disabled>◀</button>
-                    <span id="year-display" class="year-display" aria-live="polite"
-                          tabindex="0" title="Use ◀ ▶ buttons or ← → keys to step through years">—</span>
-                    <button id="year-next" type="button" class="year-step"
-                            aria-label="next year"
-                            title="Step forward one year (→ also works)" disabled>▶</button>
+            <!-- Single-year-mode options: slider over available years -->
+            <div id="time-year-options" hidden style="margin-top:10px;">
+                <div class="year-row">
+                    <label class="field-label" style="margin:0; font-size:0.66rem;">Year</label>
+                    <span id="year-display" class="year-display" aria-live="polite">—</span>
                 </div>
+                <input id="year-slider" class="slider" type="range"
+                       min="1991" max="2026" step="1" value="2015"
+                       aria-label="scrub year"
+                       title="Drag to pick a year. ← / → keys also step through years.">
             </div>
         </section>
 
