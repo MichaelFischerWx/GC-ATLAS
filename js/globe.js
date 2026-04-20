@@ -3532,6 +3532,22 @@ class GlobeApp {
         if (this.state.viewMode !== 'map') this.setViewMode('map');
         // Suppress orbit-controls pan/zoom while picking.
         this.controls.enabled = false;
+        // Visual affordances — change the canvas cursor to a crosshair so
+        // the user knows they're in pick mode, and show a top-centre banner
+        // with instructions (the panel may be hidden until a region is
+        // committed, so a canvas-level hint is the only visible cue).
+        if (this.renderer?.domElement) {
+            this.renderer.domElement.style.cursor = 'crosshair';
+        }
+        let banner = document.getElementById('ts-pick-banner');
+        if (!banner) {
+            banner = document.createElement('div');
+            banner.id = 'ts-pick-banner';
+            banner.className = 'ts-pick-banner';
+            banner.innerHTML = 'Drag a rectangle on the map to pick a region  ·  <b>ESC</b> cancels';
+            document.body.appendChild(banner);
+        }
+        banner.classList.remove('hidden');
         // One-shot ESC to cancel.
         this._tsEscHandler = (e) => {
             if (e.key === 'Escape') this._exitTimeseriesPicking();
@@ -3551,6 +3567,11 @@ class GlobeApp {
             ? 'Drag again to redraw. ESC cancels.'
             : 'Click Pick region, then drag on the Map view to set bounds.';
         this.controls.enabled = true;
+        if (this.renderer?.domElement) {
+            this.renderer.domElement.style.cursor = '';
+        }
+        const banner = document.getElementById('ts-pick-banner');
+        if (banner) banner.classList.add('hidden');
         if (this._tsEscHandler) {
             window.removeEventListener('keydown', this._tsEscHandler);
             this._tsEscHandler = null;

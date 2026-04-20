@@ -672,6 +672,28 @@
             outline: 1px dashed var(--emerald-bright);
             outline-offset: -4px;
         }
+        /* Floating banner shown at the top-centre of the screen while the
+           user is in pick-region mode. Must outrank the hover tooltip so
+           it's always visible while picking. */
+        .ts-pick-banner {
+            position: fixed;
+            top: 78px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 95;
+            padding: 8px 16px;
+            background: rgba(14, 140, 110, 0.95);
+            color: var(--paper);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.76rem;
+            letter-spacing: 0.04em;
+            border: 1px solid var(--emerald-bright);
+            border-radius: 4px;
+            box-shadow: 0 4px 18px rgba(0, 0, 0, 0.35);
+            pointer-events: none;
+        }
+        .ts-pick-banner.hidden { display: none; }
+        .ts-pick-banner b { color: #f0f6f2; font-weight: 700; }
         .xs-expand {
             background: none;
             border: none;
