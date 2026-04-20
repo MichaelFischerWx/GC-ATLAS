@@ -857,6 +857,29 @@
         }
         .view-toggle button:hover:not(.active) { color: var(--paper); background: rgba(255,255,255,0.05); }
 
+        /* ── Share-link button (top right, under view-toggle) ─── */
+        .share-btn {
+            position: absolute;
+            top: 62px; right: 18px;
+            display: inline-flex;
+            align-items: center;
+            background: rgba(12, 36, 32, 0.85);
+            border: 1px solid var(--border);
+            color: var(--sage);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.72rem;
+            letter-spacing: 0.04em;
+            padding: 5px 11px;
+            border-radius: 6px;
+            cursor: pointer;
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            z-index: 55;
+            transition: color 0.15s, border-color 0.15s;
+        }
+        .share-btn:hover { color: var(--paper); border-color: var(--emerald); }
+        .share-btn.is-copied { color: var(--emerald-bright); border-color: rgba(45,189,160,0.45); }
+
         /* ── Loading overlay (isentropic mode needs ~24 tiles to land) ─── */
         #globe-loading {
             position: absolute;
@@ -1373,6 +1396,16 @@
             <button id="view-map" type="button">Map</button>
             <button id="view-orbit" type="button">Orbit</button>
         </div>
+
+        <button id="share-link-btn" class="share-btn" type="button"
+                title="Copy a URL that reproduces this exact view (field, year, month, level, compare state, …)">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;">
+                <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
+                <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
+            </svg>
+            <span id="share-link-label">Share link</span>
+        </button>
 
         <div class="colorbar" aria-hidden="true">
             <div class="cb-header">

@@ -28,6 +28,7 @@ import { buildQBudgetView } from './q_budget.js';
 import { buildHBudgetView } from './h_budget.js';
 import { ParcelField } from './parcels.js';
 import { GifExporter, downloadBlob } from './gif_export.js';
+import { encodeStateToHash, decodeHashToPatch, writeHashDebounced } from './url_state.js';
 
 const PLAY_INTERVAL_MS = 900;
 
@@ -123,6 +124,12 @@ class GlobeApp {
         };
         this.windCache = { u: null, v: null, nlat: 0, nlon: 0, stale: true };
 
+        // If the URL hash carries state (copy-pasted from a shared link),
+        // apply it BEFORE the first render so init pulls the right tiles.
+        // Unknown keys and malformed values fall back silently.
+        const urlPatch = decodeHashToPatch(location.hash);
+        if (Object.keys(urlPatch).length) Object.assign(this.state, urlPatch);
+
         this.initScene();
         this.initGlobe();
         this.initGraticule();
@@ -132,6 +139,16 @@ class GlobeApp {
         this.updateField();
         this.animate();
         this.bootstrapEra5();
+
+        // Back/forward button → re-apply hash state. Guard against the
+        // write-side loop by ignoring the synthetic hashchange we'd trigger
+        // when WE write the hash; use a version counter.
+        this._urlHashInitCount = 0;
+        window.addEventListener('hashchange', () => {
+            if (this._urlHashWriting) return;
+            const p = decodeHashToPatch(location.hash);
+            if (Object.keys(p).length) this.setState(p);
+        });
     }
 
     // ── ERA5 tile loader bootstrap ───────────────────────────────────
@@ -1857,6 +1874,11 @@ class GlobeApp {
         this.updateField();
         if (this.state.showXSection) this.updateXSection();
         if (this.state.showLorenz)   this.updateLorenz();
+
+        // Persist the current view into the URL hash so back/forward + copy-
+        // paste both work. Debounced so rapid month/year scrubs don't thrash
+        // history.replaceState. Doesn't create history entries.
+        writeHashDebounced(this.state);
     }
 
     updateLorenz() {
@@ -2981,6 +3003,45 @@ class GlobeApp {
         btnMap.addEventListener('click',   () => { this.setViewMode('map');   setActive('map'); });
         btnOrbit.addEventListener('click', () => { this.setViewMode('orbit'); setActive('orbit'); });
 
+        // Sync the UI chrome with state after bindUI wiring is done — picks
+        // up any URL-hash state that was merged in at construct time.
+        this._syncUIFromState();
+
+        // Share-link button — copy the current URL (with serialized state
+        // in the hash) to the clipboard. Shows a short "Copied!" confirm
+        // on the button's label, then reverts after a second.
+        const shareBtn   = document.getElementById('share-link-btn');
+        const shareLabel = document.getElementById('share-link-label');
+        if (shareBtn && shareLabel) {
+            shareBtn.addEventListener('click', async () => {
+                // Flush any pending debounced hash write so the URL we copy
+                // reflects the latest state (otherwise the last ~250 ms of
+                // control changes might not be in the URL yet).
+                const h = encodeStateToHash(this.state);
+                const url = `${location.origin}${location.pathname}${location.search}${h ? '#' + h : ''}`;
+                history.replaceState(null, '', url);
+                try {
+                    await navigator.clipboard.writeText(url);
+                    shareLabel.textContent = 'Copied!';
+                    shareBtn.classList.add('is-copied');
+                    setTimeout(() => {
+                        shareLabel.textContent = 'Share link';
+                        shareBtn.classList.remove('is-copied');
+                    }, 1400);
+                } catch (err) {
+                    // Clipboard blocked (non-HTTPS, permission denied, …).
+                    // Fall back to selecting the URL in the address bar.
+                    shareLabel.textContent = 'URL above ↑';
+                    shareBtn.classList.add('is-copied');
+                    console.warn('[share] clipboard write blocked:', err);
+                    setTimeout(() => {
+                        shareLabel.textContent = 'Share link';
+                        shareBtn.classList.remove('is-copied');
+                    }, 1800);
+                }
+            });
+        }
+
         // Mobile controls drawer: hamburger toggles the sidebar overlay.
         const hamburger = document.getElementById('sidebar-toggle');
         const sidebar   = document.getElementById('sidebar');
@@ -3115,6 +3176,72 @@ class GlobeApp {
         levelSel.value = closest;
         if (isen && closest !== current) this.state.theta = closest;
         if (!isen && closest !== current) this.state.level = closest;
+    }
+
+    // One-shot sync of every UI control (segmented toggles, checkboxes,
+    // sliders, dropdowns, view-toggle) to whatever's currently in
+    // this.state. Called after bindUI wiring completes so a URL-hash-
+    // restored view paints with the matching control chrome.
+    _syncUIFromState() {
+        const s = this.state;
+        // View toggle (Globe / Map / Orbit).
+        const map = { globe: 'view-globe', map: 'view-map', orbit: 'view-orbit' };
+        document.querySelectorAll('.view-toggle button').forEach(b =>
+            b.classList.toggle('active', b.id === map[s.viewMode]));
+        if (s.viewMode && s.viewMode !== 'globe') this.setViewMode(s.viewMode);
+        // Segmented toggles (kind, decompose, vertical coord, wind mode,
+        // time-mode, compare-mode). Each uses a data-attribute to identify
+        // its value; set .active on the matching button.
+        const seg = (sel, attr, value) => {
+            document.querySelectorAll(sel).forEach(b =>
+                b.classList.toggle('active', b.dataset[attr] === String(value)));
+        };
+        seg('#kind-toggle button',         'kind',        s.kind);
+        seg('.decomp-seg button',          'decompose',   s.decompose);
+        seg('#vcoord-toggle button',       'coord',       s.vCoord);
+        seg('.wind-mode .segmented button','windMode',    s.windMode);
+        seg('#time-mode-toggle button',    'timeMode',    s.year != null ? 'year' : 'climo');
+        seg('#compare-mode-toggle button', 'compareMode', s.compareYear != null ? 'year' : 'ref');
+        // Checkboxes for overlay toggles + panels + compare.
+        const check = (id, v) => { const el = document.getElementById(id); if (el) el.checked = !!v; };
+        check('toggle-coastlines', s.showCoastlines);
+        check('toggle-graticule',  s.showGraticule);
+        check('toggle-contours',   s.showContours);
+        check('toggle-sun',        s.showSun);
+        check('toggle-xsection',   s.showXSection);
+        check('toggle-lorenz',     s.showLorenz);
+        check('toggle-compare',    s.compareMode);
+        // Dropdown selects.
+        const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = v; };
+        set('field-select',        s.field);
+        set('month-select',        s.month);
+        set('cmap-select',         s.cmap);
+        set('ref-period-select',   s.referencePeriod);
+        set('climo-period-select', s.climatologyPeriod);
+        set('xs-diag-select',      s.xsDiag);
+        // Sliders.
+        const monthSlider = document.getElementById('month-slider');
+        if (monthSlider) monthSlider.value = String(s.month);
+        const mapCenter = document.getElementById('map-center-slider');
+        if (mapCenter) mapCenter.value = String(s.mapCenterLon);
+        const mapCenterVal = document.getElementById('map-center-value');
+        if (mapCenterVal) mapCenterVal.textContent = `${Math.round(s.mapCenterLon)}°`;
+        // Panels (hidden/shown).
+        const xsPanel = document.getElementById('xsection-panel');
+        if (xsPanel) xsPanel.hidden = !s.showXSection;
+        const lzPanel = document.getElementById('lorenz-panel');
+        if (lzPanel) lzPanel.hidden = !s.showLorenz;
+        // Compare-time-mode options visibility.
+        const climoOpts = document.getElementById('time-climo-options');
+        const yearOpts  = document.getElementById('time-year-options');
+        if (climoOpts) climoOpts.hidden = (s.year != null);
+        if (yearOpts)  yearOpts.hidden  = (s.year == null);
+        const cmpYearOpts = document.getElementById('compare-year-options');
+        if (cmpYearOpts) cmpYearOpts.hidden = (s.compareYear == null);
+        // Re-apply label for the reference-period dropdown and any state-
+        // dependent CSS classes (the existing helpers handle this).
+        if (this.refreshRefPeriodLabels) this.refreshRefPeriodLabels();
+        if (this.applyCompareMode)       this.applyCompareMode();
     }
 
     refreshVCoordUI() {
