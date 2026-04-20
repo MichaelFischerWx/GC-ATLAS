@@ -160,10 +160,37 @@ class GlobeApp {
         // get colorbars based on their bulk distribution rather than isolated
         // topographic / convective extremes.
         registerClamps(FIELDS);
-        // Eagerly load the per-year manifest in the background so the Year
-        // dropdown can populate as soon as it's available. Doesn't block.
+        // URL hash may carry state that needs non-default manifests (year
+        // mode, custom range, reference period). Load them now. Each
+        // triggers an updateField once it lands so the first paint happens
+        // as soon as the right tiles are fetchable. Without this, the
+        // initial updateField runs against a null 'per_year'/refPeriod
+        // manifest — the tile fetch never kicks off and the globe sits on
+        // "Loading..." indefinitely.
+        const s = this.state;
+        const needsPerYear = s.year != null || !!s.customRange;
+        const refPeriod = s.referencePeriod;
+        const needsRefPeriod = refPeriod && refPeriod !== 'default' && refPeriod !== '1991-2020';
+        const altClimoPeriod = s.climatologyPeriod && s.climatologyPeriod !== 'default' && s.climatologyPeriod !== '1991-2020';
+        if (altClimoPeriod) {
+            loadManifest(s.climatologyPeriod)
+                .then((ok) => { if (ok) { setActivePeriod(s.climatologyPeriod); this.updateField(); } })
+                .catch((err) => console.warn(`[era5] climatology period ${s.climatologyPeriod} manifest load failed:`, err));
+        }
+        if (needsRefPeriod) {
+            loadManifest(refPeriod)
+                .then((ok) => { if (ok) this.updateField(); })
+                .catch((err) => console.warn(`[era5] reference period ${refPeriod} manifest load failed:`, err));
+        }
+        // Always load per-year manifest in the background so the Year
+        // slider can populate. When a URL preselects a year or range, also
+        // refresh updateField once it lands so the tile fetch kicks off.
         loadManifest('per_year')
-            .then((ok) => { if (ok) this.populateYearSelect(); })
+            .then((ok) => {
+                if (!ok) return;
+                this.populateYearSelect();
+                if (needsPerYear) this.updateField();
+            })
             .catch((err) => console.warn('[era5] per-year manifest load failed:', err));
         onFieldLoaded(({ name, month, level, period, year }) => {
             const s = this.state;
