@@ -186,8 +186,12 @@ class GlobeApp {
         loadIndices().then(() => {
             const cr = this.state.customRange;
             if (cr && cr.id && (!cr.years || cr.years.length === 0)) {
-                const years = eventYears(cr.id, cr.month, cr.cmp, cr.threshold);
-                if (years.length) {
+                const raw = eventYears(cr.id, cr.month, cr.cmp, cr.threshold);
+                // Wait for per-year manifest so the availability clip
+                // doesn't fall back to "no clip" and re-introduce 404s.
+                loadManifest('per_year').then(() => {
+                    const { kept: years } = this._clipToAvailableYears(raw);
+                    if (!years.length) return;
                     const label = compositeLabel(cr.id, cr.month, cr.cmp, cr.threshold);
                     this.setState({
                         customRange: { ...cr, years, label },
@@ -199,7 +203,7 @@ class GlobeApp {
                             year: y,
                         });
                     }
-                }
+                });
             }
             // Sync the DOM controls so the dropdown reflects the URL-
             // specified index / comparator / threshold.
@@ -3275,6 +3279,26 @@ class GlobeApp {
         this.refreshCompositeUI();
     }
 
+    // Clip a year list to those with per-year tiles available. The
+    // index tables reach back to 1948/1950 but the per-year tile tree
+    // starts at 1961 — requesting earlier years would 404 on every
+    // fetch, so the UI silently drops them (and notes the clip).
+    _clipToAvailableYears(years) {
+        const mfst = getManifest('per_year');
+        let available = null;
+        for (const grp of Object.values(mfst?.groups || {})) {
+            for (const v of Object.values(grp)) {
+                if (Array.isArray(v.years) && v.years.length) { available = v.years; break; }
+            }
+            if (available) break;
+        }
+        if (!available) return { kept: years, dropped: [] };
+        const set = new Set(available);
+        const kept = years.filter(y => set.has(y));
+        const dropped = years.filter(y => !set.has(y));
+        return { kept, dropped };
+    }
+
     refreshCompositeUI() {
         const sel       = document.getElementById('composite-index');
         const cmpSel    = document.getElementById('composite-cmp');
@@ -3309,15 +3333,23 @@ class GlobeApp {
         }
 
         const month = this.state.month;
-        const years = eventYears(id, month, cmp, threshold);
+        const raw   = eventYears(id, month, cmp, threshold);
+        const { kept: years, dropped } = this._clipToAvailableYears(raw);
         if (years.length === 0) {
-            if (eventsDiv) eventsDiv.textContent = 'No matching years for this threshold.';
+            if (eventsDiv) {
+                eventsDiv.textContent = raw.length === 0
+                    ? 'No matching years for this threshold.'
+                    : `All ${raw.length} matching year(s) predate the ERA5 per-year tile tree (1961–present).`;
+            }
             btn.disabled = true;
             return;
         }
         if (eventsDiv) {
+            const note = dropped.length
+                ? `<div style="opacity:0.6; margin-top:4px; font-size:0.62rem;">Dropped ${dropped.length} pre-1961 year${dropped.length === 1 ? '' : 's'}: ${dropped.join(', ')}</div>`
+                : '';
             eventsDiv.innerHTML =
-                `<strong>${years.length} event${years.length === 1 ? '' : 's'}</strong> · ${years.join(', ')}`;
+                `<strong>${years.length} event${years.length === 1 ? '' : 's'}</strong> · ${years.join(', ')}${note}`;
         }
 
         const active = this.state.customRange;
@@ -3345,7 +3377,10 @@ class GlobeApp {
         const threshold = thresh ? Number(thresh.value) : NaN;
         if (!Number.isFinite(threshold)) return;
         const month = this.state.month;
-        const years = eventYears(id, month, cmp, threshold);
+        // Clip to years that have per-year tiles (1961–present). Without
+        // this, pre-1961 events fire 404s against the tile bucket.
+        const { kept: years } = this._clipToAvailableYears(
+            eventYears(id, month, cmp, threshold));
         if (years.length === 0) return;
         // Prefetch per-year tiles for all event years at the current
         // (field, level). The composer mean lands as each tile arrives
