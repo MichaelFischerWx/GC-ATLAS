@@ -505,6 +505,14 @@
         }
         .cb-header #cb-title { font-weight: 600; color: var(--paper); }
         .cb-header #cb-units { font-family: 'JetBrains Mono', monospace; font-size: 0.75rem; color: var(--sage); }
+        .cb-sub {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.66rem;
+            color: var(--sage);
+            margin: 2px 0 4px;
+            letter-spacing: 0.04em;
+        }
+        .cb-sub[hidden] { display: none; }
         #colorbar-canvas {
             display: block;
             width: 100%;
@@ -1629,6 +1637,13 @@
             <label class="check"><input type="checkbox" id="toggle-coastlines" checked> Coastlines</label>
             <label class="check"><input type="checkbox" id="toggle-graticule" checked> Graticule</label>
             <label class="check"><input type="checkbox" id="toggle-contours"> Contours</label>
+            <div id="contour-field-row" hidden style="margin: 4px 0 8px 24px;">
+                <label class="field-label" for="contour-field-select" style="margin: 0 0 3px 0; font-size: 0.62rem;">Overlay field</label>
+                <select id="contour-field-select" style="font-size: 0.74rem; padding: 5px 8px;"
+                        title="Pick a SECOND field for the contour overlay so the heatmap shades one variable while the contours track another (e.g. shade T anomaly, contour z; shade SST, contour MSLP).">
+                    <option value="">Same as displayed</option>
+                </select>
+            </div>
             <label class="check"><input type="checkbox" id="toggle-sun" checked> Sun &amp; day/night</label>
             <div class="wind-mode">
                 <div class="wind-mode-label">Wind</div>
@@ -1713,6 +1728,7 @@
                 <span id="cb-title">—</span>
                 <span id="cb-units">—</span>
             </div>
+            <div id="cb-sub" class="cb-sub" hidden></div>
             <canvas id="colorbar-canvas" width="280" height="12"></canvas>
             <div class="cb-ticks">
                 <input id="cb-min" class="cb-tick-input" type="text" inputmode="decimal" autocomplete="off" spellcheck="false"

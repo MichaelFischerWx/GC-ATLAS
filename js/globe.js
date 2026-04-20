@@ -102,6 +102,9 @@ class GlobeApp {
             showCoastlines: true,
             showGraticule: true,
             showContours: false,
+            // null = contour the displayed field (legacy behaviour);
+            // string = field id of an independent overlay field
+            contourField: null,
             showSun: true,
             windMode: 'particles',   // 'off' | 'particles' | 'barbs'
             decompose: 'total',      // 'total' | 'zonal' | 'eddy' | 'anomaly'
@@ -359,6 +362,14 @@ class GlobeApp {
             // so the anomaly sharpens as tiles come in.
             if (feedsCurrentField && levelMatches && !monthMatches &&
                 s.decompose === 'anomaly') {
+                this.updateField();
+            }
+
+            // Contour-overlay field tiles (independent from the displayed
+            // field) — re-render so the contours appear once the overlay
+            // tile lands.
+            if (s.showContours && s.contourField && name === s.contourField
+                && monthMatches) {
                 this.updateField();
             }
 
@@ -1682,6 +1693,18 @@ class GlobeApp {
         if ('showCoastlines' in patch && this.coastGroup) this.coastGroup.visible = !!patch.showCoastlines;
         if ('showGraticule' in patch && this.gratGroup)   this.gratGroup.visible   = !!patch.showGraticule;
         if ('showContours' in patch && this.contours)     this.contours.setVisible(!!patch.showContours);
+        if ('contourField' in patch) {
+            // Kick a fetch for the new overlay field at the current level,
+            // then re-render so the new isolines appear.
+            const ofName = patch.contourField;
+            if (ofName) {
+                const om = FIELDS[ofName];
+                prefetchField(ofName, {
+                    level: om?.type === 'pl' ? this.state.level : undefined,
+                });
+            }
+            this.updateField();
+        }
         if ('showSun' in patch || 'viewMode' in patch)    this.applySunVisibility();
         if ('month' in patch && this.sun)                 this.sun.update(this.state.month);
         if ('month' in patch && this.orbit)               this.orbit.update(this.state.month, this.spinAngle, this.camera);
@@ -2699,26 +2722,58 @@ class GlobeApp {
 
     updateContours(f) {
         if (!this.contours) return;
-        const meta = FIELDS[this.state.field] || {};
-        const interval = meta.contour;
-        const hasContours = !!interval;
-        if (!hasContours) {
+
+        // Pick the source for the contour overlay: either the displayed
+        // field (legacy default) or an independent overlay field. Same
+        // time-slice (year / customRange / climo period / θ surface) as
+        // the displayed field so the comparison is on equal footing.
+        const overlayName = this.state.contourField;
+        const useOverlay = overlayName && overlayName !== this.state.field;
+        let contourMeta, contourValues;
+        if (useOverlay) {
+            contourMeta = FIELDS[overlayName] || {};
+            const ov = getField(overlayName, {
+                month: this.state.month,
+                level: contourMeta.type === 'pl' ? this.state.level : undefined,
+                coord: this.state.vCoord,
+                theta: this.state.theta,
+                kind: 'mean',
+                year: this.state.year,
+                customRange: this.state.customRange,
+            });
+            // While the overlay tile is still loading, hide the contours so
+            // we don't paint a stale or all-NaN field. onFieldLoaded will
+            // re-fire updateField (which calls us) when the tile arrives.
+            if (!ov.isReal) {
+                this.contours.setVisible(false);
+                this.contourLabels?.clear();
+                return;
+            }
+            contourValues = ov.values;
+        } else {
+            contourMeta = FIELDS[this.state.field] || {};
+            // Contour source for "same as displayed": the RAW field values
+            // always. When a decomposition is on, the isolines show the
+            // total state overlaid on the shaded eddy / anomaly — standard
+            // textbook practice.
+            contourValues = f.rawValues || f.values;
+        }
+        const interval = contourMeta.contour;
+        if (!interval) {
             this.contours.setVisible(false);
             this.contourLabels?.clear();
             return;
         }
-        // Contour source: the RAW field values always. When a decomposition
-        // is on, this means the isolines show the total state overlaid on the
-        // shaded eddy / anomaly, which is how textbooks do it.
-        const contourValues = f.rawValues || f.values;
+
         this.contours.setData(contourValues);
         this.contours.setInterval(interval);
-        // Zero-line emphasis follows the RAW field's cmap, not the effective
-        // one — we're contouring total state, so emphasis tracks u/v-style
-        // divergent cmaps specifically.
-        const divergent = meta.cmap === 'RdBu_r';
+        // Zero-line emphasis follows the contour-source field's cmap so
+        // u/v / vorticity / divergence / etc still get the zero-isoline
+        // highlight whether they're shaded or contoured.
+        const divergent = contourMeta.cmap === 'RdBu_r';
         this.contours.setEmphasis(0, divergent);
-        // Ink tracks EFFECTIVE cmap luminance (eddy/anomaly forces RdBu_r).
+        // Ink luminance still tracks the SHADED background so contours
+        // stay legible against whatever colormap is active for the heatmap.
         const effCmap = f.effCmap || this.state.cmap;
         const darkBg = meanLuminance(effCmap) < 0.45;
         this.contours.setInk(darkBg ? 0xf4faf7 : 0x0a1712);
@@ -2900,7 +2955,34 @@ class GlobeApp {
         });
         document.getElementById('toggle-contours').addEventListener('change', (e) => {
             this.setState({ showContours: e.target.checked });
+            const row = document.getElementById('contour-field-row');
+            if (row) row.hidden = !e.target.checked;
         });
+        // Populate the contour-overlay dropdown with every field that has
+        // a `contour:` interval defined. Same field-grouping as the main
+        // selector so the optgroups read consistently.
+        const contourSel = document.getElementById('contour-field-select');
+        if (contourSel) {
+            const groups = new Map();
+            for (const [key, meta] of Object.entries(FIELDS)) {
+                if (meta.hidden || meta.contour == null) continue;
+                const g = meta.group || 'Other';
+                if (!groups.has(g)) groups.set(g, []);
+                groups.get(g).push([key, meta]);
+            }
+            for (const [groupName, entries] of groups) {
+                const og = document.createElement('optgroup');
+                og.label = groupName;
+                for (const [key, meta] of entries) {
+                    og.appendChild(Object.assign(document.createElement('option'),
+                        { value: key, textContent: meta.name }));
+                }
+                contourSel.appendChild(og);
+            }
+            contourSel.addEventListener('change', (e) => {
+                this.setState({ contourField: e.target.value || null });
+            });
+        }
         document.getElementById('toggle-sun').addEventListener('change', (e) => {
             this.setState({ showSun: e.target.checked });
         });
@@ -4108,6 +4190,11 @@ class GlobeApp {
         check('toggle-coastlines', s.showCoastlines);
         check('toggle-graticule',  s.showGraticule);
         check('toggle-contours',   s.showContours);
+        // Contour-overlay row visibility + dropdown selection.
+        const cofRow = document.getElementById('contour-field-row');
+        if (cofRow) cofRow.hidden = !s.showContours;
+        const cofSel = document.getElementById('contour-field-select');
+        if (cofSel) cofSel.value = s.contourField || '';
         check('toggle-sun',        s.showSun);
         check('toggle-xsection',   s.showXSection);
         check('toggle-lorenz',     s.showLorenz);
@@ -4235,6 +4322,22 @@ class GlobeApp {
         }
         set('cb-title', field.name + coordSuffix + periodSuffix + modeSuffix);
         set('cb-units', field.units);
+        // Sub-title under the colorbar: when an independent contour-overlay
+        // field is active, name it + its interval so the second ink isn't
+        // mystery isolines. ("contours: Geopotential 500 hPa, every 60 m")
+        const sub = document.getElementById('cb-sub');
+        if (sub) {
+            const cof = this.state.contourField;
+            if (this.state.showContours && cof && cof !== this.state.field) {
+                const om = FIELDS[cof] || {};
+                const interval = om.contour;
+                sub.textContent = `contours: ${om.name}${interval ? `, every ${interval} ${om.units || ''}` : ''}`.trim();
+                sub.hidden = false;
+            } else {
+                sub.textContent = '';
+                sub.hidden = true;
+            }
+        }
     }
 
     // ── render loop ──────────────────────────────────────────────────
