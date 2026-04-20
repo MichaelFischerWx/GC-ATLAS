@@ -2448,11 +2448,12 @@ class GlobeApp {
                 const hasRefPeriod = refPeriod !== 'default'
                     && refPeriod !== this.state.climatologyPeriod;
                 const hasYear = this.state.year != null;
+                const hasComposite = !!this.state.customRange;
 
                 let annualMeanTheta = null;
                 let annualMeanForAgg = null;
 
-                if (hasRefPeriod || hasYear) {
+                if (hasRefPeriod || hasYear || hasComposite) {
                     // Same-month reference. The reference period is either
                     // the chosen alt-climo (refPeriod) or the active default.
                     // When both year and refPeriod are set, refPeriod wins
@@ -2511,12 +2512,18 @@ class GlobeApp {
             const meta = FIELDS[this.state.field] || {};
             const useLevel = meta.type === 'pl' ? this.state.level : null;
             const refPeriod = this.state.referencePeriod;
-            // Year-anomaly: with a specific year selected, anomaly = single-
-            // year tile minus the climatology mean for the same month. The
-            // climatology comes from the chosen reference period (default =
-            // active 30-year window). Pedagogical: "how much warmer was Jul
-            // 2015 than the 1991-2020 Jul mean?"
-            if (this.state.year != null && !meta.derived) {
+            // Year- or composite-anomaly: with a specific year OR a custom
+            // year list / range selected, anomaly = the displayed tile
+            // (one year, or the composite mean) minus the CLIMATOLOGY MEAN
+            // for the same month. The climatology comes from the chosen
+            // reference period (default = active 30-year window).
+            // Pedagogical: "how much warmer was Jul 2015 than the
+            // 1991-2020 Jul mean?" or "how much warmer is Oct SST during
+            // El Niño events than the Oct climatology?" Without the
+            // composite branch here, the composite fell through to the
+            // self-anomaly path (12-month mean), mixing the seasonal
+            // cycle into what should be an event anomaly.
+            if ((this.state.year != null || this.state.customRange) && !meta.derived) {
                 const climoPeriod = (refPeriod !== 'default') ? refPeriod : 'default';
                 const refField = getField(this.state.field, {
                     month: this.state.month,
