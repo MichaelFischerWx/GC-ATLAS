@@ -1713,6 +1713,25 @@ class GlobeApp {
                     period: 'per_year',
                     year: this.state.year,
                 });
+                // Year + θ-coord: the θ-cube needs T at EVERY level for the
+                // chosen year, and the displayed field needs values at every
+                // level for the interpolation. Prefetch both so θ-year mode
+                // is responsive to month scrubs.
+                if (this.state.vCoord === 'theta') {
+                    for (const L of LEVELS) {
+                        prefetchField('t', {
+                            level: L, period: 'per_year', year: this.state.year });
+                        if (this.state.field !== 't') {
+                            prefetchField(this.state.field, {
+                                level: L, period: 'per_year', year: this.state.year });
+                        }
+                        // PV on θ needs pv tiles at every level too.
+                        if (this.state.field === 'pv') {
+                            prefetchField('pv', {
+                                level: L, period: 'per_year', year: this.state.year });
+                        }
+                    }
+                }
             }
             // Also prefetch the compare-target year when in year-vs-* mode.
             if (this.state.compareMode && this.state.compareYear != null) {
@@ -2222,31 +2241,42 @@ class GlobeApp {
         let annualMeanForAgg = null;
         if (mode === 'anomaly') {
             if (this.state.vCoord === 'theta') {
-                // θ-mode self-anomaly: compute the 12-month annual mean from
-                // isentropic tiles for this field on this θ surface, then
-                // subtract. (Climate-change-anomaly on θ would need
-                // reference-period isentropic tiles too — TODO.)
+                // θ-mode anomaly, three sub-cases:
+                //   1. state.year set → year's θ-value minus climatology's
+                //      12-month mean on the same θ surface (year-vs-climo).
+                //   2. refPeriod set to an alternate period (not yet wired
+                //      for θ — falls through to self-anomaly for now).
+                //   3. self-anomaly → value minus 12-month mean of this field
+                //      on this θ surface (existing behaviour).
                 const theta = this.state.theta;
                 const fieldName = this.state.field;
-                const getMonthIsen = (m) => {
+                // Reference = CLIMATOLOGY θ-values (year omitted), for all
+                // three sub-cases above (self and year-vs-climo coincide on
+                // the reference side — the left side is what differs).
+                const getMonthClimoIsen = (m) => {
                     const g = getField(fieldName, {
-                        month: m,
-                        coord: 'theta',
-                        theta,
+                        month: m, coord: 'theta', theta,
+                        // year omitted → climatology isentropic tiles
                     });
                     return g.isReal ? g.values : null;
                 };
-                const annualMeanTheta = annualMeanFrom(getMonthIsen, GRID.nlat, GRID.nlon);
+                const annualMeanTheta = annualMeanFrom(
+                    getMonthClimoIsen, GRID.nlat, GRID.nlon);
                 const fieldClamp = FIELDS[fieldName]?.clamp ?? null;
                 const current = decompose(f.values, GRID.nlat, GRID.nlon, 'anomaly',
                                           annualMeanTheta, { clamp: fieldClamp });
                 if (!current.empty) {
                     // Pool across months so the anomaly colorbar stays stable
-                    // as the user scrubs months on θ.
+                    // as the user scrubs months on θ. When state.year is set,
+                    // the per-month getField below also carries the year so
+                    // each month's LEFT side is the year's θ-value.
                     const range = aggregatedDecompositionRange(
                         'anomaly',
                         (m) => {
-                            const g = getField(fieldName, { month: m, coord: 'theta', theta });
+                            const g = getField(fieldName, {
+                                month: m, coord: 'theta', theta,
+                                year: this.state.year,
+                            });
                             return g.isReal ? g : null;
                         },
                         GRID.nlat, GRID.nlon, annualMeanTheta,
