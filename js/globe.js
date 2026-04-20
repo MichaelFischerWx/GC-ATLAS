@@ -1824,6 +1824,7 @@ class GlobeApp {
                 const panel = document.getElementById('timeseries-panel');
                 if (panel) panel.hidden = false;
             }
+            this._syncTimeseriesBoundsInputs();
             this._prefetchTimeseriesTiles();
             this._scheduleTimeseriesRender();
         }
@@ -3194,6 +3195,35 @@ class GlobeApp {
         document.getElementById('ts-download-btn')?.addEventListener('click', () => {
             this._downloadTimeseriesCSV();
         });
+        // Manual bounds inputs — Apply button + Enter key both commit.
+        const tsApplyBounds = () => {
+            const lat1 = Number(document.getElementById('ts-lat1')?.value);
+            const lat2 = Number(document.getElementById('ts-lat2')?.value);
+            const lon1 = Number(document.getElementById('ts-lon1')?.value);
+            const lon2 = Number(document.getElementById('ts-lon2')?.value);
+            if (![lat1, lat2, lon1, lon2].every(Number.isFinite)) return;
+            const region = {
+                latMin: Math.min(lat1, lat2),
+                latMax: Math.max(lat1, lat2),
+                lonMin: lon1,
+                lonMax: lon2,   // east-of-west; lon1 > lon2 wraps the dateline
+            };
+            if (region.latMax - region.latMin < 0.4) return;
+            this.setState({ timeseriesRegion: region });
+            this._drawTimeseriesRegionOverlay(
+                { lat: region.latMin, lon: region.lonMin },
+                { lat: region.latMax, lon: region.lonMax },
+            );
+            const lbl = document.getElementById('ts-region-label');
+            if (lbl) lbl.textContent = tsBboxLabel(region);
+        };
+        document.getElementById('ts-bounds-apply')?.addEventListener('click', tsApplyBounds);
+        ['ts-lat1', 'ts-lat2', 'ts-lon1', 'ts-lon2'].forEach((id) => {
+            const el = document.getElementById(id);
+            el?.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') tsApplyBounds();
+            });
+        });
         document.getElementById('lorenz-close')?.addEventListener('click', () => {
             const cb = document.getElementById('toggle-lorenz');
             if (cb) cb.checked = false;
@@ -3509,6 +3539,36 @@ class GlobeApp {
     }
 
     // ── area-mean time series ─────────────────────────────────────────
+    _syncTimeseriesBoundsInputs() {
+        const r = this.state.timeseriesRegion;
+        if (!r) return;
+        const set = (id, v) => {
+            const el = document.getElementById(id);
+            if (el && document.activeElement !== el) el.value = String(Math.round(v));
+        };
+        set('ts-lat1', r.latMin);
+        set('ts-lat2', r.latMax);
+        set('ts-lon1', r.lonMin);
+        set('ts-lon2', r.lonMax);
+    }
+
+    _showTimeseriesLoading(loaded, total) {
+        const overlay = document.getElementById('ts-loading');
+        const text    = document.getElementById('ts-loading-text');
+        const fill    = document.getElementById('ts-loading-fill');
+        if (!overlay) return;
+        if (total === 0 || loaded === total) {
+            overlay.classList.add('hidden');
+            return;
+        }
+        overlay.classList.remove('hidden');
+        const pct = total > 0 ? Math.round(loaded / total * 100) : 0;
+        if (text) text.textContent = loaded === 0
+            ? 'Fetching ERA5 tiles…'
+            : `Loading ${loaded} / ${total} months  (${pct}%)`;
+        if (fill) fill.style.width = `${pct}%`;
+    }
+
     _availablePerYears() {
         const mfst = getManifest('per_year');
         for (const grp of Object.values(mfst?.groups || {})) {
@@ -3630,7 +3690,15 @@ class GlobeApp {
         const hit = this._tsHoverHit;
         if (!hit || !this._tsHoverCtx) return;
         const canvas = document.getElementById('ts-canvas');
-        if (!canvas) return;
+        if (!canvas || !this._tsLastSeries) return;
+        // Redraw the base chart first — otherwise every pointermove layers
+        // another dot + guideline onto the canvas and you end up with a
+        // swarm of markers across the plot.
+        const meta = FIELDS[this.state.field] || {};
+        this._tsHoverCtx = tsRenderSeries(canvas, this._tsLastSeries, {
+            units: meta.units,
+            symmetric: this.state.timeseriesMode === 'anomaly',
+        });
         const ctx = canvas.getContext('2d');
         const dpr = Math.min(window.devicePixelRatio || 1, 2);
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -3830,18 +3898,27 @@ class GlobeApp {
         });
         // Re-stack any existing hover marker on top of the fresh paint.
         this._paintTimeseriesHoverMarker();
-        // Status line: loaded / total months + extrema.
+        // Status line: loaded / total months + extrema. Also drive the
+        // loading overlay — visible until tiles cross a "ready" threshold
+        // (40%) so the user sees a clear "fetching" state on first pick
+        // instead of a chart that fills in over several seconds.
+        const finite = series.filter(p => p.value != null && Number.isFinite(p.value));
+        const total = series.length;
         const statsEl = document.getElementById('ts-stats');
         if (statsEl) {
-            const finite = series.filter(p => p.value != null && Number.isFinite(p.value));
             if (finite.length === 0) {
-                statsEl.textContent = 'fetching tiles…';
+                statsEl.textContent = '';
             } else {
-                const pct = Math.round(finite.length / series.length * 100);
+                const pct = Math.round(finite.length / total * 100);
                 const mean = finite.reduce((s, p) => s + p.value, 0) / finite.length;
-                statsEl.textContent = `${finite.length}/${series.length} months · mean ${mean.toFixed(2)}${meta.units ? ' ' + meta.units : ''}${pct < 100 ? ` (${pct}%)` : ''}`;
+                statsEl.textContent = `${finite.length}/${total} months · mean ${mean.toFixed(2)}${meta.units ? ' ' + meta.units : ''}${pct < 100 ? ` (${pct}%)` : ''}`;
             }
         }
+        // Show the spinner+bar overlay while < 40% of months have arrived;
+        // once it's mostly populated the partial chart is informative
+        // enough on its own.
+        const ready = finite.length / Math.max(total, 1) >= 0.4;
+        this._showTimeseriesLoading(ready ? total : finite.length, total);
         // Title: reflect field + region + mode.
         const title = document.getElementById('ts-title');
         if (title) {

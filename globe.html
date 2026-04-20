@@ -672,6 +672,72 @@
             outline: 1px dashed var(--emerald-bright);
             outline-offset: -4px;
         }
+        .ts-bounds-row {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            margin-bottom: 8px;
+            font-family: 'JetBrains Mono', monospace;
+        }
+        .ts-bounds-label {
+            font-size: 0.66rem;
+            color: var(--sage);
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+        }
+        .ts-bounds-input {
+            width: 56px !important;
+            padding: 3px 5px !important;
+            font-size: 0.72rem !important;
+        }
+        .ts-bounds-sep { color: var(--sage); font-size: 0.7rem; }
+        .ts-bounds-apply {
+            margin-left: auto;
+            padding: 4px 10px !important;
+            width: auto !important;
+            font-size: 0.66rem !important;
+        }
+        /* Initial loading overlay shown inside the chart canvas */
+        .ts-loading-overlay {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.78rem;
+            color: var(--sage);
+            background: rgba(8, 22, 18, 0.86);
+            border-radius: 4px;
+            pointer-events: none;
+        }
+        .ts-loading-overlay.hidden { display: none; }
+        .ts-loading-bar {
+            width: 60%;
+            max-width: 280px;
+            height: 4px;
+            background: rgba(255,255,255,0.08);
+            border-radius: 2px;
+            overflow: hidden;
+        }
+        .ts-loading-fill {
+            height: 100%;
+            background: var(--emerald-bright);
+            transition: width 0.25s ease;
+        }
+        .ts-loading-spin {
+            width: 24px;
+            height: 24px;
+            border: 2px solid rgba(255,255,255,0.12);
+            border-top-color: var(--emerald-bright);
+            border-radius: 50%;
+            animation: ts-spin 0.85s linear infinite;
+        }
+        @keyframes ts-spin {
+            to { transform: rotate(360deg); }
+        }
         /* Floating banner shown at the top-centre of the screen while the
            user is in pick-region mode. Must outrank the hover tooltip so
            it's always visible while picking. */
@@ -1864,7 +1930,28 @@ C(P_M→K_M) = -(R/g) ∫ [ω][T] / p dp</pre>
                     <button type="button" data-ts-mode="anomaly" title="Subtract the same-month 30-year climatology from each month">Anomaly</button>
                 </div>
             </div>
-            <canvas id="ts-canvas" width="520" height="230"></canvas>
+            <!-- Manual domain inputs — edit the bounds by typing for a
+                 precise region (e.g. Niño 3.4: lat [-5, 5], lon [-170, -120]).
+                 Press Enter or click Apply to commit. -->
+            <div class="ts-bounds-row">
+                <span class="ts-bounds-label">lat</span>
+                <input id="ts-lat1" type="number" class="range-input ts-bounds-input" step="1" aria-label="min latitude">
+                <span class="ts-bounds-sep">→</span>
+                <input id="ts-lat2" type="number" class="range-input ts-bounds-input" step="1" aria-label="max latitude">
+                <span class="ts-bounds-label" style="margin-left:6px;">lon</span>
+                <input id="ts-lon1" type="number" class="range-input ts-bounds-input" step="1" aria-label="west longitude">
+                <span class="ts-bounds-sep">→</span>
+                <input id="ts-lon2" type="number" class="range-input ts-bounds-input" step="1" aria-label="east longitude">
+                <button id="ts-bounds-apply" type="button" class="xs-reset ts-bounds-apply">Apply</button>
+            </div>
+            <div style="position:relative;">
+                <canvas id="ts-canvas" width="520" height="230"></canvas>
+                <div class="ts-loading-overlay hidden" id="ts-loading">
+                    <div class="ts-loading-spin"></div>
+                    <div id="ts-loading-text">Fetching ERA5 tiles…</div>
+                    <div class="ts-loading-bar"><div class="ts-loading-fill" id="ts-loading-fill" style="width:0%"></div></div>
+                </div>
+            </div>
             <div class="xs-footer" style="margin-top:6px;">
                 <span id="ts-hint">Click <b>Pick region</b>, then drag on the Map view to set bounds.</span>
                 <span id="ts-stats" style="margin-left:auto;"></span>
