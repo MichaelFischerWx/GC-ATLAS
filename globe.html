@@ -694,6 +694,11 @@
         }
         .ts-pick-banner.hidden { display: none; }
         .ts-pick-banner b { color: #f0f6f2; font-weight: 700; }
+        /* Override the default `cursor: grab` on the globe canvas while the
+           user is in time-series picking mode. !important beats both the
+           base rule and the :active variant. */
+        #globe-mount canvas.ts-picking,
+        #globe-mount canvas.ts-picking:active { cursor: crosshair !important; }
         .xs-expand {
             background: none;
             border: none;

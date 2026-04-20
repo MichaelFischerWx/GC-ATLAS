@@ -3536,9 +3536,9 @@ class GlobeApp {
         // the user knows they're in pick mode, and show a top-centre banner
         // with instructions (the panel may be hidden until a region is
         // committed, so a canvas-level hint is the only visible cue).
-        if (this.renderer?.domElement) {
-            this.renderer.domElement.style.cursor = 'crosshair';
-        }
+        // Toggle via a class so the override beats #globe-mount canvas
+        // { cursor: grab } without specificity gymnastics.
+        this.renderer?.domElement.classList.add('ts-picking');
         let banner = document.getElementById('ts-pick-banner');
         if (!banner) {
             banner = document.createElement('div');
@@ -3567,9 +3567,7 @@ class GlobeApp {
             ? 'Drag again to redraw. ESC cancels.'
             : 'Click Pick region, then drag on the Map view to set bounds.';
         this.controls.enabled = true;
-        if (this.renderer?.domElement) {
-            this.renderer.domElement.style.cursor = '';
-        }
+        this.renderer?.domElement.classList.remove('ts-picking');
         const banner = document.getElementById('ts-pick-banner');
         if (banner) banner.classList.add('hidden');
         if (this._tsEscHandler) {
