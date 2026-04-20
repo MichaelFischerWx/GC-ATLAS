@@ -8,7 +8,8 @@ import { Line2 } from 'three/addons/lines/Line2.js';
 import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 import { fillRGBA, fillColorbar, COLORMAPS, meanLuminance } from './colormap.js';
-import { getField, FIELDS, LEVELS, THETA_LEVELS, MONTHS, GRID, invalidateIsentropicCache, isThetaOnly } from './data.js';
+import { getField, FIELDS, LEVELS, THETA_LEVELS, MONTHS, GRID, invalidateIsentropicCache, isThetaOnly, customRangeYears } from './data.js';
+import { loadIndices, getIndex, eventYears, compositeLabel } from './indices.js';
 import { ParticleField } from './particles.js';
 import { BarbField } from './barbs.js';
 import { ContourField } from './contours.js';
@@ -177,6 +178,43 @@ class GlobeApp {
         // get colorbars based on their bulk distribution rather than isolated
         // topographic / convective extremes.
         registerClamps(FIELDS);
+        // Load the climate-index table used by the composite builder. Fires
+        // the UI refresh once it lands so the event list populates. A
+        // shared URL may carry a composite spec ("cr=c:roni:ge:1.0:1")
+        // that needs indices to resolve into a concrete year list — fill
+        // it in here, then prefetch the matching per-year tiles.
+        loadIndices().then(() => {
+            const cr = this.state.customRange;
+            if (cr && cr.id && (!cr.years || cr.years.length === 0)) {
+                const years = eventYears(cr.id, cr.month, cr.cmp, cr.threshold);
+                if (years.length) {
+                    const label = compositeLabel(cr.id, cr.month, cr.cmp, cr.threshold);
+                    this.setState({
+                        customRange: { ...cr, years, label },
+                    });
+                    for (const y of years) {
+                        prefetchField(this.state.field, {
+                            level: this.state.level,
+                            period: 'per_year',
+                            year: y,
+                        });
+                    }
+                }
+            }
+            // Sync the DOM controls so the dropdown reflects the URL-
+            // specified index / comparator / threshold.
+            if (cr && cr.id) {
+                const sel    = document.getElementById('composite-index');
+                const cmpSel = document.getElementById('composite-cmp');
+                const thresh = document.getElementById('composite-threshold');
+                if (sel)    sel.value    = cr.id;
+                if (cmpSel) cmpSel.value = cr.cmp;
+                if (thresh) thresh.value = String(cr.threshold);
+                const details = document.getElementById('composite-details');
+                if (details) details.open = true;
+            }
+            if (this.refreshCompositeUI) this.refreshCompositeUI();
+        });
         // URL hash may carry state that needs non-default manifests (year
         // mode, custom range, reference period). Load them now. Each
         // triggers an updateField once it lands so the first paint happens
@@ -219,13 +257,14 @@ class GlobeApp {
             // match.
             const perYearActive = s.year != null
                 && period === 'per_year' && (year == null || year === s.year);
-            // Custom-range composite: any per-year tile within the range
-            // feeds the mean and should trigger a repaint attempt.
+            // Custom-range composite: any per-year tile that feeds the
+            // mean should trigger a repaint attempt. Handles both the
+            // contiguous { start, end } range and the explicit
+            // { years: [...] } list form used by the composite builder.
             const customRangeActive = s.customRange
                 && period === 'per_year'
                 && year != null
-                && year >= s.customRange.start
-                && year <= s.customRange.end;
+                && customRangeYears(s.customRange).includes(year);
             // Tile arrival from a non-active period is useful for either
             // the climate-change-anomaly view OR the swipe-compare overlay
             // (both subtract / draw the same-month tile from a reference
@@ -1734,6 +1773,12 @@ class GlobeApp {
             // in climatology vs year mode. Relabel so the user sees what the
             // anomaly is actually subtracting.
             this.refreshRefPeriodLabels();
+            if (this.refreshCompositeUI) this.refreshCompositeUI();
+        }
+        if ('month' in patch && this.refreshCompositeUI) {
+            // Index threshold is evaluated at the current month, so the
+            // matched-event list changes with every month scrub.
+            this.refreshCompositeUI();
         }
         if ('climatologyPeriod' in patch) {
             // The "Self" label also depends on which 30-yr window is active
@@ -2897,6 +2942,12 @@ class GlobeApp {
             updateRangeBtnLabel();
         });
         updateRangeBtnLabel();
+        // Composite builder: parametric event-year composites driven by a
+        // climate index + comparator + threshold. Applying a composite
+        // routes through state.customRange = {years, label, ...} so the
+        // rest of the decomposition / compare machinery treats it exactly
+        // like a custom year range.
+        this._bindCompositeBuilder();
         if (yearSlider) {
             // 'input' fires continuously during drag, so the globe scrubs
             // through years live (cache hits make subsequent scrubs instant).
@@ -3209,6 +3260,114 @@ class GlobeApp {
         this.on('field-updated', ({ field }) => this.updateColorbar(field));
     }
 
+    // ── composite builder (climate-index-driven event compositing) ───
+    _bindCompositeBuilder() {
+        const sel     = document.getElementById('composite-index');
+        const cmpSel  = document.getElementById('composite-cmp');
+        const thresh  = document.getElementById('composite-threshold');
+        const btn     = document.getElementById('composite-apply-btn');
+        if (!sel || !btn) return;
+        const refresh = () => this.refreshCompositeUI();
+        sel    .addEventListener('change', refresh);
+        cmpSel ?.addEventListener('change', refresh);
+        thresh ?.addEventListener('input',  refresh);
+        btn.addEventListener('click', () => this._applyComposite());
+        this.refreshCompositeUI();
+    }
+
+    refreshCompositeUI() {
+        const sel       = document.getElementById('composite-index');
+        const cmpSel    = document.getElementById('composite-cmp');
+        const thresh    = document.getElementById('composite-threshold');
+        const btn       = document.getElementById('composite-apply-btn');
+        const label     = document.getElementById('composite-apply-label');
+        const eventsDiv = document.getElementById('composite-events');
+        const descDiv   = document.getElementById('composite-index-desc');
+        const srcDiv    = document.getElementById('composite-source');
+        if (!sel || !btn) return;
+
+        const id = sel.value;
+        const ix = getIndex(id);
+        if (!ix) {
+            // Indices not yet loaded (or fetch failed). Keep the button
+            // disabled; message will refresh when loadIndices resolves.
+            if (eventsDiv) eventsDiv.textContent = 'Indices loading…';
+            if (descDiv)   descDiv.textContent   = '';
+            if (srcDiv)    srcDiv.textContent    = '';
+            btn.disabled = true;
+            return;
+        }
+        if (descDiv) descDiv.textContent = ix.description || '';
+        if (srcDiv)  srcDiv.textContent  = `Source: ${ix.source}`;
+
+        const cmp       = cmpSel ? cmpSel.value : 'ge';
+        const threshold = thresh ? Number(thresh.value) : NaN;
+        if (!Number.isFinite(threshold)) {
+            if (eventsDiv) eventsDiv.textContent = 'Enter a numeric threshold.';
+            btn.disabled = true;
+            return;
+        }
+
+        const month = this.state.month;
+        const years = eventYears(id, month, cmp, threshold);
+        if (years.length === 0) {
+            if (eventsDiv) eventsDiv.textContent = 'No matching years for this threshold.';
+            btn.disabled = true;
+            return;
+        }
+        if (eventsDiv) {
+            eventsDiv.innerHTML =
+                `<strong>${years.length} event${years.length === 1 ? '' : 's'}</strong> · ${years.join(', ')}`;
+        }
+
+        const active = this.state.customRange;
+        const isActive = active
+            && active.id === id
+            && active.cmp === cmp
+            && active.threshold === threshold
+            && active.month === month;
+        if (label) {
+            label.textContent = isActive
+                ? `Active · ${compositeLabel(id, month, cmp, threshold)}`
+                : `Apply · ${compositeLabel(id, month, cmp, threshold)}`;
+        }
+        btn.classList.toggle('is-done', !!isActive);
+        btn.disabled = false;
+    }
+
+    _applyComposite() {
+        const sel    = document.getElementById('composite-index');
+        const cmpSel = document.getElementById('composite-cmp');
+        const thresh = document.getElementById('composite-threshold');
+        if (!sel) return;
+        const id        = sel.value;
+        const cmp       = cmpSel ? cmpSel.value : 'ge';
+        const threshold = thresh ? Number(thresh.value) : NaN;
+        if (!Number.isFinite(threshold)) return;
+        const month = this.state.month;
+        const years = eventYears(id, month, cmp, threshold);
+        if (years.length === 0) return;
+        // Prefetch per-year tiles for all event years at the current
+        // (field, level). The composer mean lands as each tile arrives
+        // (onFieldLoaded → updateField); no all-or-nothing wait.
+        for (const y of years) {
+            prefetchField(this.state.field, {
+                level: this.state.level,
+                period: 'per_year',
+                year: y,
+            });
+        }
+        const label = compositeLabel(id, month, cmp, threshold);
+        this.setState({
+            // `id / cmp / threshold / month` travel with customRange so
+            // refreshCompositeUI can detect when the DOM controls still
+            // describe the active composite (and show "Active · …").
+            customRange: { years, label, id, cmp, threshold, month },
+            year: null,
+        });
+        this.refreshCompositeUI();
+    }
+
     startPlay() {
         const btn = document.getElementById('month-play');
         const monthSel = document.getElementById('month-select');
@@ -3386,8 +3545,11 @@ class GlobeApp {
         if (yearOpts)  yearOpts.hidden  = (timeMode !== 'year');
         if (rangeOpts) rangeOpts.hidden = (timeMode !== 'range');
         // Custom-range inputs — restore start/end from state when loading a
-        // shared URL that carries them.
-        if (s.customRange) {
+        // shared URL that carries them. The years-list form (composite
+        // builder) leaves the start/end inputs at whatever the user last
+        // typed; the composite-details block renders the active composite.
+        if (s.customRange && Number.isFinite(s.customRange.start)
+                          && Number.isFinite(s.customRange.end)) {
             const rs = document.getElementById('range-start');
             const re = document.getElementById('range-end');
             if (rs) rs.value = String(s.customRange.start);
@@ -3461,10 +3623,16 @@ class GlobeApp {
             : '';
         // Period / year suffix in the colorbar title — explicit when not on
         // the default 1991–2020 climatology so the user always knows which
-        // tile they're viewing.
+        // tile they're viewing. Composites show the index+threshold label
+        // ("RONI ≥ +1.0 · Jan · 8 events") rather than a year range.
         let periodSuffix = '';
+        const cr = this.state.customRange;
         if (this.state.year != null) {
             periodSuffix = ` · ${this.state.year}`;
+        } else if (cr && cr.label) {
+            periodSuffix = ` · ${cr.label} · ${cr.years.length} events`;
+        } else if (cr && Number.isFinite(cr.start) && Number.isFinite(cr.end)) {
+            periodSuffix = ` · ${cr.start}–${cr.end} mean`;
         } else if (this.state.climatologyPeriod !== 'default') {
             periodSuffix = ` · ${this.state.climatologyPeriod}`;
         }

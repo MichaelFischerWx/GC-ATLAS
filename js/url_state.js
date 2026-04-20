@@ -43,10 +43,39 @@ const SPEC = [
             const n = Number(s); return Number.isFinite(n) ? n : undefined;
         }],
     ['customRange',        'cr',
-        // Encode as "start-end" (e.g. "2010-2024"). Null → omitted.
-        v => v == null ? null : `${v.start}-${v.end}`,
+        // Two shapes serialize here:
+        //   contiguous range   → "2010-2024"
+        //   index composite    → "c:<id>:<cmp>:<threshold>:<month>"
+        //   e.g. "c:roni:ge:1.0:1"  →  RONI ≥ +1.0 in January
+        // Null / unrecognized shape → omitted from URL (falls back to
+        // climatology on the other side).
+        v => {
+            if (v == null) return null;
+            if (v.id && v.cmp && Number.isFinite(v.threshold) && Number.isFinite(v.month)) {
+                return `c:${v.id}:${v.cmp}:${v.threshold}:${v.month}`;
+            }
+            if (Number.isFinite(v.start) && Number.isFinite(v.end)) {
+                return `${v.start}-${v.end}`;
+            }
+            return null;
+        },
         s => {
-            const m = /^(\d{4})-(\d{4})$/.exec(s || '');
+            if (!s) return undefined;
+            if (s.startsWith('c:')) {
+                // id:cmp:threshold:month — years come later once indices.json
+                // loads (see globe.js bootstrap). Frontend treats the empty
+                // years list as "still resolving".
+                const parts = s.slice(2).split(':');
+                if (parts.length !== 4) return undefined;
+                const [id, cmp, tStr, mStr] = parts;
+                const threshold = Number(tStr);
+                const month = Number(mStr);
+                if (!['ge','le'].includes(cmp)) return undefined;
+                if (!Number.isFinite(threshold) || !Number.isFinite(month)) return undefined;
+                if (month < 1 || month > 12) return undefined;
+                return { id, cmp, threshold, month, years: [] };
+            }
+            const m = /^(\d{4})-(\d{4})$/.exec(s);
             if (!m) return undefined;
             const start = Number(m[1]), end = Number(m[2]);
             return (end >= start && start >= 1900 && end <= 2100)

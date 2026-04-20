@@ -92,14 +92,46 @@ function pendingField() {
 const _customRangeCache = new Map();
 export function invalidateCustomRangeCache() { _customRangeCache.clear(); }
 
+/** Return the year list implied by a customRange spec. Supports two
+ *  shapes: a contiguous { start, end } range and an explicit
+ *  { years: [...] } list. Used by the composer + the compose-relevance
+ *  check in globe.js. */
+export function customRangeYears(spec) {
+    if (!spec) return [];
+    if (Array.isArray(spec.years)) {
+        return [...new Set(spec.years.filter(Number.isFinite))]
+            .sort((a, b) => a - b);
+    }
+    if (Number.isFinite(spec.start) && Number.isFinite(spec.end)) {
+        const out = [];
+        for (let y = spec.start; y <= spec.end; y++) out.push(y);
+        return out;
+    }
+    return [];
+}
+
+/** Stable cache-key suffix for a range/list spec. Separating the
+ *  contiguous form ("2010-2024") from the explicit-year form
+ *  ("y=1983,1998,2016,2024") avoids collisions. */
+function _spanKey(spec) {
+    if (Array.isArray(spec?.years)) {
+        return `y=${customRangeYears(spec).join(',')}`;
+    }
+    return `${spec.start}-${spec.end}`;
+}
+
 /** Compose a custom-range mean from per-year tiles. Returns
  *    { values, vmin, vmax, isReal: true }  when all tiles are cached,
  *    null when any is still loading (subscriber will re-call on arrival).
- *  `level` is the pressure level or null for single-level fields. */
-function composeCustomRangeMean(name, month, level, start, end) {
+ *  `level` is the pressure level or null for single-level fields.
+ *  `spec` is a { start, end } range OR a { years: [...] } list. */
+function composeCustomRangeMean(name, month, level, spec) {
+    const years = customRangeYears(spec);
+    if (years.length === 0) return null;
+    const span = _spanKey(spec);
     const key = level == null
-        ? `${name}:sl:${month}:${start}-${end}`
-        : `${name}:${level}:${month}:${start}-${end}`;
+        ? `${name}:sl:${month}:${span}`
+        : `${name}:${level}:${month}:${span}`;
     const hit = _customRangeCache.get(key);
     if (hit) return hit;
     const { nlat, nlon } = GRID;
@@ -107,7 +139,7 @@ function composeCustomRangeMean(name, month, level, start, end) {
     const sum = new Float32Array(N);
     const count = new Uint16Array(N);
     let anyMissing = false;
-    for (let y = start; y <= end; y++) {
+    for (const y of years) {
         const tile = requestEra5(name, {
             month, level, period: 'per_year', year: y, kind: 'mean',
         });
@@ -196,7 +228,7 @@ export function getField(name, { month = 1, level = 500, coord = 'pressure', the
     if (customRange && !meta.derived && (coord !== 'theta' || meta.type !== 'pl')) {
         const useLevel = meta.type === 'pl' ? level : null;
         const composed = composeCustomRangeMean(
-            name, month, useLevel, customRange.start, customRange.end);
+            name, month, useLevel, customRange);
         if (composed) {
             const r = symmetricRange(composed.vmin, composed.vmax, meta);
             return {
