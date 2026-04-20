@@ -11,14 +11,14 @@
     </script>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="description" content="GC-ATLAS: An interactive atlas of Earth's atmospheric general circulation. ERA5 climatology on a spinnable globe, built for teaching graduate atmospheric dynamics.">
-    <meta name="keywords" content="atmospheric general circulation, ERA5, reanalysis, Hadley cell, jet stream, stationary waves, storm tracks, teaching, graduate atmospheric science">
+    <meta name="description" content="GC-ATLAS: an interactive atlas of Earth's atmospheric general circulation. ERA5 climatology and 1961-now per-year reanalysis on a spinnable globe — for students, researchers, educators, and anyone curious about how the atmosphere works.">
+    <meta name="keywords" content="atmospheric general circulation, ERA5, reanalysis, Hadley cell, jet stream, stationary waves, storm tracks, Walker circulation, ENSO, climate change, atmospheric science, meteorology">
     <meta name="author" content="Dr. Michael Fischer, University of Miami">
 
     <!-- Open Graph -->
     <meta property="og:type" content="website">
     <meta property="og:title" content="GC-ATLAS — The Atmospheric General Circulation Atlas">
-    <meta property="og:description" content="Explore Earth's atmospheric base state interactively. ERA5 climatology, cross-sections, EP flux, Lagrangian parcels, and guided tours — a teaching atlas for graduate atmospheric dynamics.">
+    <meta property="og:description" content="Explore Earth's atmospheric base state interactively. ERA5 climatology, 1961-now per-year data, cross-sections, EP flux, Lagrangian parcels, climate-change anomalies — a living atlas for anyone interested in how the atmosphere works.">
     <meta property="og:url" content="https://michaelfischerwx.github.io/GC-ATLAS/">
     <meta property="og:site_name" content="GC-ATLAS">
 
@@ -456,9 +456,9 @@
     <div class="hero-copy">
         <div class="hero-eyebrow">The Atmospheric General Circulation Atlas</div>
         <h1 class="hero-title">See the <span class="accent">base state</span><br>of Earth's atmosphere.</h1>
-        <p class="hero-subtitle">An interactive ERA5 climatology on a spinnable globe — built for teaching the general circulation.</p>
+        <p class="hero-subtitle">An interactive ERA5 reanalysis on a spinnable globe — 1961 through the present, at every level, field, and season.</p>
         <p class="hero-desc">
-            Hadley cells, jet streams, stationary waves, storm tracks, the Walker circulation — the bones of the atmospheric general circulation, rendered live. Spin the globe, pick a month, choose a level, toggle the eddies off. Slice a cross-section. Seed a parcel and watch it ride the climatological flow.
+            Hadley cells, jet streams, stationary waves, storm tracks, the Walker circulation — the bones of the atmospheric general circulation, rendered live. Spin the globe, pick a month, choose a year or a 30-year climatology, toggle the eddies off, slice a cross-section, seed a parcel and watch it ride the climatological flow. For students building intuition, researchers probing a hypothesis, educators pulling a figure, and anyone curious about how the atmosphere works.
         </p>
         <div class="hero-ctas">
             <a href="globe.html" class="btn btn-primary">
@@ -477,7 +477,7 @@
         <div class="section-eyebrow">What's inside</div>
         <h2 class="section-title">An atlas <span class="accent">and a diagnostic bench.</span></h2>
         <p class="section-desc">
-            Not just pretty fields — a tool where every classical diagnostic in Holton, Vallis, and Peixoto-Oort is live, clickable, and decomposable.
+            Not just pretty fields — every classical diagnostic from Holton, Vallis, and Peixoto-Oort is live, clickable, and decomposable. Swap instantly between a 30-year climatology and any single month of any year since 1961.
         </p>
 
         <div class="feature-grid">
@@ -533,7 +533,7 @@
                 </div>
                 <div class="feature-kicker">Signature · Phase 3</div>
                 <h3 class="feature-title">Lagrangian Mode</h3>
-                <p class="feature-desc">Alt-click anywhere on the globe to seed parcels and watch them advect on the climatological 3D wind. Release a cluster at 15°N, 200 hPa in July and ride the monsoon anticyclone. The most visceral way to teach the overturning.</p>
+                <p class="feature-desc">Alt-click anywhere on the globe to seed parcels and watch them advect on the climatological 3D wind. Release a cluster at 15°N, 200 hPa in July and ride the monsoon anticyclone. The most visceral way to see the overturning.</p>
                 <span class="feature-phase ready">Live</span>
             </article>
 
@@ -564,9 +564,9 @@
                 <div class="feature-icon">
                     <svg viewBox="0 0 24 24"><path d="M4 4h10l6 6v10H4z"/><path d="M14 4v6h6"/><path d="M8 14h8M8 17h5"/></svg>
                 </div>
-                <div class="feature-kicker">Teaching · Phase 4</div>
+                <div class="feature-kicker">Narration · Phase 4</div>
                 <h3 class="feature-title">Guided Tours</h3>
-                <p class="feature-desc">Author narrated walkthroughs — the globe auto-navigates, zooms, and toggles fields while text or audio narrates. "The Hadley circulation," "Why is the Aleutian Low there?," "Monsoon reversal." Students run them before lecture.</p>
+                <p class="feature-desc">Author narrated walkthroughs — the globe auto-navigates, zooms, and toggles fields while text or audio narrates. "The Hadley circulation," "Why is the Aleutian Low there?," "Monsoon reversal." Watch before a lecture, on a flight, or at the kitchen table.</p>
                 <span class="feature-phase horizon">Horizon</span>
             </article>
 
@@ -588,7 +588,7 @@
                 </div>
                 <div class="feature-kicker">Core · Live</div>
                 <h3 class="feature-title">Three Views, One Base State</h3>
-                <p class="feature-desc">Globe (3D, OrbitControls, axial tilt), Map (equirectangular, drag-to-pan, central-meridian slider, shift-drag for great-circle arcs), and Orbit — a heliocentric "viewer from space" with sun, ecliptic, solstice/equinox markers, day/night terminator, and a subsolar marker. Same field, three pedagogical roles.</p>
+                <p class="feature-desc">Globe (3D, OrbitControls, axial tilt), Map (equirectangular, drag-to-pan, central-meridian slider, shift-drag for straight or great-circle arcs), and Orbit — a heliocentric "viewer from space" with sun, ecliptic, solstice/equinox markers, day/night terminator, and a subsolar marker. Same field, three perspectives.</p>
                 <span class="feature-phase ready">Live</span>
             </article>
 
@@ -599,7 +599,7 @@
                 </div>
                 <div class="feature-kicker">Core · Live</div>
                 <h3 class="feature-title">Pressure or θ</h3>
-                <p class="feature-desc">Toggle the vertical coordinate between standard pressure surfaces (12 levels, 10–1000 hPa) and isentropic θ surfaces (8 levels, 280–700 K). Adiabatic motion stays on its θ surface, so the right coordinate is on tap for the dynamics being taught.</p>
+                <p class="feature-desc">Toggle the vertical coordinate between standard pressure surfaces (12 levels, 10–1000 hPa) and isentropic θ surfaces (8 levels, 280–700 K). Adiabatic motion stays on its θ surface, so the right coordinate is on tap for the dynamics you want to see.</p>
                 <span class="feature-phase ready">Live</span>
             </article>
 
@@ -608,9 +608,9 @@
                 <div class="feature-icon">
                     <svg viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="12" rx="1.5"/><path d="M3 9h18M7 6v12M17 6v12"/><path d="M11 11l3 1.5-3 1.5z" fill="currentColor"/></svg>
                 </div>
-                <div class="feature-kicker">Teaching · Live</div>
+                <div class="feature-kicker">Sharing · Live</div>
                 <h3 class="feature-title">GIF Export</h3>
-                <p class="feature-desc">Export an animated GIF of the current view — a single frame, the full annual cycle, or any month range. Drops straight into a slide deck or Canvas page, no screen-capture chain required.</p>
+                <p class="feature-desc">Export an animated GIF of the current view — a single frame, the full annual cycle, or any month range. Drops straight into a talk, a paper supplement, a blog post, or a Canvas page — no screen-capture chain required.</p>
                 <span class="feature-phase ready">Live</span>
             </article>
 
@@ -623,41 +623,44 @@
     <div class="section-eyebrow">Why this tool</div>
     <h2 class="section-title">A foundation, <span class="accent">made visible.</span></h2>
     <p class="section-desc">
-        Graduate courses in atmospheric general circulation lean on static textbook diagrams. GC-ATLAS gives students a live reference — the real, observed base state they can spin, slice, and decompose — so the lectures build on intuition students already have.
+        The atmospheric general circulation has historically been explored through textbook diagrams and static figures. GC-ATLAS replaces those with a live, observed, spinnable reference — the real ERA5 base state, at every level, every field, every month from 1961 through last week.
     </p>
 
     <div class="about-grid">
         <div class="about-copy">
             <p>
-                The atmospheric general circulation is famously hard to teach. The concepts are three-dimensional, span the globe, evolve with the seasons, and can only be fully appreciated as <em>decompositions</em> — zonal mean versus eddy, stationary versus transient, rotational versus divergent.
+                The atmospheric general circulation is famously hard to visualise. The concepts are three-dimensional, span the globe, evolve with the seasons, and can only be fully appreciated as <em>decompositions</em> — zonal mean versus eddy, stationary versus transient, rotational versus divergent. A static figure captures one slice of one of those decompositions, at one season, at one level. The real atmosphere is all of them at once.
             </p>
             <p>
-                GC-ATLAS is a pedagogical companion to the course: an always-on, interactive ERA5 climatology (1991–2020 by default) rendered as a windy-style globe, with live cross-sections, derived diagnostics, Lagrangian parcels, and budget viewers — the working tools of a general-circulation researcher, adapted for a classroom.
+                GC-ATLAS makes every one of those slices one click away. Choose a 30-year climatology (1991–2020 or 1961–1990) or any single month from 1961 to the present. Toggle Mean ↔ ±1σ variability. Peel the stationary eddy off the zonal mean. Subtract one era's base state from another's to see the climate-change signal. Seed a Lagrangian parcel and watch it ride the monsoon anticyclone. Slice any cross-section; read off the Hadley cell strength or the EP-flux divergence or the moisture transport convergence.
             </p>
             <p>
-                It is the atmospheric sibling of <a href="https://michaelfischerwx.github.io/TC-ATLAS/" target="_blank" rel="noopener" style="color: var(--emerald-bright);">TC-ATLAS</a>, sharing its philosophy: free, open, fast in the browser, built by the people who teach this material.
+                It's for graduate students encountering the circulation for the first time, researchers sketching a hypothesis before opening a Jupyter notebook, educators pulling a figure for a slide deck, communicators explaining a weather-or-climate story, and anyone just curious what the jet stream actually looked like the week they were born.
+            </p>
+            <p>
+                It is the atmospheric sibling of <a href="https://michaelfischerwx.github.io/TC-ATLAS/" target="_blank" rel="noopener" style="color: var(--emerald-bright);">TC-ATLAS</a>, sharing its philosophy: free, open, and fast in the browser.
             </p>
         </div>
         <ul class="about-list" id="pedagogy">
             <li>
-                <strong>Built around the syllabus</strong>
-                <span>Every feature maps to a classical topic: Hadley/Ferrel/polar cells, jets, stationary Rossby waves, storm tracks, monsoons, the stratospheric circulation, Lorenz energy cycle, angular momentum.</span>
+                <strong>Grounded in the canon</strong>
+                <span>Every feature maps to a classical topic: Hadley / Ferrel / polar cells, jets, stationary Rossby waves, storm tracks, monsoons, the stratospheric circulation, Lorenz energy cycle, angular momentum.</span>
             </li>
             <li>
-                <strong>Reanalysis-first</strong>
-                <span>ERA5 monthly means, 1991–2020 climatology, precomputed on cloud storage. Daily data where variance/transient diagnostics require it.</span>
+                <strong>Reanalysis-native</strong>
+                <span>ERA5 monthly means from 1961 to the present — 30-year climatologies, ±1σ variability, and individual-year snapshots — all precomputed and served compressed (float16 + gzip) from Google Cloud Storage. No pip install, no Jupyter, no NetCDF download.</span>
             </li>
             <li>
                 <strong>Decomposition, not just display</strong>
-                <span>Raw fields are the starting point. The pedagogical payoff is the toggles — zonal-mean, eddy, stationary, transient — that make the circulation's structure visible.</span>
+                <span>Raw fields are the starting point. The payoff is the toggles — zonal-mean, eddy, anomaly, climate-change — that make the circulation's structure visible.</span>
             </li>
             <li>
                 <strong>Globe-native</strong>
-                <span>A spinnable 3D globe (WebGL) with GPU-accelerated particle advection and true 3D Lagrangian trajectories — built to scale.</span>
+                <span>A spinnable 3D globe (WebGL) with GPU-accelerated particle advection, true 3D Lagrangian trajectories, isentropic and pressure coordinates, and a heliocentric "view from space" mode. Built to scale to daily-data diagnostics next.</span>
             </li>
             <li>
-                <strong>Open and extensible</strong>
-                <span>Vanilla frontend, FastAPI backend, open data. Instructors can fork it, rewire it, and author guided tours for their own courses.</span>
+                <strong>Open and adaptable</strong>
+                <span>Vanilla frontend, open pipeline, Copernicus-attributed data. Anyone can fork it, rewire it, or repurpose it — a classroom, a research group, a communication project.</span>
             </li>
         </ul>
     </div>
@@ -666,7 +669,7 @@
 <!-- ═══════════════ FOOTER ═══════════════ -->
 <footer class="footer">
     <div>
-        GC-ATLAS · A teaching atlas by <a href="https://michaelfischerwx.github.io/TC-ATLAS/" target="_blank" rel="noopener">Dr. Michael Fischer</a>, University of Miami.
+        GC-ATLAS · Built by <a href="https://michaelfischerwx.github.io/TC-ATLAS/" target="_blank" rel="noopener">Dr. Michael Fischer</a>, University of Miami.
     </div>
     <div class="footer-meta" style="max-width:780px; margin:0.6rem auto 0; line-height:1.6;">
         Contains modified Copernicus Climate Change Service information 2026. Built on ERA5 monthly-mean reanalysis (Hersbach et al., 2020, <em>QJRMS</em> 146, 1999–2049, <a href="https://doi.org/10.1002/qj.3803" target="_blank" rel="noopener">doi:10.1002/qj.3803</a>). Neither the European Commission nor ECMWF is responsible for any use of this information.
