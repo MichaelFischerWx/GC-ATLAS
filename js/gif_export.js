@@ -156,6 +156,33 @@ export class GifExporter {
         return this._encode(imgs, perFrameMs);
     }
 
+    /** Capture mode = 'swipe-sweep': step compareSplit from 0.02 to 0.98
+     *  in 36 evenly-spaced frames (10° each over 360° of the map).
+     *  Requires compareMode=true + map view. The divider slides W → E,
+     *  exposing more of the right-half (reference period / year) as it
+     *  advances. Restores the original split at the end. */
+    async captureSwipeSweep({ frameDelayMs = 120, nFrames = 36, onProgress } = {}) {
+        const app = this.app;
+        if (!app.state.compareMode || app.state.viewMode !== 'map') {
+            throw new Error('Compare swipe sweep requires Map view with Compare enabled.');
+        }
+        const priorSplit = app.state.compareSplit;
+        const imgs = [];
+        for (let i = 0; i < nFrames; i++) {
+            // Cover the full 0.02–0.98 span (matches applyCompareSplit's
+            // clamp) so the divider really sweeps edge-to-edge.
+            const s = 0.02 + (i / (nFrames - 1)) * (0.98 - 0.02);
+            app.setState({ compareSplit: s });
+            // Two rAF cycles so the clip plane + split-line updates settle
+            // before we grab the pixels.
+            await this._rafDelay(40);
+            imgs.push(this._captureFrame());
+            onProgress?.(i + 1, nFrames);
+        }
+        app.setState({ compareSplit: priorSplit });
+        return this._encode(imgs, frameDelayMs);
+    }
+
     /** Capture mode = 'annual': step months 1..12 and capture one frame per
      *  month. Waits up to 3 s per month for tiles to finish loading. */
     async captureAnnual({ frameDelayMs = 220, onProgress } = {}) {

@@ -4531,7 +4531,30 @@ class GlobeApp {
         const progressText = document.getElementById('gif-progress-text');
         if (!openBtn || !modal) return;
 
-        const open  = () => { modal.classList.remove('hidden'); progress.classList.add('hidden'); startBtn.disabled = false; startBtn.textContent = 'Capture'; };
+        const open  = () => {
+            modal.classList.remove('hidden');
+            progress.classList.add('hidden');
+            startBtn.disabled = false;
+            startBtn.textContent = 'Capture';
+            // Grey out the swipe-sweep option when compare isn't active
+            // on the map view (the capture would fail otherwise).
+            const swipeOpt = document.getElementById('gif-opt-swipe');
+            const swipeRadio = swipeOpt?.querySelector('input[type="radio"]');
+            const swipeOk = this.state.compareMode && this.state.viewMode === 'map';
+            if (swipeOpt) {
+                swipeOpt.style.opacity = swipeOk ? '' : '0.45';
+                swipeOpt.style.pointerEvents = swipeOk ? '' : 'none';
+            }
+            if (swipeRadio) {
+                swipeRadio.disabled = !swipeOk;
+                // If the user previously picked swipe-sweep but compare
+                // is now off, re-default to the animated mode.
+                if (!swipeOk && swipeRadio.checked) {
+                    const anim = document.querySelector('input[name="gif-mode"][value="animated"]');
+                    if (anim) anim.checked = true;
+                }
+            }
+        };
         const close = () => { modal.classList.add('hidden'); };
 
         openBtn.addEventListener('click', open);
@@ -4570,9 +4593,14 @@ class GlobeApp {
             };
 
             try {
-                const blob = mode === 'annual'
-                    ? await exporter.captureAnnual({ onProgress })
-                    : await exporter.captureAnimated({ durationMs: 5000, fps: 15, onProgress });
+                let blob;
+                if (mode === 'annual') {
+                    blob = await exporter.captureAnnual({ onProgress });
+                } else if (mode === 'swipe-sweep') {
+                    blob = await exporter.captureSwipeSweep({ onProgress });
+                } else {
+                    blob = await exporter.captureAnimated({ durationMs: 5000, fps: 15, onProgress });
+                }
                 progressText.textContent = `Encoding… ${(blob.size / 1024 / 1024).toFixed(1)} MB`;
                 const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 16);
                 downloadBlob(blob, `gc-atlas-${mode}-${stamp}.gif`);
