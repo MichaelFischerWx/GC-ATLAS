@@ -171,6 +171,16 @@ class GlobeApp {
             document.querySelectorAll('.view-toggle button').forEach(b =>
                 b.classList.toggle('active', b.id === `view-${pendingView}`));
         }
+        // URL-restored state side-effects that need an explicit kick (the
+        // bulk Object.assign above doesn't go through setState, so none of
+        // setState's hooks ran). Each applies its side-effect only if the
+        // state differs from defaults — cheap no-ops otherwise.
+        if (Number.isFinite(this.state.mapCenterLon) && this.state.mapCenterLon !== 0) {
+            this.applyMapCenterLon();
+        }
+        if (this.state.compareMode) this.applyCompareMode();
+        if (!this.state.showSun) this.applySunVisibility();
+        if (this.state.windMode && this.state.windMode !== 'particles') this.applyWindMode();
         this.updateField();
         this.animate();
         this.bootstrapEra5();
@@ -243,7 +253,11 @@ class GlobeApp {
         // manifest — the tile fetch never kicks off and the globe sits on
         // "Loading..." indefinitely.
         const s = this.state;
-        const needsPerYear = s.year != null || !!s.customRange;
+        // Per-year manifest is needed whenever the displayed state pulls
+        // from a per-year tile: single-year view, custom-range composite,
+        // composite builder, OR a compareYear-based swipe target.
+        const needsPerYear = s.year != null || !!s.customRange
+                          || (s.compareMode && s.compareYear != null);
         const refPeriod = s.referencePeriod;
         const needsRefPeriod = refPeriod && refPeriod !== 'default' && refPeriod !== '1991-2020';
         const altClimoPeriod = s.climatologyPeriod && s.climatologyPeriod !== 'default' && s.climatologyPeriod !== '1991-2020';
