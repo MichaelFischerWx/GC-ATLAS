@@ -170,7 +170,11 @@ export function requestField(name, { month, level, kind = 'mean', period = 'defa
         // Aggregate-across-cached-months only makes sense for climatology
         // tiles; per-year tiles are single snapshots, so use the per-tile
         // range directly.
-        const agg = (year == null) ? aggregateStats(name, useLevel, kind, eff) : null;
+        // Pool vmin/vmax across all 12 months of the same (name, level,
+        // kind, period, year) slice. Works for climatology (year=null)
+        // AND single-year (year=YYYY) so the colorbar doesn't shift as
+        // the user scrubs months within a fixed year.
+        const agg = aggregateStats(name, useLevel, kind, eff, year);
         return {
             values: hit.values,
             vmin: agg ? agg.vmin : hit.vmin,
@@ -271,12 +275,18 @@ function percentileBounds(values, lo, hi) {
 
 export function onFieldLoaded(fn) { subscribers.add(fn); return () => subscribers.delete(fn); }
 
-/** Aggregate vmin/vmax across every cached month at (name, level, kind, period). */
-function aggregateStats(name, level, kind = 'mean', period = 'default') {
+/** Aggregate vmin/vmax across every cached month at (name, level, kind,
+ *  period, year). Restricting by year lets single-year mode pool stats
+ *  across THAT year's months only — so the colorbar stops jumping as
+ *  the user scrubs months within a fixed year. Climatology mode (year
+ *  null) restricts to climatology entries (year token '_'), which also
+ *  prevents per-year extremes from polluting the climo colorbar. */
+function aggregateStats(name, level, kind = 'mean', period = 'default', year = null) {
     const prefix = level == null
         ? `${period}|${name}|sl|`
         : `${period}|${name}|${level}|`;
-    const suffix = `|${kind}`;
+    const yearToken = year != null ? String(year) : '_';
+    const suffix = `|${yearToken}|${kind}`;
     let vmin = Infinity, vmax = -Infinity, any = false;
     for (const [key, val] of cache.entries()) {
         if (!val || typeof val !== 'object') continue;

@@ -45,22 +45,43 @@ export class GifExporter {
 
         const subParts = [MONTHS[s.month - 1]];
         const cr = s.customRange;
+        // Describe what's painted on the left half (the "active" view).
+        let leftLabel;
         if (s.year != null) {
-            subParts.push(String(s.year));
+            leftLabel = String(s.year);
         } else if (cr && cr.label) {
             const n = Array.isArray(cr.years) ? cr.years.length : 0;
-            subParts.push(`${cr.label}${n ? ` · ${n} events` : ''}`);
+            leftLabel = `${cr.label}${n ? ` · ${n} events` : ''}`;
         } else if (cr && Number.isFinite(cr.start) && Number.isFinite(cr.end)) {
-            subParts.push(`${cr.start}–${cr.end} mean`);
+            leftLabel = `${cr.start}–${cr.end} mean`;
         } else if (s.climatologyPeriod && s.climatologyPeriod !== 'default') {
-            subParts.push(s.climatologyPeriod);
+            leftLabel = s.climatologyPeriod;
         } else {
-            subParts.push('1991–2020');
+            leftLabel = '1991–2020';
         }
-        if (s.decompose === 'anomaly'
-            && s.referencePeriod && s.referencePeriod !== 'default'
-            && s.referencePeriod !== s.climatologyPeriod) {
-            subParts.push(`vs ${s.referencePeriod}`);
+        // In compare mode, identify the right-half target too so the GIF's
+        // caption reads correctly as the swipe divider sweeps and viewers
+        // see more of the right-hand painted region.
+        if (s.compareMode) {
+            let rightLabel = null;
+            if (s.compareYear != null) {
+                rightLabel = String(s.compareYear);
+            } else if (s.referencePeriod && s.referencePeriod !== 'default'
+                       && s.referencePeriod !== s.climatologyPeriod) {
+                rightLabel = s.referencePeriod;
+            }
+            if (rightLabel) {
+                subParts.push(`${leftLabel} ⇄ ${rightLabel}`);
+            } else {
+                subParts.push(leftLabel);
+            }
+        } else {
+            subParts.push(leftLabel);
+            if (s.decompose === 'anomaly'
+                && s.referencePeriod && s.referencePeriod !== 'default'
+                && s.referencePeriod !== s.climatologyPeriod) {
+                subParts.push(`vs ${s.referencePeriod}`);
+            }
         }
         return { title, sub: subParts.join(' · ') };
     }
