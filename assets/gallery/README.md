@@ -17,7 +17,7 @@ tile upgrades automatically.
 
    | Slug                   | View                        |
    |------------------------|-----------------------------|
-   | hadley-djf             | The Hadley cells            |
+   | earth-orbit            | Earth in its orbit          |
    | winter-jets            | The winter jets             |
    | stationary-waves       | Stationary waves            |
    | monsoon-jja            | The summer monsoon          |
@@ -25,7 +25,7 @@ tile upgrades automatically.
    | warming-1961           | Warming since 1961          |
    | elnino-roni            | El Niño in January          |
    | pv-330k                | The dynamic tropopause      |
-   | sigma-anom             | Seasonal signal strength    |
+   | hadley-djf             | The Hadley cells            |
 
 5. Hard-reload the landing page. Tile now shows the real screenshot.
 
