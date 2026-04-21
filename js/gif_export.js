@@ -228,13 +228,33 @@ export class GifExporter {
         return this._encode(imgs, frameDelayMs);
     }
 
-    /** Encode ImageData[] → GIF Blob. */
+    /** Encode ImageData[] → GIF Blob.
+     *
+     *  Uses a single GLOBAL palette derived from all frames combined,
+     *  rather than quantizing each frame independently. Per-frame
+     *  quantization makes smooth gradients (like our colormap ramps)
+     *  flicker between adjacent frames — particularly visible in the
+     *  swipe-sweep mode where only the clip boundary changes between
+     *  frames. One global palette keeps colors identical across the
+     *  whole loop. Costs: a few hundred ms extra encode time and one
+     *  combined buffer allocation (~50 MB for a 36-frame swipe). */
     _encode(imgs, frameDelayMs) {
         const gif = GIFEncoder();
+        // Build a single concatenated RGBA sample to quantize from.
+        // For a 36-frame × 900 × 400 × 4 sweep this is ~52 MB; modern
+        // browsers handle it comfortably, and the allocation releases
+        // as soon as applyPalette wraps up.
+        let total = 0;
+        for (const img of imgs) total += img.data.length;
+        const combined = new Uint8ClampedArray(total);
+        let off = 0;
         for (const img of imgs) {
-            const data = img.data;
-            const palette = quantize(data, 256);
-            const indexed = applyPalette(data, palette);
+            combined.set(img.data, off);
+            off += img.data.length;
+        }
+        const palette = quantize(combined, 256);
+        for (const img of imgs) {
+            const indexed = applyPalette(img.data, palette);
             gif.writeFrame(indexed, img.width, img.height, {
                 palette, delay: Math.round(frameDelayMs),
             });
