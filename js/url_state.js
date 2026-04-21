@@ -96,7 +96,7 @@ const SPEC = [
         s => s],
     ['decompose',          'd',
         v => v === 'total' ? null : v,
-        s => ['total','zonal','eddy','anomaly'].includes(s) ? s : undefined],
+        s => ['total','zonal','eddy','anomaly','zscore'].includes(s) ? s : undefined],
 
     // ── compare overlay (map view) ─────────────────────────────────
     ['compareMode',        'cmp',

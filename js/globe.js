@@ -2528,7 +2528,9 @@ class GlobeApp {
         // inline decompose call) and a per-month fetcher (for the aggregator).
         let annualMean = null;
         let annualMeanForAgg = null;
-        if (mode === 'anomaly') {
+        // zscore needs the same machinery as anomaly to find the climo mean —
+        // it just additionally divides by σ inside decompose().
+        if (mode === 'anomaly' || mode === 'zscore') {
             if (this.state.vCoord === 'theta') {
                 // θ-mode anomaly, unified logic:
                 //
@@ -2586,11 +2588,14 @@ class GlobeApp {
                     annualMeanForAgg = annualMeanTheta;
                 }
 
-                const current = decompose(f.values, GRID.nlat, GRID.nlon, 'anomaly',
+                // θ-coord doesn't ship std tiles, so zscore on θ silently
+                // degrades to the regular anomaly view (better than empty).
+                const isenMode = (mode === 'zscore') ? 'anomaly' : mode;
+                const current = decompose(f.values, GRID.nlat, GRID.nlon, isenMode,
                                           annualMeanTheta, { clamp: fieldClamp });
                 if (!current.empty) {
                     const range = aggregatedDecompositionRange(
-                        'anomaly',
+                        isenMode,
                         (m) => {
                             const g = getField(fieldName, {
                                 month: m, coord: 'theta', theta,
@@ -2696,7 +2701,31 @@ class GlobeApp {
 
         const { field, level, vCoord, theta } = this.state;
         const fieldClamp = FIELDS[field]?.clamp ?? null;
-        const current = decompose(f.values, GRID.nlat, GRID.nlon, mode, annualMean, { clamp: fieldClamp });
+        // For standardized-anomaly mode, also fetch the same-month climo σ
+        // so decompose() can divide. Use the ACTIVE climo period's std
+        // tile (reference period if the user has set one). When std isn't
+        // available (derived fields), decompose returns empty:true and
+        // the display falls back to raw values — UI surfaces this in the
+        // colorbar subtitle below.
+        let currentStdTile = null;
+        let stdTileForMonth = null;
+        if (mode === 'zscore') {
+            const climoPeriod = (this.state.referencePeriod !== 'default')
+                ? this.state.referencePeriod : 'default';
+            const stdCall = (m) => getField(field, {
+                month: m, level, coord: vCoord, theta,
+                kind: 'std', period: climoPeriod,
+            });
+            const stdNow = stdCall(this.state.month);
+            currentStdTile = (stdNow.isReal && !stdNow.stdUnavailable)
+                ? stdNow.values : null;
+            stdTileForMonth = (m) => {
+                const sf = stdCall(m);
+                return (sf.isReal && !sf.stdUnavailable) ? sf.values : null;
+            };
+        }
+        const current = decompose(f.values, GRID.nlat, GRID.nlon, mode, annualMean,
+                                  { clamp: fieldClamp, stdTile: currentStdTile });
 
         // Cross-month aggregation for stable colorbar — without this the range
         // shifts every time the user scrubs months because the local extrema
@@ -2716,7 +2745,8 @@ class GlobeApp {
                 return fm.isReal ? fm : null;
             },
             GRID.nlat, GRID.nlon, annualMeanForAgg,
-            { symmetric: !!FIELDS[field]?.symmetric, clamp: fieldClamp },
+            { symmetric: !!FIELDS[field]?.symmetric, clamp: fieldClamp,
+              stdTileForMonth },
         );
         if (range) {
             current.vmin = range.vmin;
@@ -4476,6 +4506,7 @@ class GlobeApp {
             zonal:           ' · zonal mean',
             eddy:            ' · eddy',
             anomaly:         ' · anomaly',
+            zscore:          ' · σ-anom',
             'std-anomaly':   ' · Δσ',
         }[field.decomposeMode] || '';
         const coordSuffix = (field.type === 'pl')
@@ -4499,7 +4530,9 @@ class GlobeApp {
             periodSuffix = ` · ${this.state.climatologyPeriod}`;
         }
         set('cb-title', field.name + coordSuffix + periodSuffix + modeSuffix);
-        set('cb-units', field.units);
+        // Standardized anomaly is unit-less (units of σ); the field's
+        // native units don't apply once we've divided.
+        set('cb-units', field.decomposeMode === 'zscore' ? 'σ' : field.units);
         // Field-level caveat / pedagogical note (e.g. DLS computed from
         // monthly-mean winds underestimates instantaneous shear). Pulled
         // from FIELDS[name].note so any field can surface a one-liner.

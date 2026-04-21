@@ -33,6 +33,20 @@ function statsOf(values) {
 }
 
 /** Symmetric range around zero from the field — for diverging display. */
+/** 2nd-percentile floor on the finite σ values in a std grid — anything
+ *  below this is treated as "variance too small to standardize" and
+ *  returned as NaN instead of dividing by near-zero. Adapts per-field. */
+function stdFloor(std) {
+    const finite = [];
+    for (let i = 0; i < std.length; i++) {
+        const v = std[i];
+        if (Number.isFinite(v) && v > 0) finite.push(v);
+    }
+    if (finite.length === 0) return 0;
+    finite.sort((a, b) => a - b);
+    return finite[Math.floor(finite.length * 0.02)] || 0;
+}
+
 function symStatsOf(values) {
     let a = 0;
     for (let i = 0; i < values.length; i++) {
@@ -147,6 +161,36 @@ export function decompose(values, nlat, nlon, mode, annualMean = null, opts = {}
         return { values: out, vmin: s.vmin, vmax: s.vmax, symmetric: true, empty: false };
     }
 
+    if (mode === 'zscore') {
+        // Standardized anomaly: (value − climo mean) / climo σ.
+        // `annualMean` here carries the same-month climo mean; `opts.stdTile`
+        // carries the same-month climo std. Both are nlat×nlon Float32Arrays.
+        const std = opts.stdTile;
+        if (!annualMean || !std) {
+            const s = statsOf(values);
+            return { values, vmin: s.vmin, vmax: s.vmax, symmetric: false, empty: true };
+        }
+        // Small-σ cutoff prevents division blow-up in very-low-variance
+        // regions (e.g. tropical MSL pressure where σ ≈ 0.3 hPa). Anything
+        // below the 2nd percentile of finite σ values across the grid is
+        // treated as "too small to standardize" and returned as NaN.
+        const eps = stdFloor(std);
+        const out = new Float32Array(nlat * nlon);
+        const n = values.length;
+        for (let i = 0; i < n; i++) {
+            const v = values[i];
+            const m = annualMean[i];
+            const s = std[i];
+            if (Number.isFinite(v) && Number.isFinite(m) && Number.isFinite(s) && s > eps) {
+                out[i] = (v - m) / s;
+            } else {
+                out[i] = NaN;
+            }
+        }
+        const stats = symStats(out);
+        return { values: out, vmin: stats.vmin, vmax: stats.vmax, symmetric: true, empty: false };
+    }
+
     // Unknown mode — pass through.
     const s = statsOf(values);
     return { values, vmin: s.vmin, vmax: s.vmax, symmetric: false, empty: false };
@@ -184,7 +228,7 @@ export function aggregatedDecompositionRange(mode, fetchMonth, nlat, nlon, annua
     // per-month variant, climate-change mode would compute month-m minus
     // January's reference for every iteration, mixing the seasonal cycle
     // into the colorbar.
-    const { symmetric: forceSymmetric = false, clamp = null } = opts;
+    const { symmetric: forceSymmetric = false, clamp = null, stdTileForMonth = null } = opts;
     if (mode === 'total' || !mode) return null;
     const refForMonth = typeof annualMean === 'function'
         ? annualMean
@@ -197,7 +241,9 @@ export function aggregatedDecompositionRange(mode, fetchMonth, nlat, nlon, annua
     for (let m = 1; m <= 12; m++) {
         const f = fetchMonth(m);
         if (!f || !f.values) continue;
-        const d = decompose(f.values, nlat, nlon, mode, refForMonth(m), { clamp });
+        const stdTile = stdTileForMonth ? stdTileForMonth(m) : null;
+        const d = decompose(f.values, nlat, nlon, mode, refForMonth(m),
+                            { clamp, stdTile });
         if (d.empty) continue;       // anomaly without annualMean
         if (d.symmetric) symmetric = true;
         if (symmetric) {
