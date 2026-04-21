@@ -29,6 +29,17 @@ tile upgrades automatically.
 
 5. Hard-reload the landing page. Tile now shows the real screenshot.
 
+## The Orbit tile is a GIF
+
+Tile 1 looks for `earth-orbit.gif` (not `.jpg`) because the whole point
+of the Orbit view is the seasonal motion — a static frame misses it.
+Capture route: open `globe.html#v=o&f=sst`, then **Export image / GIF
+→ GIF · annual cycle**. The exporter steps through all 12 months and
+captures a frame each, giving you a one-year loop. Target ~2–5 MB so
+the landing page stays fast; bump down the capture width in
+`gif_export.js` `CAPTURE_MAX_WIDTH` or drop a second of duration if
+you need it smaller.
+
 Recommended export: ~150-250 KB each (nine tiles → ~2 MB total page
 weight). The JPGs are lazy-loaded so below-the-fold tiles don't block
 first paint.
