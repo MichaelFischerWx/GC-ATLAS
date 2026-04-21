@@ -66,16 +66,16 @@ function zonalCov(tA, tB, mA, mB, nlat, nlon) {
     return out;
 }
 
-function computeQBudgetTerms(month) {
+function computeQBudgetTerms(month, seasonal = false) {
     const { nlat, nlon } = GRID;
     const N = LEVELS.length;
 
     const U = [], V = [], W = [], Q = [];
     for (let k = 0; k < N; k++) {
-        const u = cachedMonth('u', month, LEVELS[k]);
-        const v = cachedMonth('v', month, LEVELS[k]);
-        const w = cachedMonth('w', month, LEVELS[k]);
-        const q = cachedMonth('q', month, LEVELS[k]);
+        const u = cachedMonth('u', month, LEVELS[k], 'mean', 'default', null, seasonal);
+        const v = cachedMonth('v', month, LEVELS[k], 'mean', 'default', null, seasonal);
+        const w = cachedMonth('w', month, LEVELS[k], 'mean', 'default', null, seasonal);
+        const q = cachedMonth('q', month, LEVELS[k], 'mean', 'default', null, seasonal);
         if (!u || !v || !w || !q) return null;
         U.push(u); V.push(v); W.push(w);
         // Convert q from g/kg → kg/kg in-place into a temp tile.
@@ -192,7 +192,7 @@ function computeQBudgetTerms(month) {
     smoothLev(total,  N, nlat);
     smoothLev(source, N, nlat);
 
-    return { meanY, meanP, eddyY, eddyP, total, source, N, nlat, cosphi, _month: month };
+    return { meanY, meanP, eddyY, eddyP, total, source, N, nlat, cosphi, _month: month, _seasonal: seasonal };
 }
 
 const TERM_LABELS = {
@@ -218,9 +218,9 @@ const SERIES_COLORS = {
 
 /** Surface evaporation profile from slhf (W/m² → kg/m²/s via L_v). Returns
  *  Float32Array(nlat) in kg/m²/s, or null if slhf tile not cached. */
-function evaporationProfile(month) {
+function evaporationProfile(month, seasonal = false) {
     const { nlat, nlon } = GRID;
-    const slhf = cachedMonth('slhf', month, null);
+    const slhf = cachedMonth('slhf', month, null, 'mean', 'default', null, seasonal);
     if (!slhf) return null;
     const zm = zonalMean(slhf, nlat, nlon);
     // slhf is W/m² (already converted from accumulated); positive upward = into
@@ -234,9 +234,9 @@ function evaporationProfile(month) {
 }
 
 /** Surface precipitation profile from tp (mm/day → kg/m²/s). */
-function precipitationProfile(month) {
+function precipitationProfile(month, seasonal = false) {
     const { nlat, nlon } = GRID;
-    const tp = cachedMonth('tp', month, null);
+    const tp = cachedMonth('tp', month, null, 'mean', 'default', null, seasonal);
     if (!tp) return null;
     const zm = zonalMean(tp, nlat, nlon);
     // tp is in mm/day after unit conversion. Convert to kg/m²/s: 1 mm/day ≈
@@ -253,8 +253,9 @@ export function buildQBudgetView(month, opts = {}) {
     if (term === 'torque') term = 'source';
     const form = opts.form || 'q';
     const mode = opts.mode || '2d';
+    const seasonal = !!opts.seasonal;
 
-    const t = computeQBudgetTerms(month);
+    const t = computeQBudgetTerms(month, seasonal);
     if (!t) return null;
     const { N, nlat, cosphi } = t;
 
@@ -364,6 +365,7 @@ export function buildQBudgetView(month, opts = {}) {
 function buildAllTermsProfile(terms, form, agg) {
     const { N, nlat, cosphi } = terms;
     const month = terms._month;
+    const seasonal = !!terms._seasonal;
     const p_s = LEVELS[N - 1] * 100;
 
     const seriesKeys = ['meanY', 'meanP', 'eddyY', 'eddyP', 'total'];
@@ -398,8 +400,8 @@ function buildAllTermsProfile(terms, form, agg) {
     }
 
     // E - P overlay if surface tiles cached.
-    const evap   = month ? evaporationProfile(month)   : null;
-    const precip = month ? precipitationProfile(month) : null;
+    const evap   = month ? evaporationProfile(month, seasonal)   : null;
+    const precip = month ? precipitationProfile(month, seasonal) : null;
     const surfaceLines = [];
     if (evap || precip) {
         const conv = (kgs) => {

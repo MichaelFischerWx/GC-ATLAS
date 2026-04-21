@@ -145,8 +145,30 @@ export function availableLevels(name) {
     return r && r.meta.levels ? r.meta.levels.slice() : null;
 }
 
-/** Cached-only lookup — no fetch side-effect. Returns Float32Array | null. */
-export function cachedMonth(name, month, level = null, kind = 'mean', period = 'default', year = null) {
+/** Cached-only lookup — no fetch side-effect. Returns Float32Array | null.
+ *  `seasonal: true` returns the NaN-safe pointwise mean of the three tiles
+ *  centered on `month` (wrapping at Dec). If any of the three is missing,
+ *  returns null — caller should treat that as "not ready yet" and retry
+ *  on the next tile-loaded event. */
+export function cachedMonth(name, month, level = null, kind = 'mean', period = 'default', year = null, seasonal = false) {
+    if (seasonal) {
+        const prev = ((month + 10) % 12) + 1;
+        const next = (month %  12) + 1;
+        const a = cachedMonth(name, prev,  level, kind, period, year, false);
+        const b = cachedMonth(name, month, level, kind, period, year, false);
+        const c = cachedMonth(name, next,  level, kind, period, year, false);
+        if (!a || !b || !c) return null;
+        const N = b.length;
+        const out = new Float32Array(N);
+        for (let i = 0; i < N; i++) {
+            let s = 0, n = 0;
+            if (Number.isFinite(a[i])) { s += a[i]; n += 1; }
+            if (Number.isFinite(b[i])) { s += b[i]; n += 1; }
+            if (Number.isFinite(c[i])) { s += c[i]; n += 1; }
+            out[i] = n > 0 ? s / n : NaN;
+        }
+        return out;
+    }
     const eff = resolvePeriod(period);
     const r = resolveField(name, eff);
     if (!r) return null;

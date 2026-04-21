@@ -66,15 +66,15 @@ function zonalCov(tA, tB, mA, mB, nlat, nlon) {
  * Compute the four budget terms + total + implied torque, in raw SI units
  * (m²/s² for ∂[M]/∂t per unit mass). Returns null if any tile is missing.
  */
-function computeMBudgetTerms(month) {
+function computeMBudgetTerms(month, seasonal = false) {
     const { nlat, nlon } = GRID;
     const N = LEVELS.length;
 
     const U = [], V = [], W = [];
     for (let k = 0; k < N; k++) {
-        const u = cachedMonth('u', month, LEVELS[k]);
-        const v = cachedMonth('v', month, LEVELS[k]);
-        const w = cachedMonth('w', month, LEVELS[k]);
+        const u = cachedMonth('u', month, LEVELS[k], 'mean', 'default', null, seasonal);
+        const v = cachedMonth('v', month, LEVELS[k], 'mean', 'default', null, seasonal);
+        const w = cachedMonth('w', month, LEVELS[k], 'mean', 'default', null, seasonal);
         if (!u || !v || !w) return null;
         U.push(u); V.push(v); W.push(w);
     }
@@ -202,7 +202,7 @@ function computeMBudgetTerms(month) {
     smoothLev(total,  N, nlat);
     smoothLev(torque, N, nlat);
 
-    return { meanY, meanP, eddyY, eddyP, total, torque, N, nlat, cosphi, _month: month };
+    return { meanY, meanP, eddyY, eddyP, total, torque, N, nlat, cosphi, _month: month, _seasonal: seasonal };
 }
 
 /** Build a multi-series 1D profile with one line per budget term.
@@ -310,9 +310,10 @@ function buildAllTermsProfile(terms, form, agg = 'mean') {
 function computeTorqueOverlays(terms, form, agg) {
     const { nlat } = terms;
     const month = terms._month;
+    const seasonal = !!terms._seasonal;
     if (!month) return null;
-    const fric = frictionTorqueProfile(month);    // N/m² or null
-    const mtn  = mountainTorqueProfile(month);    // N/m² or null
+    const fric = frictionTorqueProfile(month, seasonal);    // N/m² or null
+    const mtn  = mountainTorqueProfile(month, seasonal);    // N/m² or null
     if (!fric && !mtn) return null;
 
     // Convert N/m² → display units. For 'integral' aggregation we're already
@@ -436,9 +437,9 @@ const SERIES_COLORS = {
  *
  * Returns Float32Array(nlat) in N/m², or null if the ews tile isn't cached.
  */
-function frictionTorqueProfile(month) {
+function frictionTorqueProfile(month, seasonal = false) {
     const { nlat, nlon } = GRID;
-    const ews = cachedMonth('ews', month, null);
+    const ews = cachedMonth('ews', month, null, 'mean', 'default', null, seasonal);
     if (!ews) return null;
     const out = zonalMean(ews, nlat, nlon);
     for (let i = 0; i < nlat; i++) out[i] = -out[i];   // sign convention
@@ -455,10 +456,10 @@ function frictionTorqueProfile(month) {
  *
  * Returns Float32Array(nlat) in N/m², or null if either tile is missing.
  */
-function mountainTorqueProfile(month) {
+function mountainTorqueProfile(month, seasonal = false) {
     const { nlat, nlon } = GRID;
-    const sp_hPa = cachedMonth('sp', month, null);
-    const oro    = cachedMonth('oro', month, null);
+    const sp_hPa = cachedMonth('sp', month, null, 'mean', 'default', null, seasonal);
+    const oro    = cachedMonth('oro', month, null, 'mean', 'default', null, seasonal);
     if (!sp_hPa || !oro) return null;
 
     const out = new Float32Array(nlat);
@@ -491,8 +492,9 @@ export function buildMBudgetView(month, opts = {}) {
     const term = opts.term || 'total';
     const form = opts.form || 'u';
     const mode = opts.mode || '2d';
+    const seasonal = !!opts.seasonal;
 
-    const t = computeMBudgetTerms(month);
+    const t = computeMBudgetTerms(month, seasonal);
     if (!t) return null;
     const { N, nlat, cosphi } = t;
 

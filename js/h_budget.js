@@ -82,18 +82,18 @@ function composeMSETile(t, z, q) {
     return out;
 }
 
-function computeHBudgetTerms(month) {
+function computeHBudgetTerms(month, seasonal = false) {
     const { nlat, nlon } = GRID;
     const N = LEVELS.length;
 
     const U = [], V = [], W = [], H = [];
     for (let k = 0; k < N; k++) {
-        const u = cachedMonth('u', month, LEVELS[k]);
-        const v = cachedMonth('v', month, LEVELS[k]);
-        const w = cachedMonth('w', month, LEVELS[k]);
-        const t = cachedMonth('t', month, LEVELS[k]);
-        const z = cachedMonth('z', month, LEVELS[k]);
-        const q = cachedMonth('q', month, LEVELS[k]);
+        const u = cachedMonth('u', month, LEVELS[k], 'mean', 'default', null, seasonal);
+        const v = cachedMonth('v', month, LEVELS[k], 'mean', 'default', null, seasonal);
+        const w = cachedMonth('w', month, LEVELS[k], 'mean', 'default', null, seasonal);
+        const t = cachedMonth('t', month, LEVELS[k], 'mean', 'default', null, seasonal);
+        const z = cachedMonth('z', month, LEVELS[k], 'mean', 'default', null, seasonal);
+        const q = cachedMonth('q', month, LEVELS[k], 'mean', 'default', null, seasonal);
         if (!u || !v || !w || !t || !z || !q) return null;
         U.push(u); V.push(v); W.push(w);
         H.push(composeMSETile(t, z, q));
@@ -196,7 +196,7 @@ function computeHBudgetTerms(month) {
     smoothLev(total,  N, nlat);
     smoothLev(source, N, nlat);
 
-    return { meanY, meanP, eddyY, eddyP, total, source, N, nlat, cosphi, _month: month };
+    return { meanY, meanP, eddyY, eddyP, total, source, N, nlat, cosphi, _month: month, _seasonal: seasonal };
 }
 
 const TERM_LABELS = {
@@ -223,14 +223,14 @@ const SERIES_COLORS = {
 /** Atmospheric heating components per latitude in W/m² (column integrated).
  *  Sign convention: positive = atmosphere gains energy. ERA5 surface fluxes
  *  are positive DOWNWARD (into surface), so atmospheric uptake = negation. */
-function surfaceHeatingProfiles(month) {
+function surfaceHeatingProfiles(month, seasonal = false) {
     const { nlat, nlon } = GRID;
-    const slhf = cachedMonth('slhf', month, null);
-    const sshf = cachedMonth('sshf', month, null);
-    const ssr  = cachedMonth('ssr',  month, null);
-    const str  = cachedMonth('str',  month, null);
-    const tisr = cachedMonth('tisr', month, null);
-    const ttr  = cachedMonth('ttr',  month, null);
+    const slhf = cachedMonth('slhf', month, null, 'mean', 'default', null, seasonal);
+    const sshf = cachedMonth('sshf', month, null, 'mean', 'default', null, seasonal);
+    const ssr  = cachedMonth('ssr',  month, null, 'mean', 'default', null, seasonal);
+    const str  = cachedMonth('str',  month, null, 'mean', 'default', null, seasonal);
+    const tisr = cachedMonth('tisr', month, null, 'mean', 'default', null, seasonal);
+    const ttr  = cachedMonth('ttr',  month, null, 'mean', 'default', null, seasonal);
     if (!slhf || !sshf || !ssr || !str || !tisr || !ttr) return null;
 
     const slhfZ = zonalMean(slhf, nlat, nlon);
@@ -261,8 +261,9 @@ export function buildHBudgetView(month, opts = {}) {
     if (term === 'torque') term = 'source';
     const form = opts.form || 'h';
     const mode = opts.mode || '2d';
+    const seasonal = !!opts.seasonal;
 
-    const t = computeHBudgetTerms(month);
+    const t = computeHBudgetTerms(month, seasonal);
     if (!t) return null;
     const { N, nlat, cosphi } = t;
 
@@ -363,6 +364,7 @@ export function buildHBudgetView(month, opts = {}) {
 function buildAllTermsProfile(terms, form, agg) {
     const { N, nlat, cosphi } = terms;
     const month = terms._month;
+    const seasonal = !!terms._seasonal;
     const p_s = LEVELS[N - 1] * 100;
 
     const seriesKeys = ['meanY', 'meanP', 'eddyY', 'eddyP', 'total'];
@@ -395,7 +397,7 @@ function buildAllTermsProfile(terms, form, agg) {
     }
 
     // Surface heating overlays (W/m² intrinsic).
-    const surf = month ? surfaceHeatingProfiles(month) : null;
+    const surf = month ? surfaceHeatingProfiles(month, seasonal) : null;
     const surfaceLines = [];
     if (surf) {
         const conv = (wm2) => {

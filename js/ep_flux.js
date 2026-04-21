@@ -82,7 +82,7 @@ function zonalCov(tileA, tileB, nlat, nlon) {
     return cov;
 }
 
-export function computeEPFlux(month) {
+export function computeEPFlux(month, { seasonal = false } = {}) {
     const { nlat, nlon } = GRID;
     const nlev = LEVELS.length;
 
@@ -94,9 +94,9 @@ export function computeEPFlux(month) {
     const u_zm   = new Float32Array(nlev * nlat);     // for context (not used in QG form)
 
     for (let k = 0; k < nlev; k++) {
-        const tU = cachedMonth('u', month, LEVELS[k]);
-        const tV = cachedMonth('v', month, LEVELS[k]);
-        const tT = cachedMonth('t', month, LEVELS[k]);
+        const tU = cachedMonth('u', month, LEVELS[k], 'mean', 'default', null, seasonal);
+        const tV = cachedMonth('v', month, LEVELS[k], 'mean', 'default', null, seasonal);
+        const tT = cachedMonth('t', month, LEVELS[k], 'mean', 'default', null, seasonal);
         if (!tU || !tV || !tT) return null;
         const thetaFactor = Math.pow(1000 / LEVELS[k], KAPPA);
         // Compose θ tile in-place into a temporary array.

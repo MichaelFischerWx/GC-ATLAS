@@ -2311,15 +2311,15 @@ class GlobeApp {
         const canvas = document.getElementById('xs-canvas');
         if (!canvas) return;
         const { field, month, xsArc, cmap, showContours, xsDiag, seasonal } = this.state;
-        // Advanced diagnostics (ψ, M, ug, N², EP, budgets) fetch raw
-        // component tiles via cachedMonth, which doesn't yet honour
-        // state.seasonal — pass seasonal only to the plain-field paths
-        // (zonal-mean + arc) until those modules are plumbed too.
-        const xsOpts = { seasonal: seasonal && xsDiag === 'field' };
+        // Seasonal is now honoured by every diagnostic (cachedMonth +
+        // the diagnostic modules all accept the flag). One shared opts
+        // object feeds both the plain-field paths and the diagnostic
+        // helpers below.
+        const xsOpts = { seasonal };
         let zm;
         let effCmap = cmap;
         if (xsDiag === 'psi') {
-            zm = computeMassStreamfunction(month);
+            zm = computeMassStreamfunction(month, xsOpts);
             if (!zm) {
                 zm = computeZonalMean(field, month, xsOpts);
             } else {
@@ -2327,7 +2327,7 @@ class GlobeApp {
                 zm.contourInterval = 20;             // 10⁹ kg/s
             }
         } else if (xsDiag === 'M') {
-            zm = computeAngularMomentum(month);
+            zm = computeAngularMomentum(month, xsOpts);
             if (!zm) {
                 zm = computeZonalMean(field, month, xsOpts);
             } else {
@@ -2335,7 +2335,7 @@ class GlobeApp {
                 zm.contourInterval = 0.5;            // 10⁹ m²/s
             }
         } else if (xsDiag === 'ug') {
-            zm = computeGeostrophicWind(month);
+            zm = computeGeostrophicWind(month, xsOpts);
             if (!zm) {
                 zm = computeZonalMean(field, month, xsOpts);
             } else {
@@ -2343,7 +2343,7 @@ class GlobeApp {
                 zm.contourInterval = 10;             // m/s, matches u contour
             }
         } else if (xsDiag === 'N2') {
-            zm = computeBruntVaisala(month);
+            zm = computeBruntVaisala(month, xsOpts);
             if (!zm) {
                 zm = computeZonalMean(field, month, xsOpts);
             } else {
@@ -2351,7 +2351,7 @@ class GlobeApp {
                 zm.contourInterval = 1;              // 10⁻⁴ s⁻²
             }
         } else if (xsDiag === 'epflux') {
-            zm = computeEPFlux(month);
+            zm = computeEPFlux(month, xsOpts);
             if (!zm) {
                 zm = computeZonalMean(field, month, xsOpts);
             } else {
@@ -2363,6 +2363,7 @@ class GlobeApp {
                 term: this.state.mbTerm,
                 form: this.state.mbForm,
                 mode: this.state.mbMode,
+                seasonal,
             });
             if (!zm) {
                 zm = computeZonalMean(field, month, xsOpts);
@@ -2375,6 +2376,7 @@ class GlobeApp {
                 term: this.state.mbTerm,
                 form: 'q',
                 mode: this.state.mbMode,
+                seasonal,
             });
             if (!zm) {
                 zm = computeZonalMean(field, month, xsOpts);
@@ -2387,6 +2389,7 @@ class GlobeApp {
                 term: this.state.mbTerm,
                 form: 'h',
                 mode: this.state.mbMode,
+                seasonal,
             });
             if (!zm) {
                 zm = computeZonalMean(field, month, xsOpts);
