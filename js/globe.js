@@ -2627,7 +2627,12 @@ class GlobeApp {
             // composite branch here, the composite fell through to the
             // self-anomaly path (12-month mean), mixing the seasonal
             // cycle into what should be an event anomaly.
-            if ((this.state.year != null || this.state.customRange) && !meta.derived) {
+            if (this.state.year != null || this.state.customRange) {
+                // Year- or composite-anomaly. Works for both raw and derived
+                // fields — the climatology reference is fetched without
+                // year/customRange so getField routes derived fields through
+                // their normal climatology compute (e.g. DLS climo from
+                // climatology u/v at 200+850, then |V_top − V_bot|).
                 const climoPeriod = (refPeriod !== 'default') ? refPeriod : 'default';
                 const refField = getField(this.state.field, {
                     month: this.state.month,
@@ -2636,7 +2641,7 @@ class GlobeApp {
                     theta: this.state.theta,
                     kind: 'mean',
                     period: climoPeriod,
-                    // year omitted → climatology mean tile
+                    // year + customRange omitted → climatology mean
                 });
                 annualMean = refField.isReal ? refField.values : null;
                 annualMeanForAgg = (m) => {
