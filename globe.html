@@ -268,6 +268,32 @@
         }
         .composite-details[open] > summary::before { transform: rotate(90deg); }
         .composite-details > summary:hover { color: var(--paper); }
+        /* Map-chrome disclosure — same look as composite-details but tucked
+           into the Overlays section. */
+        .map-chrome-details > summary {
+            cursor: pointer;
+            list-style: none;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.66rem;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: var(--sage);
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            user-select: none;
+            padding-top: 6px;
+            border-top: 1px dashed var(--thalo-line);
+        }
+        .map-chrome-details > summary::-webkit-details-marker { display: none; }
+        .map-chrome-details > summary::before {
+            content: '▸';
+            display: inline-block;
+            transition: transform 0.12s ease;
+            color: var(--emerald-bright);
+        }
+        .map-chrome-details[open] > summary::before { transform: rotate(90deg); }
+        .map-chrome-details > summary:hover { color: var(--paper); }
         .composite-badge {
             display: inline-block;
             padding: 1px 6px;
@@ -1690,7 +1716,7 @@
                 <button type="button" data-decompose="zscore"
                         title="Standardized anomaly: (value − climo mean) ÷ climo σ. Unit-less z-score; |z| > 2 is unusual, > 3 is rare. Makes regions with different absolute variability (tropics vs midlatitudes) directly comparable.">σ-anom</button>
             </div>
-            <div style="margin-top:10px;">
+            <div id="ref-period-row" hidden style="margin-top:10px;">
                 <label class="field-label" for="ref-period-select" style="margin-bottom:4px; font-size:0.66rem;">Reference period</label>
                 <select id="ref-period-select" title="Drives three things: in Anomaly mode → anomaly target (year-vs-climo, climate-change anomaly, or self); in ±1σ mode → Δσ (current σ minus reference σ); when Compare is on (Map view) → the period painted on the right half of the swipe.">
                     <option value="default">Self · 12-month mean</option>
@@ -1700,7 +1726,7 @@
             </div>
         </section>
 
-        <section class="control-group" id="compare-group">
+        <section class="control-group" id="compare-group" hidden>
             <h4>Compare <span style="color:var(--paper-dim); font-weight:400; text-transform:none; letter-spacing:0; font-size:0.7rem;">— Map view</span></h4>
             <label class="check">
                 <input type="checkbox" id="toggle-compare">
@@ -1742,8 +1768,7 @@
 
         <section class="control-group">
             <h4>Overlays</h4>
-            <label class="check"><input type="checkbox" id="toggle-coastlines" checked> Coastlines</label>
-            <label class="check"><input type="checkbox" id="toggle-graticule" checked> Graticule</label>
+            <!-- Data overlays — change with what you're studying. -->
             <label class="check"><input type="checkbox" id="toggle-contours"> Contours</label>
             <div id="contour-field-row" hidden style="margin: 4px 0 8px 24px;">
                 <label class="field-label" for="contour-field-select" style="margin: 0 0 3px 0; font-size: 0.62rem;">Overlay field</label>
@@ -1752,7 +1777,6 @@
                     <option value="">Same as displayed</option>
                 </select>
             </div>
-            <label class="check"><input type="checkbox" id="toggle-sun" checked> Sun &amp; day/night</label>
             <div class="wind-mode">
                 <div class="wind-mode-label">Wind</div>
                 <div class="segmented">
@@ -1761,6 +1785,17 @@
                     <button type="button" data-wind-mode="barbs">Barbs</button>
                 </div>
             </div>
+            <!-- Map chrome — set-once-and-forget toggles tucked behind a
+                 disclosure so the Overlays section keeps focus on the
+                 data-overlay choices above. -->
+            <details class="map-chrome-details" style="margin-top:10px;">
+                <summary>Map chrome</summary>
+                <div style="margin-top:8px;">
+                    <label class="check"><input type="checkbox" id="toggle-coastlines" checked> Coastlines</label>
+                    <label class="check"><input type="checkbox" id="toggle-graticule" checked> Graticule</label>
+                    <label class="check"><input type="checkbox" id="toggle-sun" checked> Sun &amp; day/night</label>
+                </div>
+            </details>
         </section>
 
         <section class="control-group">

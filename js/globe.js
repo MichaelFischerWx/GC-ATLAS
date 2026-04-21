@@ -1210,6 +1210,21 @@ class GlobeApp {
     refreshRefPeriodLabels() {
         const sel = document.getElementById('ref-period-select');
         if (!sel) return;
+        // Reference period is only meaningful in:
+        //   • anomaly / σ-anom decomposition (it's the subtracted baseline)
+        //   • ±1σ kind (Δσ comparison target)
+        //   • Compare swipe (right-half period when no compareYear is set)
+        // Hide the row in plain Total/Zonal/Eddy on the Mean tile so the
+        // sidebar doesn't suggest an option that doesn't apply.
+        const row = document.getElementById('ref-period-row');
+        if (row) {
+            const decomposeUsesIt = this.state.decompose === 'anomaly'
+                                  || this.state.decompose === 'zscore';
+            const compareUsesIt   = this.state.compareMode
+                                  && this.state.compareYear == null;
+            const stdUsesIt       = this.state.kind === 'std';
+            row.hidden = !(decomposeUsesIt || compareUsesIt || stdUsesIt);
+        }
         const yearOn = this.state.year != null;
         const active = this.state.climatologyPeriod;
         const activeLabel = active === '1961-1990' ? '1961–1990' : '1991–2020';
@@ -1627,6 +1642,14 @@ class GlobeApp {
         // Map-specific controls only meaningful in map view.
         const mcg = document.getElementById('map-center-group');
         if (mcg) mcg.hidden = mode !== 'map';
+        // Sections that only make sense in one view: hide them in the
+        // others so the sidebar stays focused on what the user can actually
+        // do right now. Compare swipe is map-only; parcels release is
+        // globe-only.
+        const compareSec = document.getElementById('compare-group');
+        if (compareSec) compareSec.hidden = mode !== 'map';
+        const parcelsSec = document.getElementById('parcels-section');
+        if (parcelsSec) parcelsSec.hidden = mode !== 'globe';
         this.updateHintForViewMode();
 
         this.rebuildCoastlines();
@@ -1936,6 +1959,12 @@ class GlobeApp {
         if ('climatologyPeriod' in patch) {
             // The "Self" label also depends on which 30-yr window is active
             // when in climatology mode (changes "1991-2020" → "1961-1990").
+            this.refreshRefPeriodLabels();
+        }
+        if ('decompose' in patch || 'kind' in patch || 'compareMode' in patch
+            || 'compareYear' in patch) {
+            // Toggle ref-period-row visibility based on whether anomaly /
+            // ±1σ / compare actually need it.
             this.refreshRefPeriodLabels();
         }
         if ('climatologyPeriod' in patch) {
