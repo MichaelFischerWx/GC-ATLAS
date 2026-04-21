@@ -126,6 +126,7 @@ const SPEC = [
     ['showCoastlines',     'cst', v => v ? null : '0', s => s !== '0'],
     ['showGraticule',      'grt', v => v ? null : '0', s => s !== '0'],
     ['showContours',       'ctr', v => v ? '1' : null, s => s === '1'],
+    ['slidingClimo',       'sc',  v => v ? null : '0', s => s !== '0'],   // default true
     ['contourField',       'cof',
         v => v == null ? null : v,
         s => (s in FIELDS) ? s : undefined],

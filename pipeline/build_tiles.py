@@ -76,19 +76,26 @@ RAW_DIR = DEFAULT_RAW_DIR
 OUT_DIR = DEFAULT_OUT_DIR
 RAW_DIRS: list[Path] = [DEFAULT_RAW_DIR]    # multi-dir merge for --per-year
 PER_YEAR = False
+# When set (via --period + --raw-dirs in climatology mode), subset the merged
+# time axis to [start_year, end_year] inclusive before computing climatology.
+PERIOD_YEAR_RANGE: tuple[int, int] | None = None
 
 
 def parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--var", help="short name filter (e.g. u)")
     ap.add_argument("--group", choices=["pressure_levels", "single_levels"])
-    ap.add_argument("--period", help="START-END, e.g. 1961-1990 (reads data/raw_START_END/, writes data/tiles_START_END/)")
+    ap.add_argument("--period", help="START-END, e.g. 1961-1990 (writes data/tiles_START_END/). "
+                                     "Without --raw-dirs, reads data/raw_START_END/. With --raw-dirs, "
+                                     "reads from those dirs + subsets the time axis to [START, END].")
     ap.add_argument("--per-year", action="store_true",
                     help="emit per-(year, month) tiles into data/tiles_per_year/ instead of climatology tiles. "
                          "Skips std (single-year std is meaningless). Combine with --raw-dirs to merge multiple raw trees.")
     ap.add_argument("--raw-dirs",
-                    help="comma-separated list of raw NetCDF directories to merge along time "
-                         "(per-year mode only). Default: data/raw[,data/raw_2021_2026 if present]")
+                    help="comma-separated list of raw NetCDF directories to merge along time. "
+                         "Per-year mode: union of dirs becomes the per-year tree. "
+                         "Climatology mode (--period): union of dirs is then subset to the period years. "
+                         "Default per-year: data/raw[,data/raw_2021_2026 if present].")
     ap.add_argument("--resolution", type=float, default=1.0,
                     help="target grid spacing in degrees (default 1.0; source is 0.5)")
     ap.add_argument("--force", action="store_true", help="rebuild even if output exists")
@@ -137,7 +144,16 @@ def _open_var_for_period(group: str, short: str) -> tuple[xr.DataArray, list[Pat
     else:
         LOG.error("can't pick variable for %s/%s (candidates: %s)", group, short, candidates)
         return None
-    return ds[var_name], paths
+    da = ds[var_name]
+    # Subset the time axis when --period was combined with --raw-dirs to
+    # build a climatology over an arbitrary year window from merged data.
+    if PERIOD_YEAR_RANGE is not None and "time" in da.dims:
+        start, end = PERIOD_YEAR_RANGE
+        da = da.sel(time=slice(f"{start}-01-01", f"{end}-12-31"))
+        if da.sizes.get("time", 0) == 0:
+            LOG.warning("no times in [%d, %d] for %s/%s", start, end, group, short)
+            return None
+    return da, paths
 
 
 def process(nc_path: Path, res: float, force: bool) -> None:
@@ -356,10 +372,24 @@ def main() -> int:
 
     if args.period:
         start, end = (int(x) for x in args.period.split("-"))
-        RAW_DIR = ROOT / "data" / f"raw_{start}_{end}"
         OUT_DIR = ROOT / "data" / f"tiles_{start}_{end}"
-        RAW_DIRS = [RAW_DIR]
-        LOG.info("period  %d–%d  (%s → %s)", start, end, RAW_DIR.name, OUT_DIR.name)
+        if args.raw_dirs:
+            # Climatology over an arbitrary year range, drawn from a union
+            # of merged raw dirs. Time-axis subset to [start, end] happens
+            # inside _open_var_for_period via PERIOD_YEAR_RANGE below.
+            RAW_DIRS = [ROOT / d.strip() if not Path(d.strip()).is_absolute() else Path(d.strip())
+                        for d in args.raw_dirs.split(",") if d.strip()]
+            RAW_DIR = RAW_DIRS[0]
+            global PERIOD_YEAR_RANGE
+            PERIOD_YEAR_RANGE = (start, end)
+            LOG.info("period  %d–%d  (subset from merged dirs → %s)",
+                     start, end, OUT_DIR.name)
+            for d in RAW_DIRS:
+                LOG.info("  raw dir: %s", d.relative_to(ROOT) if d.is_relative_to(ROOT) else d)
+        else:
+            RAW_DIR = ROOT / "data" / f"raw_{start}_{end}"
+            RAW_DIRS = [RAW_DIR]
+            LOG.info("period  %d–%d  (%s → %s)", start, end, RAW_DIR.name, OUT_DIR.name)
     elif PER_YEAR:
         OUT_DIR = ROOT / "data" / "tiles_per_year"
         if args.raw_dirs:

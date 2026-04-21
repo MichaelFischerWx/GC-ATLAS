@@ -56,13 +56,17 @@ SRC_RES = 0.5    # ERA5 native (CDS download) grid
 
 def parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--period", help="START-END, e.g. 1961-1990 (reads data/raw_START_END/, writes data/tiles_START_END/)")
+    ap.add_argument("--period", help="START-END, e.g. 1961-1990 (writes data/tiles_START_END/). "
+                                     "Without --raw-dirs, reads data/raw_START_END/. With --raw-dirs, "
+                                     "reads from those dirs + subsets the time axis to [START, END].")
     ap.add_argument("--per-year", action="store_true",
                     help="emit per-(year, month) χ/ψ tiles into data/tiles_per_year/. "
                          "Skips climatology averaging and std; combines with --raw-dirs.")
     ap.add_argument("--raw-dirs",
-                    help="comma-separated raw NetCDF dirs to merge along time (per-year only). "
-                         "Default: data/raw + any data/raw_YYYY_YYYY siblings except raw_1961_1990.")
+                    help="comma-separated raw NetCDF dirs to merge along time. "
+                         "Per-year mode: union becomes the per-year tree. "
+                         "Climatology mode (--period): union is then subset to the period years. "
+                         "Default per-year: data/raw + any data/raw_YYYY_YYYY siblings except raw_1961_1990.")
     ap.add_argument("--resolution", type=float, default=1.0,
                     help="target grid spacing in degrees (default 1.0; source is 0.5)")
     ap.add_argument("--no-std", action="store_true", help="skip std-across-years tiles")
@@ -100,10 +104,19 @@ def main() -> int:
             LOG.info("  raw dir: %s", d.relative_to(ROOT) if d.is_relative_to(ROOT) else d)
     elif args.period:
         start, end = (int(x) for x in args.period.split("-"))
-        raw_dir = ROOT / "data" / f"raw_{start}_{end}"
         out_dir = ROOT / "data" / f"tiles_{start}_{end}" / "pressure_levels"
-        raw_dirs = [raw_dir]
-        LOG.info("period  %d–%d  (%s → %s)", start, end, raw_dir.name, out_dir.parent.name)
+        if args.raw_dirs:
+            raw_dirs = [ROOT / d.strip() if not Path(d.strip()).is_absolute() else Path(d.strip())
+                        for d in args.raw_dirs.split(",") if d.strip()]
+            raw_dir = raw_dirs[0]
+            LOG.info("period  %d–%d  (subset from merged dirs → %s)",
+                     start, end, out_dir.parent.name)
+            for d in raw_dirs:
+                LOG.info("  raw dir: %s", d.relative_to(ROOT) if d.is_relative_to(ROOT) else d)
+        else:
+            raw_dir = ROOT / "data" / f"raw_{start}_{end}"
+            raw_dirs = [raw_dir]
+            LOG.info("period  %d–%d  (%s → %s)", start, end, raw_dir.name, out_dir.parent.name)
     else:
         raw_dir = DEFAULT_RAW_DIR
         out_dir = DEFAULT_OUT_DIR
@@ -141,6 +154,16 @@ def main() -> int:
 
     u = ds_u["u"]
     v = ds_v["v"]
+
+    # Subset to the requested period when --period was combined with
+    # --raw-dirs to build a climatology over an arbitrary year window
+    # from merged raw data.
+    if args.period and args.raw_dirs and "time" in u.dims:
+        start, end = (int(x) for x in args.period.split("-"))
+        u = u.sel(time=slice(f"{start}-01-01", f"{end}-12-31"))
+        v = v.sel(time=slice(f"{start}-01-01", f"{end}-12-31"))
+        LOG.info("subset time axis → %d steps in [%d, %d]",
+                 u.sizes.get("time", 0), start, end)
 
     lat_name = "latitude" if "latitude" in u.dims else "lat"
     lon_name = "longitude" if "longitude" in u.dims else "lon"

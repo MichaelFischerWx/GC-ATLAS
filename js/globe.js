@@ -31,6 +31,7 @@ import { ParcelField } from './parcels.js';
 import { GifExporter, downloadBlob } from './gif_export.js';
 import { encodeStateToHash, decodeHashToPatch, writeHashDebounced } from './url_state.js';
 import { computeSeries as tsComputeSeries, renderSeries as tsRenderSeries, hoverLookup as tsHoverLookup, bboxLabel as tsBboxLabel, seriesToCSV as tsSeriesToCSV, MONTH_NAMES as TS_MONTH_NAMES } from './timeseries.js';
+import { CLIMO_WINDOWS, bestClimoFor, groupEventsByClimo } from './climo_windows.js';
 
 const PLAY_INTERVAL_MS = 900;
 
@@ -125,6 +126,13 @@ class GlobeApp {
             // bbox for the area-mean timeseries: { latMin, latMax, lonMin, lonMax }
             timeseriesRegion: null,
             timeseriesMode: 'total',  // 'total' | 'anomaly' (subtract same-month climo)
+            // Composite anomaly: when true, each event year subtracts ITS
+            // best-match 30-yr climatology (8 windows stepped every 5 yr,
+            // see climo_windows.js) rather than the single active climo.
+            // Removes warming-trend bias when composites span many decades.
+            // Falls back to fixed climo if the needed window's tiles aren't
+            // on GCS yet.
+            slidingClimo: true,
             lorenzRef: 'lorenz',     // 'lorenz' (sorted) | 'simple' (area-mean)
             xsArc: null,             // { start:{lat,lon}, end:{lat,lon} } or null for zonal-mean
             xsDiag: 'field',         // 'field' | 'psi' | 'M' | 'N2' | 'epflux' | 'mbudget'
@@ -329,6 +337,19 @@ class GlobeApp {
                         || (!period && s.climatologyPeriod === 'default')
                         || period === 'default');
                 if (isStdForZscore) this.updateField();
+                // Sliding-climo: a composite-anomaly view in sliding mode
+                // pulls climo tiles from any of the 8 windows
+                // (1961-1990 … 1996-2025). Re-render whenever a mean
+                // tile of the displayed field arrives at the displayed
+                // level + month in any of those windows.
+                const slidingClimoWindow =
+                    /^(19|20)\d{2}-(19|20)\d{2}$/.test(period || '');
+                const isSlidingClimoTile = s.slidingClimo
+                    && s.customRange && s.year == null
+                    && s.decompose === 'anomaly'
+                    && name === s.field && monthMatches && levelMatches
+                    && slidingClimoWindow;
+                if (isSlidingClimoTile) this.updateField();
                 // Timeseries panel feeds from per-year tiles that aren't
                 // "active period" for the main renderer — don't miss them.
                 if (s.showTimeseries && s.timeseriesRegion
@@ -1724,6 +1745,12 @@ class GlobeApp {
         if ('month' in patch && this.orbit)               this.orbit.update(this.state.month, this.spinAngle, this.camera);
         if ('windMode' in patch) this.applyWindMode();
         if ('cmap' in patch) this.applyParticleContrast();
+        if ('slidingClimo' in patch) {
+            // Toggling sliding climo only matters when a composite is
+            // active and decompose=anomaly; the next render will pick up
+            // the new mode and route through the sliding helper.
+            this.updateField();
+        }
         if ('decompose' in patch) {
             this.applyParticleContrast();
             // Anomaly needs the full 12-month tile set to compute the annual
@@ -2656,28 +2683,44 @@ class GlobeApp {
                 // year/customRange so getField routes derived fields through
                 // their normal climatology compute (e.g. DLS climo from
                 // climatology u/v at 200+850, then |V_top − V_bot|).
-                const climoPeriod = (refPeriod !== 'default') ? refPeriod : 'default';
-                const refField = getField(this.state.field, {
-                    month: this.state.month,
-                    level: this.state.level,
-                    coord: this.state.vCoord,
-                    theta: this.state.theta,
-                    kind: 'mean',
-                    period: climoPeriod,
-                    // year + customRange omitted → climatology mean
-                });
-                annualMean = refField.isReal ? refField.values : null;
-                annualMeanForAgg = (m) => {
+                const fixedClimoPeriod = (refPeriod !== 'default') ? refPeriod : 'default';
+                // Sliding-climo: when composite is active and the user has
+                // opted in, each event year subtracts its best-match 30-yr
+                // climatology instead of the single active period. The
+                // event-weighted climo is mathematically equivalent to
+                // "subtract per-year climo, then average" (since the
+                // anomaly operator is linear) but only requires one tile
+                // per unique window — so a 9-event composite spanning 3
+                // climo windows fetches 3 climo tiles, not 9.
+                const useSliding = this.state.slidingClimo
+                    && this.state.customRange
+                    && this.state.year == null
+                    && Array.isArray(this.state.customRange.years)
+                    && refPeriod === 'default';
+                const refForMonth = (m) => {
+                    if (useSliding) {
+                        const w = this._weightedClimoForEvents(
+                            this.state.field, m, this.state.level,
+                            this.state.vCoord, this.state.theta,
+                            this.state.customRange.years,
+                        );
+                        if (w) return w;
+                        // Fall through to fixed-climo if any sliding tile
+                        // hasn't loaded — keeps the display useful while
+                        // the new period manifests fetch in the background.
+                    }
                     const rf = getField(this.state.field, {
                         month: m,
                         level: this.state.level,
                         coord: this.state.vCoord,
                         theta: this.state.theta,
                         kind: 'mean',
-                        period: climoPeriod,
+                        period: fixedClimoPeriod,
                     });
                     return rf.isReal ? rf.values : null;
                 };
+                annualMean = refForMonth(this.state.month);
+                annualMeanForAgg = refForMonth;
             } else if (refPeriod !== 'default' && !meta.derived) {
                 // Climate-change anomaly: same month from reference period.
                 // `kind` is propagated so when Display=±1σ we fetch the ref
@@ -3554,12 +3597,19 @@ class GlobeApp {
         const cmpSel  = document.getElementById('composite-cmp');
         const thresh  = document.getElementById('composite-threshold');
         const btn     = document.getElementById('composite-apply-btn');
+        const slidCB  = document.getElementById('toggle-sliding-climo');
         if (!sel || !btn) return;
         const refresh = () => this.refreshCompositeUI();
         sel    .addEventListener('change', refresh);
         cmpSel ?.addEventListener('change', refresh);
         thresh ?.addEventListener('input',  refresh);
         btn.addEventListener('click', () => this._applyComposite());
+        if (slidCB) {
+            slidCB.checked = !!this.state.slidingClimo;
+            slidCB.addEventListener('change', (e) => {
+                this.setState({ slidingClimo: e.target.checked });
+            });
+        }
         this.refreshCompositeUI();
     }
 
@@ -3720,6 +3770,36 @@ class GlobeApp {
             year: null,
         });
         this.refreshCompositeUI();
+    }
+
+    // ── sliding-climo helper for composite anomalies ──────────────────
+    // Given a list of event years, fetch each unique best-match climo tile
+    // and return the event-weighted mean grid: out[i,j] = (1/N) Σ_y climo_y[i,j].
+    // Returns null if any required climo window's tile hasn't loaded yet
+    // (or its manifest doesn't exist on GCS — e.g. a window we haven't
+    // built tiles for). Caller falls back to the active fixed period.
+    _weightedClimoForEvents(field, month, level, coord, theta, years) {
+        if (!Array.isArray(years) || years.length === 0) return null;
+        const groups = groupEventsByClimo(years);
+        const totalN = years.length;
+        const N = GRID.nlat * GRID.nlon;
+        const out = new Float32Array(N);
+        for (const { window, years: ys } of groups.values()) {
+            // Kick a manifest load for any window we haven't seen yet —
+            // first call is async; subsequent renders find the tile.
+            if (window.id !== '1991-2020' && window.id !== '1961-1990') {
+                loadManifest(window.id);   // fire-and-forget
+            }
+            const climo = getField(field, {
+                month, level, coord, theta,
+                kind: 'mean', period: window.id,
+            });
+            if (!climo.isReal) return null;
+            const w = ys.length / totalN;
+            const cv = climo.values;
+            for (let i = 0; i < N; i++) out[i] += w * cv[i];
+        }
+        return out;
     }
 
     // ── area-mean time series ─────────────────────────────────────────

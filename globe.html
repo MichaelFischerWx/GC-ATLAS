@@ -1575,7 +1575,13 @@
                 <label class="field-label" for="climo-period-select" style="margin-bottom:4px; font-size:0.66rem;">Period</label>
                 <select id="climo-period-select" title="Which 30-year window to use as the active climatology — drives the Mean tile, the ±1σ tile, and the decomposition reference.">
                     <option value="default">1991–2020 (current)</option>
-                    <option value="1961-1990">1961–1990 (previous)</option>
+                    <option value="1996-2025">1996–2025 (recent)</option>
+                    <option value="1986-2015">1986–2015</option>
+                    <option value="1981-2010">1981–2010</option>
+                    <option value="1976-2005">1976–2005</option>
+                    <option value="1971-2000">1971–2000</option>
+                    <option value="1966-1995">1966–1995</option>
+                    <option value="1961-1990">1961–1990 (oldest)</option>
                 </select>
             </div>
             <!-- Single-year-mode options: slider over available years -->
@@ -1642,6 +1648,15 @@
                         (below). ONI/RONI are 3-month running means anchored to their central
                         month, so e.g. <em>January</em> corresponds to DJF.
                     </p>
+                    <label class="check" style="font-size:0.7rem; margin-top:6px;">
+                        <input type="checkbox" id="toggle-sliding-climo" checked>
+                        Best-match climo per year
+                        <span class="field-help" style="display:block; margin-left:24px; margin-top:2px; font-size:0.62rem;">
+                            Each event year subtracts its closest 30-yr climatology
+                            (8 windows, stepped 5 yr) instead of one fixed period.
+                            Removes warming-trend bias when events span many decades.
+                        </span>
+                    </label>
                     <div class="composite-events" id="composite-events" aria-live="polite">—</div>
                     <button id="composite-apply-btn" type="button" class="range-compute">
                         <span id="composite-apply-label">Apply composite</span>
