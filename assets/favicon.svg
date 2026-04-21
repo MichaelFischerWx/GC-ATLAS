@@ -1,0 +1,37 @@
+<!--
+  GC-ATLAS browser favicon. Standalone glyph extracted from
+  gc-atlas-favicon-preview.svg's 64×64 design. SVG renders crisp at
+  any size in modern browsers; falls back to apple-touch-icon for
+  older Safari.
+
+  Color palette mirrors the site's --deep / --emerald / --ochre tokens.
+-->
+<svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="GC-ATLAS">
+  <defs>
+    <clipPath id="sphere">
+      <circle cx="32" cy="32" r="28"/>
+    </clipPath>
+  </defs>
+  <!-- rounded-square background -->
+  <rect x="0" y="0" width="64" height="64" rx="10" fill="#0a1612"/>
+  <!-- globe disc -->
+  <circle cx="32" cy="32" r="28" fill="#0f2219"/>
+  <!-- graticule + circulation bands, tilted 18° to read as axial tilt -->
+  <g clip-path="url(#sphere)" transform="rotate(18 32 32)">
+    <!-- equator -->
+    <line x1="4" y1="32" x2="60" y2="32" stroke="#5a9a7a" stroke-width="0.7" opacity="0.8"/>
+    <!-- meridional axis (front-side vertical) -->
+    <line x1="32" y1="4" x2="32" y2="60" stroke="#5a9a7a" stroke-width="0.5" opacity="0.55"/>
+    <!-- two great-circle ellipses for that "globe" feel -->
+    <ellipse cx="32" cy="32" rx="14" ry="28" fill="none" stroke="#3d7a5e" stroke-width="0.5" opacity="0.45"/>
+    <ellipse cx="32" cy="32" rx="24.2" ry="28" fill="none" stroke="#3d7a5e" stroke-width="0.5" opacity="0.4"/>
+    <!-- subtropical jets — emerald, the visual hook of the mark -->
+    <line x1="12" y1="11.6" x2="52" y2="11.6" stroke="#5fe0a5" stroke-width="1.8" opacity="0.95" stroke-linecap="round"/>
+    <line x1="12" y1="52.4" x2="52" y2="52.4" stroke="#5fe0a5" stroke-width="1.8" opacity="0.95" stroke-linecap="round"/>
+    <!-- tropical easterlies — amber -->
+    <line x1="5"  y1="24.4" x2="59" y2="24.4" stroke="#e8b862" stroke-width="1.3" opacity="0.9" stroke-linecap="round"/>
+    <line x1="5"  y1="39.6" x2="59" y2="39.6" stroke="#e8b862" stroke-width="1.3" opacity="0.9" stroke-linecap="round"/>
+  </g>
+  <!-- sphere outline -->
+  <circle cx="32" cy="32" r="28" fill="none" stroke="#5fe0a5" stroke-width="1"/>
+</svg>
