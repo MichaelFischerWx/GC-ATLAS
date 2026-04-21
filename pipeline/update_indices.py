@@ -96,6 +96,17 @@ SOURCES = {
         "url": "https://psl.noaa.gov/data/correlation/ao.data",
         "parser": "psl",
     },
+    "pdo": {
+        "label": "PDO",
+        "long_name": "Pacific Decadal Oscillation",
+        "description": "Leading EOF of monthly N-Pacific SST anomalies "
+                       "(N of 20°N). Decadal-scale: sustained warm or "
+                       "cool phases lasting 20-30 years that modulate "
+                       "ENSO teleconnections, US drought / fishery "
+                       "regimes. Mantua et al. (1997).",
+        "url": "https://psl.noaa.gov/data/correlation/pdo.data",
+        "parser": "psl",
+    },
     "amm": {
         "label": "AMM",
         "long_name": "Atlantic Meridional Mode",
@@ -121,27 +132,47 @@ SOURCES = {
 }
 
 
-def _is_missing(v: float) -> bool:
-    # PSL uses -99.9, some files use -999.0 — anything this negative is
-    # a sentinel (no real index sits near that magnitude).
-    return (not math.isfinite(v)) or (v <= -50.0)
+def _is_missing(v: float, sentinels: tuple[float, ...]) -> bool:
+    if not math.isfinite(v):
+        return True
+    # The PSL footer line declares this file's missing-value indicator
+    # explicitly (-9.90, -99.9, -999.0 — varies by file). Match against
+    # all known sentinels with float tolerance.
+    return any(abs(v - s) < 0.05 for s in sentinels)
 
 
 def parse_psl(text: str) -> dict[str, list[float | None]]:
-    """Parse a PSL correlation .data file (year + 12 monthly values)."""
+    """Parse a PSL correlation .data file (year + 12 monthly values).
+    Footer line carries the missing-value sentinel for this file."""
     out: dict[str, list[float | None]] = {}
     lines = [ln for ln in text.splitlines() if ln.strip()]
-    # First line is "<start> <end>"; drop it.
-    it = iter(lines[1:])
-    for ln in it:
+    # First line: "<start> <end>". Anything after the data block typically
+    # starts with the missing-value sentinel (a single-number line) and
+    # may then carry a description / source URL.
+    sentinels: list[float] = [-99.9, -999.0, -9.9]   # sane defaults
+    data_lines: list[str] = []
+    for ln in lines[1:]:
         parts = ln.split()
-        if len(parts) < 13:
-            # Trailing footer (e.g. source tag, end sentinel) — stop parsing.
-            break
+        if len(parts) >= 13:
+            try:
+                int(parts[0])
+                data_lines.append(ln)
+                continue
+            except ValueError:
+                pass
+        # Footer territory — try parsing as a lone sentinel value.
+        if len(parts) == 1:
+            try:
+                sentinels.append(float(parts[0]))
+            except ValueError:
+                pass
+    sentinels_t = tuple(sentinels)
+    for ln in data_lines:
+        parts = ln.split()
         try:
             year = int(parts[0])
         except ValueError:
-            break
+            continue
         months: list[float | None] = []
         for s in parts[1:13]:
             try:
@@ -149,7 +180,7 @@ def parse_psl(text: str) -> dict[str, list[float | None]]:
             except ValueError:
                 months.append(None)
                 continue
-            months.append(None if _is_missing(v) else v)
+            months.append(None if _is_missing(v, sentinels_t) else v)
         out[str(year)] = months
     return out
 
@@ -182,7 +213,8 @@ def parse_cpc_seasonal(text: str) -> dict[str, list[float | None]]:
         except ValueError:
             continue
         row = out.setdefault(str(year), [None] * 12)
-        row[center] = None if _is_missing(v) else v
+        # CPC RONI uses -99.9; also catch -9.9 / -999.0 for safety.
+        row[center] = None if _is_missing(v, (-99.9, -9.9, -999.0)) else v
     return out
 
 
