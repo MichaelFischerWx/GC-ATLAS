@@ -1395,6 +1395,11 @@ class GlobeApp {
     // Position the period labels above each half of the swipe-compare and
     // refresh their text. Called from animate() so they track camera zoom /
     // central-meridian shift / divider drag without per-event wiring.
+    //
+    // Diff style (A − B painted in place on one map) repurposes the left
+    // label as a single centered "A − B" caption and hides the right
+    // label + drag handle — there's no divider to drag and no two-half
+    // split to identify, just one painted difference field.
     updateCompareLabels() {
         const lEl = document.getElementById('compare-label-left');
         const rEl = document.getElementById('compare-label-right');
@@ -1409,30 +1414,44 @@ class GlobeApp {
         }
         const fmt = (p) => p === 'default' ? '1991–2020'
                        : (p === '1961-1990' ? '1961–1990' : p);
-        // Left half labels the active climatology OR the active year if
-        // the user is viewing a single-year snapshot.
-        lEl.textContent = this.state.year != null
+        const leftLabel = this.state.year != null
             ? String(this.state.year)
             : fmt(this.state.climatologyPeriod);
-        // Right half labels the compare target — a specific year wins over
-        // the reference-period dropdown when both are set.
+        let rightLabel;
         if (this.state.compareYear != null) {
-            rEl.textContent = String(this.state.compareYear);
+            rightLabel = String(this.state.compareYear);
         } else {
             const refP = this.compareRefPeriod();
-            rEl.textContent = refP ? fmt(refP) : '—';
+            rightLabel = refP ? fmt(refP) : '—';
         }
 
-        // Project the divider's world position to screen coords so the
-        // labels stay centred on each visible half regardless of zoom or
-        // central-meridian shift.
-        const split = this.state.compareSplit ?? 0.5;
-        const worldPos = new THREE.Vector3((split - 0.5) * MAP_W, 0, 0);
-        const ndc = worldPos.clone().project(this.camera);
         const canvas = this.renderer.domElement;
         const canvasRect = canvas.getBoundingClientRect();
         const containerRect = canvas.parentElement.getBoundingClientRect();
         const offsetX = canvasRect.left - containerRect.left;
+
+        const isDiff = this.state.compareStyle === 'diff';
+        if (isDiff) {
+            // One centered caption: "A − B". Right label + drag handle
+            // have no role in diff mode (no divider, no two halves).
+            lEl.textContent = `${leftLabel} − ${rightLabel}`;
+            const padding = 90;
+            const center = offsetX + canvasRect.width / 2;
+            lEl.style.left = Math.max(offsetX + padding,
+                Math.min(offsetX + canvasRect.width - padding, center)) + 'px';
+            if (lEl.hidden) lEl.hidden = false;
+            if (!rEl.hidden) rEl.hidden = true;
+            if (hEl && !hEl.hidden) hEl.hidden = true;
+            return;
+        }
+
+        // Swipe style — two labels straddling the movable divider, drag
+        // handle pinned to it.
+        lEl.textContent = leftLabel;
+        rEl.textContent = rightLabel;
+        const split = this.state.compareSplit ?? 0.5;
+        const worldPos = new THREE.Vector3((split - 0.5) * MAP_W, 0, 0);
+        const ndc = worldPos.clone().project(this.camera);
         const splitX = (ndc.x + 1) * 0.5 * canvasRect.width;
         const leftCenter  = offsetX + splitX * 0.5;
         const rightCenter = offsetX + (splitX + canvasRect.width) * 0.5;
@@ -1443,10 +1462,6 @@ class GlobeApp {
             Math.min(offsetX + canvasRect.width - padding, rightCenter)) + 'px';
         if (lEl.hidden) lEl.hidden = false;
         if (rEl.hidden) rEl.hidden = false;
-        // Drag handle pinned to the divider — same screen-x as the line, plus
-        // a small clamp so it stays on-canvas at extreme split positions.
-        // Hide it once the user has dragged at least once (so it stops
-        // blocking data); shows again on next toggle-off → toggle-on.
         if (hEl) {
             if (this._compareDragged) {
                 if (!hEl.hidden) hEl.hidden = true;
