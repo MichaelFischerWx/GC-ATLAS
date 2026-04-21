@@ -2770,6 +2770,16 @@ class GlobeApp {
             current.vmin = range.vmin;
             current.vmax = range.vmax;
         }
+        // Standardized-anomaly default range: hard-cap at ±5 σ. Real
+        // climatological z-scores almost never exceed ±5; anything beyond
+        // is dominated by division-by-near-zero in low-variance cells
+        // (e.g. tropical SST σ → 0.1 K → a 50 K artifact in a single
+        // pixel pulls the percentile clamp to ±500). The user can still
+        // override with the cb-min/cb-max inputs to see extremes.
+        if (mode === 'zscore') {
+            current.vmin = -5;
+            current.vmax =  5;
+        }
         // Expose the climatology baseline (pressure-coord branch) so swipe-
         // compare can apply the same anomaly transform to the right half.
         current.annualMean = annualMean;
