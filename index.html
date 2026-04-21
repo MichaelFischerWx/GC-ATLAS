@@ -93,10 +93,11 @@
             width: 28px; height: 28px;
             display: grid; place-items: center;
             border-radius: 6px;
-            background: radial-gradient(circle at 35% 30%, var(--emerald-bright), var(--emerald) 55%, #062f25 100%);
-            box-shadow: 0 0 18px var(--emerald-glow), inset 0 0 6px rgba(255,255,255,0.15);
+            background: #0f2219;
+            border: 1px solid rgba(95, 224, 165, 0.35);
+            box-shadow: 0 0 10px rgba(14, 140, 110, 0.25);
         }
-        .topbar-mark svg { width: 18px; height: 18px; color: var(--paper); opacity: 0.9; }
+        .topbar-mark svg { width: 22px; height: 22px; }
         .topbar-logo {
             font-size: 1.25rem;
             font-weight: 700;
@@ -436,12 +437,21 @@
     <div class="topbar-inner">
         <div class="topbar-brand">
             <div class="topbar-mark">
-                <!-- stylized circulation: a globe with flow arrows -->
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
-                    <circle cx="12" cy="12" r="9"/>
-                    <path d="M3 12h18"/>
-                    <path d="M12 3c3 3 3 15 0 18"/>
-                    <path d="M12 3c-3 3 -3 15 0 18"/>
+                <!-- Mini GC-ATLAS brand glyph: tilted globe with two
+                     emerald subtropical-jet bands. Simplified from
+                     assets/favicon.svg — trades dropped, ellipses
+                     dropped for legibility at 22-px display size. -->
+                <svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" aria-label="GC-ATLAS">
+                    <defs>
+                        <clipPath id="tbm-sphere"><circle cx="32" cy="32" r="28"/></clipPath>
+                    </defs>
+                    <g clip-path="url(#tbm-sphere)" transform="rotate(18 32 32)">
+                        <line x1="4" y1="32" x2="60" y2="32" stroke="#5a9a7a" stroke-width="1.4" opacity="0.85"/>
+                        <line x1="32" y1="4" x2="32" y2="60" stroke="#5a9a7a" stroke-width="1.1" opacity="0.6"/>
+                        <line x1="12" y1="11.6" x2="52" y2="11.6" stroke="#5fe0a5" stroke-width="3.4" opacity="0.95" stroke-linecap="round"/>
+                        <line x1="12" y1="52.4" x2="52" y2="52.4" stroke="#5fe0a5" stroke-width="3.4" opacity="0.95" stroke-linecap="round"/>
+                    </g>
+                    <circle cx="32" cy="32" r="28" fill="none" stroke="#5fe0a5" stroke-width="2"/>
                 </svg>
             </div>
             <div class="topbar-logo">GC<span class="accent">-</span>ATLAS</div>
