@@ -2502,14 +2502,32 @@ class GlobeApp {
                 if (effMode === 'total' || !effMode) {
                     refDec = { values: refField.values, vmin: refField.vmin, vmax: refField.vmax };
                 } else if (effMode === 'anomaly') {
-                    // Year-vs-year anomaly compare: subtract the SAME climo
-                    // baseline from both halves so the swipe shows how each
-                    // year departs from the reference period. Without this,
-                    // the right half would be a raw total and the signals
-                    // wouldn't be comparable.
+                    // Year-vs-year anomaly compare. Two baseline modes:
+                    //
+                    //   referencePeriod = 'best-match' + compareYear set →
+                    //     each side uses its OWN best-match 30-yr climo
+                    //     (left = bestClimoFor(leftYear), right =
+                    //      bestClimoFor(compareYear)). Each half is
+                    //     detrended against its own era — more honest for
+                    //     events separated by decades, but the two halves
+                    //     now reference different baselines.
+                    //
+                    //   otherwise → SHARED baseline (decomp.annualMean from
+                    //     the left side) so both halves measure departures
+                    //     from one fixed climo.
+                    let rightAnnualMean = decomp.annualMean;
+                    if (this.state.referencePeriod === 'best-match'
+                        && compareYear != null) {
+                        const rightClimoPeriod = bestClimoFor(compareYear).id;
+                        const rightClimo = getField(field, {
+                            month, level, coord: vCoord, theta,
+                            kind: 'mean', period: rightClimoPeriod,
+                        });
+                        if (rightClimo.isReal) rightAnnualMean = rightClimo.values;
+                    }
                     refDec = decompose(
                         refField.values, GRID.nlat, GRID.nlon, 'anomaly',
-                        decomp.annualMean,
+                        rightAnnualMean,
                         decomp.clamp ? { clamp: decomp.clamp } : {},
                     );
                 } else {
@@ -2652,9 +2670,15 @@ class GlobeApp {
                     // the chosen alt-climo (refPeriod) or the active default.
                     // When both year and refPeriod are set, refPeriod wins
                     // (deeper baseline for the year-anomaly).
-                    const refArgs = hasRefPeriod
-                        ? { period: refPeriod }
-                        : { /* active climo — no extras */ };
+                    // 'best-match' in year mode resolves to bestClimoFor(year).
+                    let refArgs;
+                    if (refPeriod === 'best-match' && hasYear) {
+                        refArgs = { period: bestClimoFor(this.state.year).id };
+                    } else if (hasRefPeriod && refPeriod !== 'best-match') {
+                        refArgs = { period: refPeriod };
+                    } else {
+                        refArgs = { /* active climo — no extras */ };
+                    }
                     const refField = getField(fieldName, {
                         month: this.state.month, coord: 'theta', theta, ...refArgs,
                     });
@@ -2726,7 +2750,19 @@ class GlobeApp {
                 // year/customRange so getField routes derived fields through
                 // their normal climatology compute (e.g. DLS climo from
                 // climatology u/v at 200+850, then |V_top − V_bot|).
-                const fixedClimoPeriod = (refPeriod !== 'default') ? refPeriod : 'default';
+                //
+                // Reference-period resolution:
+                //   'best-match' + single year → bestClimoFor(year).id
+                //   'default'                  → active 30-yr window
+                //   explicit window            → that window
+                let fixedClimoPeriod;
+                if (refPeriod === 'best-match' && this.state.year != null) {
+                    fixedClimoPeriod = bestClimoFor(this.state.year).id;
+                } else if (refPeriod !== 'default' && refPeriod !== 'best-match') {
+                    fixedClimoPeriod = refPeriod;
+                } else {
+                    fixedClimoPeriod = 'default';
+                }
                 // Sliding-climo: when composite is active and the user has
                 // opted in, each event year subtracts its best-match 30-yr
                 // climatology instead of the single active period. The
@@ -2735,11 +2771,13 @@ class GlobeApp {
                 // anomaly operator is linear) but only requires one tile
                 // per unique window — so a 9-event composite spanning 3
                 // climo windows fetches 3 climo tiles, not 9.
+                // 'best-match' in year mode is handled above via the
+                // fixedClimoPeriod path; sliding only applies to composites.
                 const useSliding = this.state.slidingClimo
                     && this.state.customRange
                     && this.state.year == null
                     && Array.isArray(this.state.customRange.years)
-                    && refPeriod === 'default';
+                    && (refPeriod === 'default' || refPeriod === 'best-match');
                 const refForMonth = (m) => {
                     if (useSliding) {
                         const w = this._weightedClimoForEvents(
