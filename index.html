@@ -689,8 +689,13 @@
                 </div>
             </a>
 
-            <!-- 4. Monsoon march — annual-cycle precipitation GIF -->
-            <a class="view-tile" href="globe.html#v=g&f=tp&m=7"
+            <!-- 4. Monsoon march — annual-cycle precipitation GIF.
+                 cbmin=0 / cbmax=15 pin the colorbar to 0-15 mm/day so
+                 visitors scrubbing through months see the same stable
+                 scale the GIF does — without the clamps the colorbar
+                 auto-adjusts every month and the perceived intensity
+                 swings around. thalo cmap matches the GIF too. -->
+            <a class="view-tile" href="globe.html#v=g&f=tp&m=7&cm=thalo&cbmin=0&cbmax=15"
                style="--tile-a:#184536; --tile-b:#D4A84B">
                 <div class="view-thumb">
                     <img src="assets/gallery/monsoon-jja.gif" alt=""
