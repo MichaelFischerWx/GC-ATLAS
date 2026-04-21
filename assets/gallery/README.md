@@ -33,7 +33,7 @@ tile upgrades automatically.
 
 Tile 1 looks for `earth-orbit.gif` (not `.jpg`) because the whole point
 of the Orbit view is the seasonal motion — a static frame misses it.
-Capture route: open `globe.html#v=o&f=t2m` (or any other field), then **Export image / GIF
+Capture route: open `globe.html#v=o&f=sst`, then **Export image / GIF
 → GIF · annual cycle**. The exporter steps through all 12 months and
 captures a frame each, giving you a one-year loop. Target ~2–5 MB so
 the landing page stays fast; bump down the capture width in
