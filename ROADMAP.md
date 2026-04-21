@@ -1,6 +1,6 @@
 # GC-ATLAS — Roadmap
 
-Last update: 2026-04-19 (added χ/ψ, ±1σ variability, Q+H budgets, friction/mountain torques, geostrophic wind, PV refactor, multi-period scaffolding for 1961–1990 climate-change view)
+Last update: 2026-04-21 (σ-tiles for derived fields — build_derived_std.py — so σ-anom works on wspd/mse/dls; ROADMAP resynced with actual GCS state)
 
 ## Where we are
 
@@ -8,10 +8,12 @@ Last update: 2026-04-19 (added χ/ψ, ±1σ variability, Q+H budgets, friction/m
 **Public site** on GitHub Pages: https://michaelfischerwx.github.io/GC-ATLAS/ — tiles served from `gs://gc-atlas-era5` (us-east1, public read).
 GA4 wired (G-M1M3TNNJCB) on landing + globe pages.
 
-**Data on disk:**
-- `data/raw/` — 26 ERA5 monthly-mean NetCDFs (1991–2020), ~20 GB. Gitignored.
-- `data/tiles/` — per-(var, level, month) Float32 binaries at 1° + std variants + `manifest.json`, ~1.3 GB. Gitignored, mirrored on GCS.
-- `data/raw_1961_1990/` — 28 NetCDFs for the second period (downloaded 2026-04-19). Awaiting tile build + GCS push.
+**Data on disk + GCS** (`gs://gc-atlas-era5`):
+- `data/raw/` — ERA5 monthly-mean NetCDFs (1991–present), ~20 GB. Gitignored.
+- `data/raw_1961_1990/` — 28 NetCDFs for the 1961–1990 reference window. Tile build + GCS push **done** (2026-04-19 or earlier).
+- **Eight climatology tile trees on GCS:** `tiles/` (default 1991–2020, ~1.0 GB) + sliding 30-yr windows `tiles_1961_1990`, `tiles_1966_1995`, `tiles_1971_2000`, `tiles_1976_2005`, `tiles_1981_2010`, `tiles_1986_2015`, `tiles_1996_2025`.
+- `tiles_per_year/` — ~14 GB merged 1991-present per-year cubes (f16-gz).
+- **Known gap in default `tiles/` tree:** `has_std: false` for 8 pressure-level raw vars (`t, u, v, q, r, vo, w, z`) — the tree was built before std tiles were added to `build_tiles.py` for those vars. Every *other* period tree has full std coverage. Fix: `python pipeline/build_tiles.py --force` (for those vars), `python pipeline/compress_tiles.py --root data/tiles`, then `gcloud storage rsync --recursive data/tiles gs://gc-atlas-era5/tiles`. Until done, σ-anom on those 8 vars in the *active* 1991–2020 climo silently falls back.
 
 ---
 
@@ -39,6 +41,7 @@ GA4 wired (G-M1M3TNNJCB) on landing + globe pages.
 ### Display mode (Mean / ±1σ variability)
 - Toggle in the Display group; ±1σ swaps to std tiles, forces a sequential colormap
 - Decomposition disabled in σ mode (no anomaly-of-stddev)
+- σ-anom (standardized anomaly) decomposition: (value − climo mean) ÷ climo σ. Hard-capped at ±5σ. Works for raw pressure-level + single-level vars and — after `pipeline/build_derived_std.py` is pushed to GCS — for derived fields `wspd`, `mse`, `dls` too. θ-coord σ-anom is still a degraded fallback (no σ tiles in θ-space); that lands with the Phase-4 daily-data work.
 
 ### Wind overlays
 - **Off / Particles / Barbs**
@@ -71,13 +74,27 @@ Cross-section panel: **expand-to-fullscreen toggle**, **hover readout** (lat, p,
 
 ## Pending / In flight
 
-### 1961–1990 second climatology (overnight 2026-04-18 → 2026-04-19)
-- ✅ Pipeline scripts updated with `--period START-END` flag (2026-04-19)
-- ✅ Frontend reference-period dropdown + climate-change-anomaly logic wired
-- ✅ Raw NetCDFs downloaded to `data/raw_1961_1990/` (28 vars including ews + oro)
-- 🟡 **Pending: tile build** (user runs `python pipeline/build_tiles.py --period 1961-1990` for both groups, then `pipeline/build_helmholtz.py --period 1961-1990`)
-- 🟡 **Pending: GCS push** (`gcloud storage cp -r data/tiles_1961_1990 gs://gc-atlas-era5/`)
-- After push + hard reload, the **Anomaly reference** dropdown's `vs. 1961–1990 (climate change)` option will work for raw fields. Derived fields (wspd, mse, pv) fall back to self-anomaly in reference mode.
+### Derived-field σ tiles (2026-04-21)
+- ✅ `pipeline/build_derived_std.py` — computes cross-year σ for `wspd`, `mse`, `dls` from raw NetCDFs; writes `std_<level>_<month>.bin` in each period's tile tree.
+- ✅ Frontend routed (`data.js` + `era5.js`): when the manifest reports `has_std: true` on a derived var, σ-anom fetches the pipeline tile instead of silently falling back.
+- 🟡 **Pending: pipeline run + push** (user task). Per period:
+  ```bash
+  python pipeline/build_derived_std.py                      # default 1991-2020
+  python pipeline/build_derived_std.py --period 1961-1990   # and each sliding window …
+  python pipeline/compress_tiles.py --root data/tiles
+  gcloud storage rsync --recursive data/tiles gs://gc-atlas-era5/tiles
+  ```
+- After push + hard reload, σ-anom on wspd / mse / dls in pressure coord will paint honest z-scores. θ-coord σ-anom on these remains a graceful fallback.
+
+### Default-tree std-tile backfill (2026-04-21 surfaced)
+- 🟡 **Pending:** rebuild std tiles for `t, u, v, q, r, vo, w, z` in `data/tiles/` (default 1991-2020). The other seven period trees already have them.
+  ```bash
+  for v in t u v q r vo w z; do
+    python pipeline/build_tiles.py --var "$v" --group pressure_levels --force
+  done
+  python pipeline/compress_tiles.py --root data/tiles
+  gcloud storage rsync --recursive data/tiles gs://gc-atlas-era5/tiles
+  ```
 
 ---
 

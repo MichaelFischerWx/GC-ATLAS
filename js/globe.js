@@ -2918,8 +2918,23 @@ class GlobeApp {
                     return rf.isReal ? rf.values : null;
                 };
             } else {
+                // Derived fields (wspd, mse, dls) need the derived field
+                // evaluated per-month to form the annual mean — their
+                // component tiles aren't the right source. Route through
+                // getField which hits computeDerived and fills the per-month
+                // cache opportunistically.
                 annualMean = meta.derived === true
-                    ? null
+                    ? annualMeanFrom(
+                        (m) => {
+                            const d = getField(this.state.field, {
+                                month: m, level: useLevel,
+                                coord: this.state.vCoord,
+                                theta: this.state.theta,
+                            });
+                            return d.isReal ? d.values : null;
+                        },
+                        GRID.nlat, GRID.nlon,
+                    )
                     : annualMeanFrom(
                         (m) => cachedMonth(this.state.field, m, useLevel),
                         GRID.nlat, GRID.nlon,

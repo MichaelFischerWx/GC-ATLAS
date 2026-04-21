@@ -9,7 +9,21 @@
 // jets, Hadley return, stationary waves, subtropical highs). They exist so
 // the renderer works offline / before real tiles are staged.
 
-import { requestField as requestEra5, availableLevels, cachedMonth } from './era5.js';
+import { requestField as requestEra5, availableLevels, cachedMonth, getManifest } from './era5.js';
+
+// Does the manifest for `period` carry pipeline-materialised std tiles for
+// this derived field? Used to un-gate σ-anom on wspd / mse / dls once the
+// tiles built by pipeline/build_derived_std.py are pushed to GCS — older
+// trees without those tiles keep falling back to mean.
+function derivedHasPipelineStd(name, period) {
+    const m = getManifest(period === 'default' ? 'default' : period);
+    if (!m) return false;
+    for (const g of Object.values(m.groups)) {
+        const v = g[name];
+        if (v && v.has_std) return true;
+    }
+    return false;
+}
 
 export const GRID = { nlat: 181, nlon: 360 };
 export const LEVELS = [10, 50, 100, 150, 200, 250, 300, 500, 700, 850, 925, 1000];
@@ -376,11 +390,16 @@ export function getField(name, { month = 1, level = 500, coord = 'pressure', the
 
     const isenMode = (coord === 'theta') && meta.type === 'pl';
 
-    // Derived / isentropic fields don't have pre-computed std tiles —
-    // computing std-of-derived from std-of-components requires assumptions
-    // about correlation that aren't generally valid. Fall back to mean for
-    // those paths in std mode (and tag the return so UI can surface this).
-    const stdUnsupported = kind === 'std' && (meta.derived || isenMode);
+    // Derived (pressure-coord) fields gain honest σ tiles via
+    // pipeline/build_derived_std.py — computed year-by-year from raw
+    // components, then cross-year std. When those tiles are present
+    // in the manifest for `period`, fetch them like any raw std tile.
+    // Otherwise (isentropic mode, or trees without the derived std tiles)
+    // fall back to mean and flag stdUnavailable so the UI can surface it.
+    const derivedStdAvailable = kind === 'std' && meta.derived && !isenMode
+                                && derivedHasPipelineStd(name, period);
+    const stdUnsupported = kind === 'std' && (isenMode ||
+                                              (meta.derived && !derivedStdAvailable));
     const effKind = stdUnsupported ? 'mean' : kind;
     // Reference-period (non-default) is supported for raw fields (direct tile
     // fetch) AND for isentropic mode (the θ cube + interpolation machinery
@@ -400,6 +419,35 @@ export function getField(name, { month = 1, level = 500, coord = 'pressure', the
     // refPeriod (e.g. 1961-1990) is only propagated when year is null, since
     // year takes precedence as the tile-source selector.
     const refPeriodArg = (effYear == null && effPeriod !== 'default') ? effPeriod : null;
+    // Derived σ: pipeline-materialised tiles (build_derived_std.py) live
+    // alongside the raw σ tiles and load the same way. No per-year variant
+    // for derived σ — σ is climatology-only by construction.
+    if (meta.derived && derivedStdAvailable && effKind === 'std' && effYear == null) {
+        const era = requestEra5(name, { month, level, kind: 'std', period: effPeriod });
+        if (era) {
+            return {
+                values: era.values, vmin: era.vmin, vmax: era.vmax,
+                shape: era.shape ?? [GRID.nlat, GRID.nlon],
+                lats: LATS, lons: LONS,
+                ...meta,
+                long_name: meta.name,
+                units: meta.units,
+                isReal: true,
+                kind: 'std',
+                period: effPeriod,
+                year: null,
+            };
+        }
+        // Tile still pending — fall through to pendingField at function tail.
+        return {
+            ...pendingField(),
+            shape: [GRID.nlat, GRID.nlon],
+            lats: LATS, lons: LONS,
+            ...meta,
+            isReal: false, kind: 'std',
+            period: effPeriod,
+        };
+    }
     if (meta.derived) {
         const d = computeDerived(name, month, level, coord, theta, effYear, refPeriodArg);
         if (d) {

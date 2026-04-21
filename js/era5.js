@@ -304,6 +304,10 @@ export function prefetchField(name, { level = null, months = [1,2,3,4,5,6,7,8,9,
     const r = resolveField(name, eff);
     if (!r) return;
     if (kind === 'std' && r.meta.has_std === false) return;
+    // Derived-σ vars (wspd / mse / dls) declare has_mean: false in their
+    // manifest entry — the mean is computed client-side from components,
+    // so chasing a non-existent mean tile would 404-loop. Guard here.
+    if (kind === 'mean' && r.meta.has_mean === false) return;
     const useLevel = r.meta.levels ? level : null;
     for (const m of months) {
         const key = keyOf(name, m, useLevel, kind, eff, year);
