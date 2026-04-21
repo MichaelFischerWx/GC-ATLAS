@@ -1519,11 +1519,39 @@
             .hamburger { display: flex; }
             .globe-stage { width: 100%; }
             .view-toggle { top: 72px; right: 14px; }  /* below topbar, clear of hamburger */
+            /* Push share-btn below the view-toggle row so the two don't
+               stack on top of each other on phones. */
+            .share-btn { top: 116px; right: 14px; }
             .colorbar { left: 12px; right: 12px; bottom: 12px; min-width: 0; }
+            /* Diagnostic panels are wider than the phone viewport — hide
+               on mobile. The toggles in the sidebar still set state, but
+               the visual panel won't render until the user resizes to a
+               wider screen. */
             .xsection { display: none; }
+            .lorenz   { display: none; }
             .tips-panel { display: none; }
             .topbar-nav { gap: 4px; }
             .topbar-nav a { padding: 5px 8px; font-size: 0.75rem; }
+            /* GIF modal — let the card breathe to the viewport edges. */
+            .gif-modal-card {
+                min-width: 0 !important;
+                max-width: calc(100vw - 24px) !important;
+                width: calc(100vw - 24px);
+            }
+            /* Composite builder + bounds row — the lat/lon inputs are too
+               wide for a 290 px sidebar in a single row. Let them wrap. */
+            .ts-bounds-row { flex-wrap: wrap; }
+            .ts-bounds-input { width: 50px !important; }
+            /* The 5-button decomposition row gets cramped on mobile.
+               Allow the segmented buttons to wrap onto a second line
+               instead of overflowing the sidebar. */
+            .decomp-seg { flex-wrap: wrap; }
+            /* σ-anom button label was a bit wider — ensure all five
+               decomp buttons share width evenly when wrapping. */
+            .decomp-seg button { flex: 1 1 calc(33% - 2px); }
+            /* The pick-region banner sits at top:78 on desktop; on phones
+               that puts it tucked under the view-toggle row. Bump down. */
+            .ts-pick-banner { top: 130px; font-size: 0.7rem; padding: 6px 12px; }
         }
     </style>
 </head>
