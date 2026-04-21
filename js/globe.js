@@ -181,6 +181,19 @@ class GlobeApp {
         if (this.state.compareMode) this.applyCompareMode();
         if (!this.state.showSun) this.applySunVisibility();
         if (this.state.windMode && this.state.windMode !== 'particles') this.applyWindMode();
+        // URL-restored best-match anomaly reference: preload every 30-yr
+        // window's manifest up front (setState's best-match hook doesn't
+        // fire on bulk-assigned state). Each manifest triggers an
+        // updateField when it lands.
+        if (this.state.referencePeriod === 'best-match') {
+            for (const w of CLIMO_WINDOWS) {
+                loadManifest(w.id).then((ok) => {
+                    if (ok && this.state.referencePeriod === 'best-match') {
+                        this.updateField();
+                    }
+                });
+            }
+        }
         this.updateField();
         this.animate();
         this.bootstrapEra5();
@@ -364,6 +377,16 @@ class GlobeApp {
                     && name === s.field && monthMatches && levelMatches
                     && slidingClimoWindow;
                 if (isSlidingClimoTile) this.updateField();
+                // Best-match reference: a single-year or year-vs-year
+                // compare view using the "vs. best-match climatology"
+                // option pulls climo tiles from any of the 8 windows.
+                // Same re-render trigger as composite sliding.
+                const isBestMatchTile = s.referencePeriod === 'best-match'
+                    && (s.year != null || s.compareYear != null)
+                    && s.decompose === 'anomaly'
+                    && name === s.field && monthMatches && levelMatches
+                    && slidingClimoWindow;
+                if (isBestMatchTile) this.updateField();
                 // Timeseries panel feeds from per-year tiles that aren't
                 // "active period" for the main renderer — don't miss them.
                 if (s.showTimeseries && s.timeseriesRegion
@@ -2028,7 +2051,21 @@ class GlobeApp {
         // colorbar stabilises quickly once any tile lands.
         // Reference-period change: lazy-load the manifest, then prefetch the
         // current field at all 12 months for the reference period.
-        if ('referencePeriod' in patch && patch.referencePeriod !== 'default') {
+        if ('referencePeriod' in patch && patch.referencePeriod === 'best-match') {
+            // best-match fans out across every 30-yr window (the active
+            // year or compareYear picks the specific one) — preload all
+            // 8 manifests up front so getField(..., period: '1996-2025')
+            // etc. don't return null on first call. No single-period
+            // prefetch here since we don't yet know which window will
+            // apply; re-render fires when any manifest lands.
+            for (const w of CLIMO_WINDOWS) {
+                loadManifest(w.id).then((ok) => {
+                    if (ok && this.state.referencePeriod === 'best-match') {
+                        this.updateField();
+                    }
+                });
+            }
+        } else if ('referencePeriod' in patch && patch.referencePeriod !== 'default') {
             (async () => {
                 const ok = await loadManifest(patch.referencePeriod);
                 if (!ok) {
