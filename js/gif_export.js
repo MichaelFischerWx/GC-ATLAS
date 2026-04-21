@@ -16,7 +16,12 @@ import { GIFEncoder, quantize, applyPalette } from 'https://unpkg.com/gifenc@1.0
 import { FIELDS } from './data.js';
 
 const DEFAULT_FPS = 15;
-const CAPTURE_MAX_WIDTH = 900;   // downscale to keep file size reasonable
+// Target render width for captured frames. Bumped from 900 → 1280 for
+// sharper text labels, coastlines, and contour lines. File-size cost:
+// roughly 1.8× larger (dimensions scale linearly, bytes scale with
+// pixel count). A 36-frame swipe-sweep climbs from ~8 MB to ~14 MB —
+// still well under any hard limit for browser downloads.
+const CAPTURE_MAX_WIDTH = 1280;
 const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 
 export class GifExporter {
@@ -188,19 +193,33 @@ export class GifExporter {
             throw new Error('Compare swipe sweep requires Map view with Compare enabled.');
         }
         const priorSplit = app.state.compareSplit;
+        // Particles + barbs animate per-frame in the render loop (they
+        // step positions every ~40 ms). Between captured frames that
+        // subtle motion shows up as flicker even with a global palette.
+        // Hide wind overlays for the duration of the capture — only the
+        // scalar field + coastlines + divider should differ between
+        // frames. Restored on exit (finally) so a capture failure
+        // doesn't leave the wind overlays hidden.
+        const priorWindMode = app.state.windMode;
+        const windWasOn = priorWindMode && priorWindMode !== 'off';
+        if (windWasOn) app.setState({ windMode: 'off' });
         const imgs = [];
-        for (let i = 0; i < nFrames; i++) {
-            // Cover the full 0.02–0.98 span (matches applyCompareSplit's
-            // clamp) so the divider really sweeps edge-to-edge.
-            const s = 0.02 + (i / (nFrames - 1)) * (0.98 - 0.02);
-            app.setState({ compareSplit: s });
-            // Two rAF cycles so the clip plane + split-line updates settle
-            // before we grab the pixels.
-            await this._rafDelay(40);
-            imgs.push(this._captureFrame());
-            onProgress?.(i + 1, nFrames);
+        try {
+            for (let i = 0; i < nFrames; i++) {
+                // Cover the full 0.02–0.98 span (matches applyCompareSplit's
+                // clamp) so the divider really sweeps edge-to-edge.
+                const s = 0.02 + (i / (nFrames - 1)) * (0.98 - 0.02);
+                app.setState({ compareSplit: s });
+                // Two rAF cycles so the clip plane + split-line updates
+                // settle before we grab the pixels.
+                await this._rafDelay(40);
+                imgs.push(this._captureFrame());
+                onProgress?.(i + 1, nFrames);
+            }
+        } finally {
+            app.setState({ compareSplit: priorSplit });
+            if (windWasOn) app.setState({ windMode: priorWindMode });
         }
-        app.setState({ compareSplit: priorSplit });
         return this._encode(imgs, frameDelayMs);
     }
 
