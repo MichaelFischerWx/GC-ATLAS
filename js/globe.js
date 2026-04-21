@@ -1783,10 +1783,20 @@ class GlobeApp {
         if ('windMode' in patch) this.applyWindMode();
         if ('cmap' in patch) this.applyParticleContrast();
         if ('slidingClimo' in patch) {
-            // Toggling sliding climo only matters when a composite is
-            // active and decompose=anomaly; the next render will pick up
-            // the new mode and route through the sliding helper.
+            // Toggling sliding climo affects both the composite anomaly
+            // path AND the timeseries anomaly mode (both piggyback on
+            // this single toggle). Prefetch manifests for every climo
+            // window so the sliding path has tiles to draw from, and
+            // re-render both consumers.
+            if (patch.slidingClimo) {
+                for (const w of CLIMO_WINDOWS) {
+                    if (w.id !== '1991-2020' && w.id !== '1961-1990') {
+                        loadManifest(w.id);
+                    }
+                }
+            }
             this.updateField();
+            if (this.state.showTimeseries) this._scheduleTimeseriesRender();
         }
         if ('decompose' in patch) {
             this.applyParticleContrast();
@@ -4377,6 +4387,12 @@ class GlobeApp {
             anomaly: this.state.timeseriesMode === 'anomaly',
             period: this.state.climatologyPeriod === 'default'
                 ? 'default' : this.state.climatologyPeriod,
+            // Share the composite-builder's best-match toggle so the
+            // timeseries anomaly is trend-aware by default: each year
+            // subtracts its closest 30-yr climatology instead of one
+            // fixed window across 1961-2026.
+            slidingClimo: !!this.state.slidingClimo,
+            bestClimoForYear: bestClimoFor,
         });
         this._tsHoverCtx = tsRenderSeries(canvas, series, {
             units: meta.units,

@@ -59,22 +59,40 @@ export function computeSeries(getField, region, opts) {
     const {
         field, level = null, coord = 'pressure', theta = 330,
         years, anomaly = false, period = 'default',
+        // When true + anomaly, each year subtracts its best-match 30-yr
+        // climatology (via bestClimoForYear) instead of the single fixed
+        // `period`. Eliminates warming-trend bias when the series spans
+        // many decades. Caller supplies the resolver so this module
+        // stays decoupled from climo_windows.js.
+        slidingClimo = false,
+        bestClimoForYear = null,
     } = opts;
-    const climoCache = new Map();   // month → area-mean of climo tile
-    const monthClimoMean = (m) => {
-        if (climoCache.has(m)) return climoCache.get(m);
+    // Cache keyed by (period, month) so best-match mode — which fetches
+    // multiple climatology windows — deduplicates per window.
+    const climoCache = new Map();
+    const climoMean = (per, m) => {
+        const key = `${per}:${m}`;
+        if (climoCache.has(key)) return climoCache.get(key);
         const fc = getField(field, {
-            month: m, level, coord, theta, kind: 'mean', period,
+            month: m, level, coord, theta, kind: 'mean', period: per,
         });
         const v = fc.isReal
             ? areaMean(fc.values, GRID.nlat, GRID.nlon, fc.lats, fc.lons, region)
             : null;
-        climoCache.set(m, v);
+        climoCache.set(key, v);
         return v;
+    };
+    const periodForYear = (y) => {
+        if (slidingClimo && typeof bestClimoForYear === 'function') {
+            const w = bestClimoForYear(y);
+            if (w && w.id) return w.id;
+        }
+        return period;
     };
 
     const out = [];
     for (const y of years) {
+        const climoPeriod = periodForYear(y);
         for (let m = 1; m <= 12; m++) {
             const f = getField(field, {
                 month: m, level, coord, theta, kind: 'mean',
@@ -85,7 +103,7 @@ export function computeSeries(getField, region, opts) {
                 const v = areaMean(f.values, GRID.nlat, GRID.nlon, f.lats, f.lons, region);
                 if (Number.isFinite(v)) {
                     if (anomaly) {
-                        const vc = monthClimoMean(m);
+                        const vc = climoMean(climoPeriod, m);
                         value = (vc != null && Number.isFinite(vc)) ? (v - vc) : null;
                     } else {
                         value = v;
