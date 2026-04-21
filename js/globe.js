@@ -319,6 +319,16 @@ class GlobeApp {
                     if (thetaAnomalyWaiting) invalidateIsentropicCache();
                     this.updateField();
                 }
+                // σ-anom mode needs the climatology std tile (not an
+                // active-period tile in year/composite mode). When that
+                // arrives for the displayed field, re-render so the
+                // standardized anomaly division uses the real σ.
+                const isStdForZscore = s.decompose === 'zscore'
+                    && name === s.field && monthMatches
+                    && (period === s.climatologyPeriod
+                        || (!period && s.climatologyPeriod === 'default')
+                        || period === 'default');
+                if (isStdForZscore) this.updateField();
                 // Timeseries panel feeds from per-year tiles that aren't
                 // "active period" for the main renderer — don't miss them.
                 if (s.showTimeseries && s.timeseriesRegion
@@ -1720,6 +1730,14 @@ class GlobeApp {
             // mean; prefetch here so switching modes hurries them along.
             if (patch.decompose === 'anomaly') {
                 prefetchField(this.state.field, { level: this.state.level });
+            }
+            // σ-anom additionally needs the std tile for the current month.
+            // Prefetch all 12 std tiles so cross-month aggregation works
+            // and month-scrubs are smooth.
+            if (patch.decompose === 'zscore') {
+                prefetchField(this.state.field, {
+                    level: this.state.level, kind: 'std',
+                });
             }
         }
         if ('mapCenterLon' in patch) this.applyMapCenterLon();

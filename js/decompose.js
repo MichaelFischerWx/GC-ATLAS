@@ -170,18 +170,17 @@ export function decompose(values, nlat, nlon, mode, annualMean = null, opts = {}
             const s = statsOf(values);
             return { values, vmin: s.vmin, vmax: s.vmax, symmetric: false, empty: true };
         }
-        // Small-σ cutoff prevents division blow-up in very-low-variance
-        // regions (e.g. tropical MSL pressure where σ ≈ 0.3 hPa). Anything
-        // below the 2nd percentile of finite σ values across the grid is
-        // treated as "too small to standardize" and returned as NaN.
-        const eps = stdFloor(std);
+        // Don't NaN low-σ cells — that left visible holes in the deep
+        // tropics where 500 hPa T variance is small. Just guard against
+        // division by genuinely zero (or non-finite) σ. The percentile
+        // clamp on the symmetric colorbar handles extreme z's elsewhere.
         const out = new Float32Array(nlat * nlon);
         const n = values.length;
         for (let i = 0; i < n; i++) {
             const v = values[i];
             const m = annualMean[i];
             const s = std[i];
-            if (Number.isFinite(v) && Number.isFinite(m) && Number.isFinite(s) && s > eps) {
+            if (Number.isFinite(v) && Number.isFinite(m) && Number.isFinite(s) && s > 0) {
                 out[i] = (v - m) / s;
             } else {
                 out[i] = NaN;
