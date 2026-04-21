@@ -4614,10 +4614,28 @@ class GlobeApp {
             if (swipeRadio) {
                 swipeRadio.disabled = !swipeOk;
                 // If the user previously picked swipe-sweep but compare
-                // is now off, re-default to the animated mode.
+                // is now off, re-default to the still-main mode.
                 if (!swipeOk && swipeRadio.checked) {
-                    const anim = document.querySelector('input[name="gif-mode"][value="animated"]');
-                    if (anim) anim.checked = true;
+                    const mainStill = document.querySelector('input[name="gif-mode"][value="still-main"]');
+                    if (mainStill) mainStill.checked = true;
+                }
+            }
+            // Same treatment for the "still · cross-section" option —
+            // only enabled when the xs panel is actually open. Otherwise
+            // the capture has nothing to grab.
+            const xsOpt = document.getElementById('gif-opt-xsection');
+            const xsRadio = xsOpt?.querySelector('input[type="radio"]');
+            const xsPanel = document.getElementById('xsection-panel');
+            const xsOk = xsPanel && !xsPanel.hidden;
+            if (xsOpt) {
+                xsOpt.style.opacity = xsOk ? '' : '0.45';
+                xsOpt.style.pointerEvents = xsOk ? '' : 'none';
+            }
+            if (xsRadio) {
+                xsRadio.disabled = !xsOk;
+                if (!xsOk && xsRadio.checked) {
+                    const mainStill = document.querySelector('input[name="gif-mode"][value="still-main"]');
+                    if (mainStill) mainStill.checked = true;
                 }
             }
         };
@@ -4659,23 +4677,43 @@ class GlobeApp {
             };
 
             try {
-                let blob;
-                if (mode === 'annual') {
+                let blob, ext;
+                if (mode === 'still-main') {
+                    blob = await exporter.saveStill({ format: 'png' });
+                    ext  = 'png';
+                    // Still images are single-shot — show a 100% progress
+                    // bar so the user gets the usual "done" signal.
+                    progressFill.style.width = '100%';
+                    progressText.textContent = 'Captured';
+                } else if (mode === 'still-xsection') {
+                    blob = await exporter.saveXsectionStill({ format: 'png' });
+                    ext  = 'png';
+                    progressFill.style.width = '100%';
+                    progressText.textContent = 'Captured';
+                } else if (mode === 'annual') {
                     blob = await exporter.captureAnnual({ onProgress });
+                    ext  = 'gif';
                 } else if (mode === 'swipe-sweep') {
                     blob = await exporter.captureSwipeSweep({ onProgress });
+                    ext  = 'gif';
                 } else {
                     blob = await exporter.captureAnimated({ durationMs: 5000, fps: 15, onProgress });
+                    ext  = 'gif';
                 }
-                progressText.textContent = `Encoding… ${(blob.size / 1024 / 1024).toFixed(1)} MB`;
+                const sizeMB = blob.size / 1024 / 1024;
+                progressText.textContent = ext === 'gif'
+                    ? `Encoding… ${sizeMB.toFixed(1)} MB`
+                    : `Saving · ${(blob.size / 1024).toFixed(0)} kB`;
                 const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 16);
-                downloadBlob(blob, `gc-atlas-${mode}-${stamp}.gif`);
-                progressText.textContent = `Done · ${(blob.size / 1024 / 1024).toFixed(1)} MB`;
+                downloadBlob(blob, `gc-atlas-${mode}-${stamp}.${ext}`);
+                progressText.textContent = ext === 'gif'
+                    ? `Done · ${sizeMB.toFixed(1)} MB`
+                    : `Done · ${(blob.size / 1024).toFixed(0)} kB`;
                 startBtn.textContent = 'Capture again';
                 startBtn.disabled = false;
             } catch (err) {
-                console.error('[gif] capture failed:', err);
-                progressText.textContent = 'Capture failed — see console.';
+                console.error('[export] capture failed:', err);
+                progressText.textContent = `Capture failed: ${err.message || err}`;
                 startBtn.disabled = false;
                 startBtn.textContent = 'Retry';
             }

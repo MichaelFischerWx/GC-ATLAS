@@ -281,6 +281,117 @@ export class GifExporter {
         gif.finish();
         return new Blob([gif.bytes()], { type: 'image/gif' });
     }
+
+    /** Still-image capture. Grabs the main canvas at native resolution
+     *  (no GIF-style downscale), overlays the same caption ribbon, and
+     *  returns a Blob ready to download.
+     *
+     *  options:
+     *    format:  'png' (default, lossless) | 'jpeg'
+     *    quality: 0..1 for JPEG (default 0.95; ignored for PNG)
+     *    scale:   supersampling factor (default 1 — canvas native,
+     *             which on retina displays is already 2× device pixels)
+     */
+    async saveStill({ format = 'png', quality = 0.95, scale = 1 } = {}) {
+        const src = this.app.renderer.domElement;
+        const w = Math.round(src.width  * scale);
+        const h = Math.round(src.height * scale);
+        const cap = document.createElement('canvas');
+        cap.width = w;
+        cap.height = h;
+        const ctx = cap.getContext('2d');
+        // Same background as GIF frames so alpha regions don't look patchy.
+        ctx.fillStyle = '#0a1a18';
+        ctx.fillRect(0, 0, w, h);
+        // Hi-quality scaling when supersampling (scale > 1).
+        if (scale !== 1) ctx.imageSmoothingQuality = 'high';
+        ctx.drawImage(src, 0, 0, w, h);
+        this._drawCaption(ctx);
+        const mime = format === 'jpeg' ? 'image/jpeg' : 'image/png';
+        return await new Promise((resolve, reject) => {
+            cap.toBlob(
+                (blob) => blob ? resolve(blob) : reject(new Error('toBlob returned null')),
+                mime,
+                format === 'jpeg' ? quality : undefined,
+            );
+        });
+    }
+
+    /** Still-image capture of just the cross-section panel (when open).
+     *  Composites the xs canvas + its title + colorbar + footer hint
+     *  into one image — matches what the user sees on-screen minus the
+     *  window chrome. No-op if the panel isn't visible. */
+    async saveXsectionStill({ format = 'png', quality = 0.95 } = {}) {
+        const panel = document.getElementById('xsection-panel');
+        if (!panel || panel.hidden) {
+            throw new Error('Cross-section panel is not open.');
+        }
+        const xsCanvas = document.getElementById('xs-canvas');
+        const cbCanvas = document.getElementById('xs-cb-canvas');
+        if (!xsCanvas) throw new Error('xs-canvas not found.');
+        const titleEl = document.getElementById('xs-title');
+        const cbMinEl = document.getElementById('xs-cb-min');
+        const cbMaxEl = document.getElementById('xs-cb-max');
+        const cbUnEl  = document.getElementById('xs-cb-units');
+
+        // Lay out: title bar · xs canvas · colorbar · caption footer.
+        const padX = 18, padY = 16;
+        const titleH = 34;
+        const cbH = cbCanvas ? 18 : 0;
+        const cbLabelH = cbCanvas ? 18 : 0;
+        const footerH = 22;
+        const w = xsCanvas.width + padX * 2;
+        const h = titleH + xsCanvas.height + cbH + cbLabelH + footerH + padY * 2 + 10;
+
+        const cap = document.createElement('canvas');
+        cap.width = w;
+        cap.height = h;
+        const ctx = cap.getContext('2d');
+        ctx.fillStyle = '#0a1a18';
+        ctx.fillRect(0, 0, w, h);
+
+        let y = padY;
+        // Title
+        ctx.fillStyle = '#f0f6f2';
+        ctx.font = 'bold 16px ui-monospace, "JetBrains Mono", Menlo, monospace';
+        ctx.textBaseline = 'top';
+        ctx.fillText(titleEl?.textContent?.trim() || 'Cross-section', padX, y);
+        y += titleH;
+        // Field panel
+        ctx.drawImage(xsCanvas, padX, y);
+        y += xsCanvas.height + 8;
+        // Colorbar + min/units/max labels
+        if (cbCanvas) {
+            ctx.drawImage(cbCanvas, padX, y, xsCanvas.width, cbH);
+            y += cbH + 2;
+            ctx.font = '12px ui-monospace, "JetBrains Mono", Menlo, monospace';
+            ctx.fillStyle = '#8bb0a1';
+            const min = cbMinEl?.textContent?.trim() || '';
+            const units = cbUnEl?.textContent?.trim() || '';
+            const max = cbMaxEl?.textContent?.trim() || '';
+            ctx.textAlign = 'left';   ctx.fillText(min, padX, y);
+            ctx.textAlign = 'center'; ctx.fillText(units, padX + xsCanvas.width / 2, y);
+            ctx.textAlign = 'right';  ctx.fillText(max, padX + xsCanvas.width, y);
+            ctx.textAlign = 'left';
+            y += cbLabelH;
+        }
+        // Footer caption (same title+sub used by animated captures) —
+        // adds the field / period / year context even when the xs title
+        // is generic ("Zonal-mean cross-section").
+        const { title, sub } = this._buildCaption();
+        ctx.fillStyle = '#8bb0a1';
+        ctx.font = '11px ui-monospace, "JetBrains Mono", Menlo, monospace';
+        ctx.fillText(`${title}  ·  ${sub}`, padX, y + 4);
+
+        const mime = format === 'jpeg' ? 'image/jpeg' : 'image/png';
+        return await new Promise((resolve, reject) => {
+            cap.toBlob(
+                (blob) => blob ? resolve(blob) : reject(new Error('toBlob returned null')),
+                mime,
+                format === 'jpeg' ? quality : undefined,
+            );
+        });
+    }
 }
 
 /** Trigger a browser download for a Blob. */

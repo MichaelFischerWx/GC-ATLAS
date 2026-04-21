@@ -1878,7 +1878,7 @@
 
         <section class="control-group">
             <h4>Share</h4>
-            <button type="button" class="xs-reset" id="export-gif" style="width:100%">Export GIF…</button>
+            <button type="button" class="xs-reset" id="export-gif" style="width:100%">Export image / GIF…</button>
         </section>
 
         <div class="sidebar-footer" id="sidebar-status">
@@ -2194,28 +2194,42 @@ C(P_M→K_M) = -(R/g) ∫ [ω][T] / p dp</pre>
 <div class="gif-modal hidden" id="gif-modal" aria-hidden="true">
     <div class="gif-modal-card">
         <div class="gif-modal-head">
-            <span>Export GIF</span>
+            <span>Export image or GIF</span>
             <button type="button" class="gif-close" id="gif-close" aria-label="Close">&times;</button>
         </div>
         <div class="gif-modal-body">
             <label class="gif-opt">
-                <input type="radio" name="gif-mode" value="animated" checked>
+                <input type="radio" name="gif-mode" value="still-main" checked>
                 <div>
-                    <div class="gif-opt-title">Animation</div>
+                    <div class="gif-opt-title">Still image · main view (PNG)</div>
+                    <div class="gif-opt-sub">Current globe / map at native resolution, with caption ribbon. Lossless PNG.</div>
+                </div>
+            </label>
+            <label class="gif-opt" id="gif-opt-xsection">
+                <input type="radio" name="gif-mode" value="still-xsection">
+                <div>
+                    <div class="gif-opt-title">Still image · cross-section panel (PNG)</div>
+                    <div class="gif-opt-sub">Just the diagnostic panel: title + field + colorbar + caption. Panel must be open.</div>
+                </div>
+            </label>
+            <label class="gif-opt">
+                <input type="radio" name="gif-mode" value="animated">
+                <div>
+                    <div class="gif-opt-title">GIF · animation</div>
                     <div class="gif-opt-sub">Current month · wind particles · 5 s loop</div>
                 </div>
             </label>
             <label class="gif-opt">
                 <input type="radio" name="gif-mode" value="annual">
                 <div>
-                    <div class="gif-opt-title">Annual cycle</div>
+                    <div class="gif-opt-title">GIF · annual cycle</div>
                     <div class="gif-opt-sub">12 months · one frame each · seasonal loop</div>
                 </div>
             </label>
             <label class="gif-opt" id="gif-opt-swipe">
                 <input type="radio" name="gif-mode" value="swipe-sweep">
                 <div>
-                    <div class="gif-opt-title">Compare swipe sweep</div>
+                    <div class="gif-opt-title">GIF · compare swipe sweep</div>
                     <div class="gif-opt-sub">Divider slides W → E in 10° steps (36 frames). Map-view compare must be active.</div>
                 </div>
             </label>
