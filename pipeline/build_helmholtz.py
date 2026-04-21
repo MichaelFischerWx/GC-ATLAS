@@ -131,6 +131,21 @@ def main() -> int:
         )
         return 1
 
+    # Filter raw dirs to those whose name-encoded year span overlaps the
+    # period — saves opening + merging files we'd subset away anyway.
+    if args.period and args.raw_dirs:
+        import re as _re
+        rx = _re.compile(r'^raw_(\d{4})_(\d{4})$')
+        start, end = (int(x) for x in args.period.split("-"))
+        kept = []
+        for d in raw_dirs:
+            m = rx.match(d.name)
+            if m is None or (int(m.group(2)) >= start and int(m.group(1)) <= end):
+                kept.append(d)
+            else:
+                LOG.info("skip raw dir %s (no overlap with %d-%d)", d.name, start, end)
+        raw_dirs = kept
+
     # Open u and v across all raw dirs and concat along time. For single-dir
     # mode this is just open_dataset; for multi-dir per-year mode it's
     # open_mfdataset which transparently merges by time.

@@ -50,6 +50,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import re
 import sys
 import time
 from pathlib import Path
@@ -109,11 +110,47 @@ def _rename_time(ds: xr.Dataset) -> xr.Dataset:
     return ds
 
 
+_RAW_DIR_SPAN_RE = re.compile(r'^raw_(\d{4})_(\d{4})$')
+
+
+def _raw_dir_year_span(raw_dir: Path) -> tuple[int, int] | None:
+    """Infer the year range a raw dir contains from its name.
+    'raw_1961_1990' → (1961, 1990); 'raw' / 'raw_2021_2026' → unknown
+    (returns None — caller treats as 'always include')."""
+    m = _RAW_DIR_SPAN_RE.match(raw_dir.name)
+    return (int(m.group(1)), int(m.group(2))) if m else None
+
+
+def _dir_overlaps_period(raw_dir: Path, period: tuple[int, int]) -> bool:
+    """Does raw_dir contain any years within [period_start, period_end]?
+    Dirs whose year span we can't infer (e.g. plain 'raw') are kept —
+    skipping them risks dropping needed data."""
+    span = _raw_dir_year_span(raw_dir)
+    if span is None:
+        return True
+    s, e = span
+    p0, p1 = period
+    return e >= p0 and s <= p1
+
+
 def _open_var_for_period(group: str, short: str) -> tuple[xr.DataArray, list[Path]] | None:
     """Open + concatenate the raw NetCDFs for one variable across all RAW_DIRS.
-    Returns (DataArray with merged time axis, list of source files) or None."""
+    Returns (DataArray with merged time axis, list of source files) or None.
+
+    When PERIOD_YEAR_RANGE is set we filter RAW_DIRS to only those whose
+    year span overlaps the target window — e.g. building 1996-2025
+    skips data/raw_1961_1990 entirely instead of opening + merging
+    + subsetting it away. Big win when only one raw dir is relevant."""
+    active_dirs = RAW_DIRS
+    if PERIOD_YEAR_RANGE is not None:
+        active_dirs = [d for d in RAW_DIRS
+                       if _dir_overlaps_period(d, PERIOD_YEAR_RANGE)]
+        if not active_dirs:
+            LOG.warning("no raw dirs overlap period %s for %s/%s",
+                        PERIOD_YEAR_RANGE, group, short)
+            return None
     paths: list[Path] = []
-    for raw_dir in RAW_DIRS:
+    for raw_dir in active_dirs:
         p = raw_dir / f"era5_{group}_{short}.nc"
         if p.exists():
             paths.append(p)
