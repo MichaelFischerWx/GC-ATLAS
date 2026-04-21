@@ -23,6 +23,15 @@ const DEFAULT_FPS = 15;
 // still well under any hard limit for browser downloads.
 const CAPTURE_MAX_WIDTH = 1280;
 const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+// First letter of each calendar month, 1-indexed via (m-1). Used for
+// the 3-month centered season label (DJF, JJA, NDJ, …) when seasonal
+// averaging is on.
+const MONTH_LETTER = ['J','F','M','A','M','J','J','A','S','O','N','D'];
+function seasonLabel(month) {
+    const prev = (month + 10) % 12;   // 0-indexed letter for m-1 with wrap
+    const next =  month       % 12;   // 0-indexed letter for m+1 with wrap
+    return MONTH_LETTER[prev] + MONTH_LETTER[month - 1] + MONTH_LETTER[next];
+}
 
 export class GifExporter {
     /** app: { renderer, state, setState, updateField, getIsReady } */
@@ -48,7 +57,11 @@ export class GifExporter {
             title += ` · ${s.decompose}`;
         }
 
-        const subParts = [MONTHS[s.month - 1]];
+        // Seasonal 3-month centered mean → DJF / JJA / NDJ label instead
+        // of the single-month name. Exported images / GIFs need to be
+        // self-describing for slides and papers.
+        const timeLabel = s.seasonal ? seasonLabel(s.month) : MONTHS[s.month - 1];
+        const subParts = [timeLabel];
         const cr = s.customRange;
         // Describe what's painted on the left half (the "active" view).
         let leftLabel;

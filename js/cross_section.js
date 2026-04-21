@@ -16,12 +16,12 @@ const P_TICKS   = [1000, 500, 200, 100, 50, 10];
  * Zonal mean — NaN-aware average at each latitude.
  * Returns { kind:'zonal', type, values, vmin, vmax, ... }.
  */
-export function computeZonalMean(fieldName, month) {
+export function computeZonalMean(fieldName, month, { seasonal = false } = {}) {
     const meta = FIELDS[fieldName];
     const { nlat, nlon } = GRID;
 
     if (meta.type === 'sl') {
-        const f = getField(fieldName, { month });
+        const f = getField(fieldName, { month, seasonal });
         const zm = new Float32Array(nlat);
         let vmin = Infinity, vmax = -Infinity;
         for (let i = 0; i < nlat; i++) {
@@ -46,7 +46,7 @@ export function computeZonalMean(fieldName, month) {
     const zm = new Float32Array(nlev * nlat);
     let vmin = Infinity, vmax = -Infinity;
     for (let k = 0; k < nlev; k++) {
-        const f = getField(fieldName, { month, level: LEVELS[k] });
+        const f = getField(fieldName, { month, level: LEVELS[k], seasonal });
         for (let i = 0; i < nlat; i++) {
             let s = 0, n = 0;
             for (let j = 0; j < nlon; j++) {
@@ -196,7 +196,7 @@ function bilinearSample(values, lat, lon) {
  * For pressure-level fields, values is Float32Array(nlev × nSamples).
  * For single-level fields, values is Float32Array(nSamples).
  */
-export function computeArcCrossSection(fieldName, month, arc) {
+export function computeArcCrossSection(fieldName, month, arc, { seasonal = false } = {}) {
     const meta = FIELDS[fieldName];
     const nSamples = arc.length;
     if (nSamples < 2) return null;
@@ -205,7 +205,7 @@ export function computeArcCrossSection(fieldName, month, arc) {
     );
 
     if (meta.type === 'sl') {
-        const f = getField(fieldName, { month });
+        const f = getField(fieldName, { month, seasonal });
         const values = new Float32Array(nSamples);
         let vmin = Infinity, vmax = -Infinity;
         for (let j = 0; j < nSamples; j++) {
@@ -225,7 +225,7 @@ export function computeArcCrossSection(fieldName, month, arc) {
     const values = new Float32Array(nlev * nSamples);
     let vmin = Infinity, vmax = -Infinity;
     for (let k = 0; k < nlev; k++) {
-        const f = getField(fieldName, { month, level: LEVELS[k] });
+        const f = getField(fieldName, { month, level: LEVELS[k], seasonal });
         for (let j = 0; j < nSamples; j++) {
             const v = bilinearSample(f.values, arc[j].lat, arc[j].lon);
             values[k * nSamples + j] = v;

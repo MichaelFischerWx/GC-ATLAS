@@ -110,6 +110,12 @@ class GlobeApp {
             windMode: 'particles',   // 'off' | 'particles' | 'barbs'
             decompose: 'total',      // 'total' | 'zonal' | 'eddy' | 'anomaly'
             kind: 'mean',            // 'mean' (climatology) | 'std' (inter-annual ±1σ)
+            // 3-month centered seasonal mean anchored on state.month.
+            // On → DJF when month=1, JJA when month=7, etc. Propagates
+            // through getField (data.js) and cross-section field panel.
+            // Advanced diagnostic cross-sections (ψ, M, EP, budgets)
+            // ignore it until their component tiles are plumbed too.
+            seasonal: false,
             referencePeriod: 'default',  // 'default' (1991-2020) | '1961-1990' | …
             climatologyPeriod: 'default', // active climatology — drives mean + std + decomp reference
             year: null,              // null = climatology mean; integer (e.g. 2003) = single-year snapshot
@@ -1240,6 +1246,21 @@ class GlobeApp {
         this.sun.setVisible(this.state.showSun && this.state.viewMode === 'globe');
     }
 
+    // ── seasonal label text (e.g. "DJF") beside the 3-mo toggle ──────
+    // Populates the label element so the user can see which three
+    // months the averaging is covering, even without exporting. Shows
+    // only when seasonal is on — hides otherwise to keep the UI quiet.
+    _refreshSeasonalLabel() {
+        const el = document.getElementById('seasonal-label');
+        if (!el) return;
+        if (!this.state.seasonal) { el.textContent = ''; return; }
+        const M = ['J','F','M','A','M','J','J','A','S','O','N','D'];
+        const m  = this.state.month;
+        const p  = (m + 10) % 12;
+        const n  =  m       % 12;
+        el.textContent = `· ${M[p]}${M[m-1]}${M[n]}`;
+    }
+
     // ── reference-period dropdown labels ─────────────────────────────
     // The "Self · 12-month mean" / "vs. 1991-2020" / "vs. 1961-1990"
     // options mean different things depending on whether year mode is on
@@ -1806,6 +1827,7 @@ class GlobeApp {
             this.updateField();
         }
         if ('showSun' in patch || 'viewMode' in patch)    this.applySunVisibility();
+        if ('month' in patch || 'seasonal' in patch)      this._refreshSeasonalLabel();
         if ('month' in patch && this.sun)                 this.sun.update(this.state.month);
         if ('month' in patch && this.orbit)               this.orbit.update(this.state.month, this.spinAngle, this.camera);
         if ('windMode' in patch) this.applyWindMode();
@@ -2288,13 +2310,18 @@ class GlobeApp {
     updateXSection() {
         const canvas = document.getElementById('xs-canvas');
         if (!canvas) return;
-        const { field, month, xsArc, cmap, showContours, xsDiag } = this.state;
+        const { field, month, xsArc, cmap, showContours, xsDiag, seasonal } = this.state;
+        // Advanced diagnostics (ψ, M, ug, N², EP, budgets) fetch raw
+        // component tiles via cachedMonth, which doesn't yet honour
+        // state.seasonal — pass seasonal only to the plain-field paths
+        // (zonal-mean + arc) until those modules are plumbed too.
+        const xsOpts = { seasonal: seasonal && xsDiag === 'field' };
         let zm;
         let effCmap = cmap;
         if (xsDiag === 'psi') {
             zm = computeMassStreamfunction(month);
             if (!zm) {
-                zm = computeZonalMean(field, month);
+                zm = computeZonalMean(field, month, xsOpts);
             } else {
                 effCmap = 'RdBu_r';
                 zm.contourInterval = 20;             // 10⁹ kg/s
@@ -2302,7 +2329,7 @@ class GlobeApp {
         } else if (xsDiag === 'M') {
             zm = computeAngularMomentum(month);
             if (!zm) {
-                zm = computeZonalMean(field, month);
+                zm = computeZonalMean(field, month, xsOpts);
             } else {
                 effCmap = 'viridis';
                 zm.contourInterval = 0.5;            // 10⁹ m²/s
@@ -2310,7 +2337,7 @@ class GlobeApp {
         } else if (xsDiag === 'ug') {
             zm = computeGeostrophicWind(month);
             if (!zm) {
-                zm = computeZonalMean(field, month);
+                zm = computeZonalMean(field, month, xsOpts);
             } else {
                 effCmap = 'RdBu_r';                  // signed: westerly + / easterly −
                 zm.contourInterval = 10;             // m/s, matches u contour
@@ -2318,7 +2345,7 @@ class GlobeApp {
         } else if (xsDiag === 'N2') {
             zm = computeBruntVaisala(month);
             if (!zm) {
-                zm = computeZonalMean(field, month);
+                zm = computeZonalMean(field, month, xsOpts);
             } else {
                 effCmap = 'magma';
                 zm.contourInterval = 1;              // 10⁻⁴ s⁻²
@@ -2326,7 +2353,7 @@ class GlobeApp {
         } else if (xsDiag === 'epflux') {
             zm = computeEPFlux(month);
             if (!zm) {
-                zm = computeZonalMean(field, month);
+                zm = computeZonalMean(field, month, xsOpts);
             } else {
                 effCmap = 'RdBu_r';                  // ∇·F shading: westerly + / easterly −
                 zm.contourInterval = 2;              // m s⁻¹ day⁻¹
@@ -2338,7 +2365,7 @@ class GlobeApp {
                 mode: this.state.mbMode,
             });
             if (!zm) {
-                zm = computeZonalMean(field, month);
+                zm = computeZonalMean(field, month, xsOpts);
             } else {
                 effCmap = 'RdBu_r';
                 zm.suppressContours = true;
@@ -2350,7 +2377,7 @@ class GlobeApp {
                 mode: this.state.mbMode,
             });
             if (!zm) {
-                zm = computeZonalMean(field, month);
+                zm = computeZonalMean(field, month, xsOpts);
             } else {
                 effCmap = 'RdBu_r';
                 zm.suppressContours = true;
@@ -2362,7 +2389,7 @@ class GlobeApp {
                 mode: this.state.mbMode,
             });
             if (!zm) {
-                zm = computeZonalMean(field, month);
+                zm = computeZonalMean(field, month, xsOpts);
             } else {
                 effCmap = 'RdBu_r';
                 zm.suppressContours = true;
@@ -2378,7 +2405,7 @@ class GlobeApp {
                 xsArc.end.lat,   xsArc.end.lon,
                 192,
             );
-            zm = computeArcCrossSection(field, month, arc);
+            zm = computeArcCrossSection(field, month, arc, xsOpts);
             if (!zm) { zm = computeZonalMean(field, month); }
         } else {
             zm = computeZonalMean(field, month);
@@ -2496,11 +2523,12 @@ class GlobeApp {
     }
 
     updateField() {
-        const { field, level, theta, vCoord, month, cmap, decompose: mode, kind } = this.state;
+        const { field, level, theta, vCoord, month, cmap, decompose: mode, kind, seasonal } = this.state;
         const f = getField(field, {
             month, level, coord: vCoord, theta, kind,
             year: this.state.year,
             customRange: this.state.customRange,
+            seasonal,
         });
         this.setLoadingOverlay(!f.isReal);
 
@@ -2550,10 +2578,12 @@ class GlobeApp {
                 ? getField(field, {
                     month, level, coord: vCoord, theta,
                     kind: 'mean', year: compareYear,   // year tiles are mean-only
+                    seasonal,
                 })
                 : getField(field, {
                     month, level, coord: vCoord, theta,
                     kind, period: compareRef,
+                    seasonal,
                 });
             if (refField.isReal) {
                 let refDec;
@@ -3554,6 +3584,18 @@ class GlobeApp {
         });
         document.getElementById('toggle-xsection').addEventListener('change', (e) => {
             this.setState({ showXSection: e.target.checked });
+        });
+        // 3-month seasonal mean toggle — centered on state.month with
+        // wrap (Jan → DJF, Jul → JJA, Dec → NDJ). Affects the displayed
+        // field + field cross-section (not advanced diagnostics).
+        // Prefetch all 12 months on toggle-on so any month scrub from
+        // here has the neighboring tiles ready — cheap, keeps the
+        // averaging from waiting a round-trip on every month change.
+        document.getElementById('toggle-seasonal')?.addEventListener('change', (e) => {
+            if (e.target.checked) {
+                prefetchField(this.state.field, { level: this.state.level });
+            }
+            this.setState({ seasonal: e.target.checked });
         });
         document.getElementById('toggle-lorenz')?.addEventListener('change', (e) => {
             this.setState({ showLorenz: e.target.checked });
@@ -4783,6 +4825,10 @@ class GlobeApp {
         check('toggle-lorenz',     s.showLorenz);
         check('toggle-timeseries', s.showTimeseries);
         check('toggle-compare',    s.compareMode);
+        check('toggle-seasonal',   s.seasonal);
+        // Seasonal label shows the current 3-month window in parentheses
+        // next to the checkbox so users see exactly what they're averaging.
+        this._refreshSeasonalLabel();
         // Dropdown selects.
         const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = v; };
         set('field-select',        s.field);

@@ -1750,6 +1750,11 @@
                 <button id="month-play" class="icon-btn" type="button" aria-label="play through months" title="Play through the seasonal cycle">▶</button>
                 <input id="month-slider" class="slider" type="range" min="1" max="12" step="1" value="1" aria-label="scrub month">
             </div>
+            <label class="toggle-row" style="margin-top:8px; display:flex; align-items:center; gap:8px; font-size:0.78rem; cursor:pointer;"
+                   title="Average the selected month with the months on either side. Jan → DJF, Jul → JJA, Dec → NDJ. Wraps through December.">
+                <input id="toggle-seasonal" type="checkbox">
+                <span>3-month seasonal mean <span id="seasonal-label" style="color: var(--sage); margin-left: 6px;"></span></span>
+            </label>
         </section>
 
         <section class="control-group">

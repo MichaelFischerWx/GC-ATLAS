@@ -309,9 +309,41 @@ function applyClampToEntry(entry, meta) {
  * tiles to the requested θ surface per column; tropics near low θ and the
  * upper stratosphere near high θ return NaN where θ₀ is out of range.
  */
-export function getField(name, { month = 1, level = 500, coord = 'pressure', theta = 330, kind = 'mean', period = 'default', year = null, customRange = null } = {}) {
+export function getField(name, { month = 1, level = 500, coord = 'pressure', theta = 330, kind = 'mean', period = 'default', year = null, customRange = null, seasonal = false } = {}) {
     const meta = FIELDS[name];
     if (!meta) throw new Error(`unknown field: ${name}`);
+
+    // Seasonal 3-month centered mean — short-circuit at the top so all the
+    // per-month branching below (derived, isenMode, per-year, composites,
+    // alt-periods, std) is reused unchanged. Fetch the three single-month
+    // tiles, NaN-safe-average pointwise, pool vmin/vmax across them.
+    //
+    // If any of the three tiles is still pending, return the center month
+    // so the display keeps painting — the seasonal mean fills in on the
+    // next render tick once the tile arrives (onFieldLoaded → updateField).
+    if (seasonal) {
+        const prev = ((month + 10) % 12) + 1;   // m-1 with Dec wrap
+        const next = (month %  12) + 1;         // m+1 with Dec wrap
+        const months = [prev, month, next];
+        const fs = months.map(m => getField(name, {
+            month: m, level, coord, theta, kind, period, year, customRange,
+            seasonal: false,
+        }));
+        if (!fs.every(f => f.isReal)) return fs[1];
+        const N = fs[0].values.length;
+        const out = new Float32Array(N);
+        for (let i = 0; i < N; i++) {
+            let s = 0, n = 0;
+            for (let j = 0; j < 3; j++) {
+                const v = fs[j].values[i];
+                if (Number.isFinite(v)) { s += v; n += 1; }
+            }
+            out[i] = n > 0 ? s / n : NaN;
+        }
+        const vmin = Math.min(fs[0].vmin, fs[1].vmin, fs[2].vmin);
+        const vmax = Math.max(fs[0].vmax, fs[1].vmax, fs[2].vmax);
+        return { ...fs[1], values: out, vmin, vmax, seasonal: true, seasonalMonths: months };
+    }
 
     // Custom-range composite: browser-side mean of per-year tiles over an
     // arbitrary [start, end] year range. Surfaces to the rest of the app

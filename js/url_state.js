@@ -97,6 +97,11 @@ const SPEC = [
     ['decompose',          'd',
         v => v === 'total' ? null : v,
         s => ['total','zonal','eddy','anomaly','zscore'].includes(s) ? s : undefined],
+    // 3-month centered seasonal mean, anchored on state.month. On → DJF
+    // when month=1, JJA when month=7, NDJ when month=12. Ignored by
+    // advanced cross-section diagnostics (psi, M, ug, N², EP flux,
+    // budgets) — only applies to field display + field cross-section.
+    ['seasonal',           'sn',  v => v ? '1' : null, s => s === '1'],
 
     // ── compare overlay (map view) ─────────────────────────────────
     ['compareMode',        'cmp',
