@@ -1783,17 +1783,26 @@
             <h4>Compare <span style="color:var(--paper-dim); font-weight:400; text-transform:none; letter-spacing:0; font-size:0.7rem;">— Map view</span></h4>
             <label class="check">
                 <input type="checkbox" id="toggle-compare">
-                Swipe-compare with...
+                Compare with...
             </label>
             <!-- Compare-target sub-controls — mirror the main Climatology
-                 mode toggle so users can swipe between two 30-year windows
-                 OR between two specific years (or one of each). -->
+                 mode toggle so users can compare two 30-year windows
+                 OR two specific years (or one of each). -->
             <div id="compare-target" style="margin-top:8px;">
                 <div class="segmented" id="compare-mode-toggle" role="tablist" aria-label="Compare target">
                     <button type="button" data-compare-mode="ref" class="active"
-                            title="Right half draws the Reference period chosen in the Decomposition section">Reference period</button>
+                            title="Compare against the Reference period chosen in the Decomposition section">Reference period</button>
                     <button type="button" data-compare-mode="year"
-                            title="Right half draws a specific year — pick with the slider below">Specific year</button>
+                            title="Compare against a specific year — pick with the slider below">Specific year</button>
+                </div>
+                <!-- Comparison style: swipe (two halves of the same map) OR
+                     diff (single map showing active − reference). -->
+                <div class="segmented" id="compare-style-toggle" role="tablist" aria-label="Comparison style"
+                     style="margin-top:8px;">
+                    <button type="button" data-compare-style="swipe" class="active"
+                            title="Split map: left = active view, right = target. Drag on the map to slide the divider.">Swipe</button>
+                    <button type="button" data-compare-style="diff"
+                            title="Single map showing active − target as an anomaly-style field. Good for seeing the full 2-D difference pattern at a glance without dragging the divider.">Difference</button>
                 </div>
                 <div id="compare-year-options" hidden style="margin-top:8px;">
                     <div class="year-row">

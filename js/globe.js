@@ -114,8 +114,9 @@ class GlobeApp {
             climatologyPeriod: 'default', // active climatology — drives mean + std + decomp reference
             year: null,              // null = climatology mean; integer (e.g. 2003) = single-year snapshot
             customRange: null,       // null = off; {start, end} = composite mean over those years (incl.)
-            compareMode: false,      // swipe-compare overlay (Map view only)
-            compareSplit: 0.5,       // split position in [0,1] — uv-x of the divider
+            compareMode: false,      // compare overlay (Map view only)
+            compareStyle: 'swipe',   // 'swipe' (split map + divider) | 'diff' (active − target as one anomaly-style map)
+            compareSplit: 0.5,       // split position in [0,1] — uv-x of the divider (swipe only)
             compareYear: null,       // when set, swipe right-half draws this year's tile (year-vs-* compare)
             userVmin: null,          // manual colorbar min override; null = auto
             userVmax: null,          // manual colorbar max override; null = auto
@@ -1359,10 +1360,14 @@ class GlobeApp {
         const on = !!this.state.compareMode;
         const inMap   = this.state.viewMode === 'map';
         const inGlobe = this.state.viewMode === 'globe';
-        if (this.mapMeshRef) this.mapMeshRef.visible = on && inMap;
-        if (this.splitLine)  this.splitLine.visible  = on && inMap;
-        if (this.globeRef)   this.globeRef.visible   = on && inGlobe;
-        if (on) this.applyCompareSplit(this.state.compareSplit ?? 0.5);
+        const isDiff  = on && this.state.compareStyle === 'diff';
+        // Diff style hides the swipe chrome — the right-half mesh, the
+        // divider line, the globe reference shell. The single main map
+        // renders (active − target) instead, handled in updateField.
+        if (this.mapMeshRef) this.mapMeshRef.visible = on && inMap && !isDiff;
+        if (this.splitLine)  this.splitLine.visible  = on && inMap && !isDiff;
+        if (this.globeRef)   this.globeRef.visible   = on && inGlobe && !isDiff;
+        if (on && !isDiff) this.applyCompareSplit(this.state.compareSplit ?? 0.5);
         this.updateCompareLabels();
     }
 
@@ -1840,6 +1845,12 @@ class GlobeApp {
         if ('mapCenterLon' in patch) this.applyMapCenterLon();
         if ('compareMode' in patch || 'viewMode' in patch) this.applyCompareMode();
         if ('compareSplit' in patch) this.applyCompareSplit(this.state.compareSplit);
+        if ('compareStyle' in patch) {
+            // Toggle the reference mesh / divider chrome, then repaint so
+            // diff or swipe gets applied to the main canvas.
+            this.applyCompareMode();
+            this.updateField();
+        }
         if ('compareMode' in patch) this.updateHintForViewMode();
         if ('xsArc' in patch) this.updateArcLine();
         if ('xsDiag' in patch) {
@@ -2587,6 +2598,36 @@ class GlobeApp {
             }
         }
 
+        // Diff style: replace decomp.values with (active − target) and
+        // force a symmetric RdBu_r colorbar centered on zero. The swipe
+        // reference mesh is hidden by applyCompareMode when style='diff',
+        // so only the main map renders — with the 2-D difference field
+        // painted as an anomaly.
+        let effCmapFinal = effCmap;
+        if (compareActive && this.state.compareStyle === 'diff' && refValues) {
+            const N = decomp.values.length;
+            const diff = new Float32Array(N);
+            let absMax = 0;
+            for (let i = 0; i < N; i++) {
+                const a = decomp.values[i];
+                const b = refValues[i];
+                if (Number.isFinite(a) && Number.isFinite(b)) {
+                    diff[i] = a - b;
+                    const d = Math.abs(diff[i]);
+                    if (d > absMax) absMax = d;
+                } else {
+                    diff[i] = NaN;
+                }
+            }
+            decomp.values = diff;
+            decomp.symmetric = true;
+            decomp.vmin = -absMax;
+            decomp.vmax =  absMax;
+            effCmapFinal = 'RdBu_r';
+            // Don't also paint the reference texture — we're not swiping.
+            refValues = null;
+        }
+
         // Manual colorbar overrides — applied after auto-range AND compare
         // pooling so user input wins over everything.
         if (this.state.userVmin != null) decomp.vmin = this.state.userVmin;
@@ -2596,7 +2637,7 @@ class GlobeApp {
         this._displayedValues = decomp.values;
 
         fillRGBA(this.imageData.data, decomp.values, {
-            vmin: decomp.vmin, vmax: decomp.vmax, cmap: effCmap,
+            vmin: decomp.vmin, vmax: decomp.vmax, cmap: effCmapFinal,
         });
         this.ctx.putImageData(this.imageData, 0, 0);
         this.texture.needsUpdate = true;
@@ -2638,10 +2679,10 @@ class GlobeApp {
             // say "Δσ" instead of "anomaly".
             decomposeMode: isStdAnomaly ? 'std-anomaly' : mode,
             isSymmetric: decomp.symmetric,
-            effCmap,
+            effCmap: effCmapFinal,
         };
         this.updateContours(fDecorated);
-        this.applyCoastlineContrast(effCmap);
+        this.applyCoastlineContrast(effCmapFinal);
         this.updateStatus(f);   // status reflects raw tile, not the transform
         this.emit('field-updated', { field: fDecorated });
     }
@@ -3385,6 +3426,16 @@ class GlobeApp {
                 b.classList.toggle('active', b.dataset.compareMode === mode));
             if (compareYearOpts) compareYearOpts.hidden = (mode !== 'year');
         };
+        // Compare-style segmented toggle (Swipe vs Diff).
+        const compareStyleButtons = document.querySelectorAll('#compare-style-toggle button');
+        compareStyleButtons.forEach((btn) => {
+            btn.addEventListener('click', () => {
+                const style = btn.dataset.compareStyle;
+                compareStyleButtons.forEach(b =>
+                    b.classList.toggle('active', b === btn));
+                this.setState({ compareStyle: style });
+            });
+        });
         compareModeButtons.forEach(btn => {
             btn.addEventListener('click', () => {
                 const mode = btn.dataset.compareMode;
@@ -4663,6 +4714,7 @@ class GlobeApp {
         seg('#time-mode-toggle button',    'timeMode',
             s.customRange ? 'range' : (s.year != null ? 'year' : 'climo'));
         seg('#compare-mode-toggle button', 'compareMode', s.compareYear != null ? 'year' : 'ref');
+        seg('#compare-style-toggle button', 'compareStyle', s.compareStyle || 'swipe');
         // Checkboxes for overlay toggles + panels + compare.
         const check = (id, v) => { const el = document.getElementById(id); if (el) el.checked = !!v; };
         check('toggle-coastlines', s.showCoastlines);
