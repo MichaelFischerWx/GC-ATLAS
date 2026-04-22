@@ -297,6 +297,31 @@
         }
         .composite-details[open] > summary::before { transform: rotate(90deg); }
         .composite-details > summary:hover { color: var(--paper); }
+        /* Advanced disclosure — same disclosure-triangle style as the
+           composite builder, applied to power-user sections (Parcels). */
+        .advanced-details > summary {
+            cursor: pointer;
+            list-style: none;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.68rem;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: var(--sage);
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            user-select: none;
+        }
+        .advanced-details > summary::-webkit-details-marker { display: none; }
+        .advanced-details > summary::before {
+            content: '▸';
+            display: inline-block;
+            transition: transform 0.12s ease;
+            color: var(--emerald-bright);
+            margin-right: 2px;
+        }
+        .advanced-details[open] > summary::before { transform: rotate(90deg); }
+        .advanced-details > summary:hover { color: var(--paper); }
         /* Map-chrome disclosure — same look as composite-details but tucked
            into the Overlays section. */
         .map-chrome-details > summary {
@@ -566,8 +591,53 @@
             margin-bottom: 8px;
             font-size: 0.85rem;
         }
-        .cb-header #cb-title { font-weight: 600; color: var(--paper); }
-        .cb-header #cb-units { font-family: 'JetBrains Mono', monospace; font-size: 0.75rem; color: var(--sage); }
+        .cb-header #cb-title { font-weight: 600; color: var(--paper); flex: 1 1 auto; }
+        .cb-header #cb-units { font-family: 'JetBrains Mono', monospace; font-size: 0.75rem; color: var(--sage); margin-left: auto; }
+        /* ── Colormap popover (replaces the sidebar Colormap section) ── */
+        .cb-cmap-menu {
+            position: relative;
+            margin-left: 8px;
+        }
+        .cb-cmap-menu > summary {
+            list-style: none;
+            cursor: pointer;
+            width: 22px; height: 22px;
+            display: grid; place-items: center;
+            border: 1px solid var(--border);
+            border-radius: 5px;
+            color: var(--sage);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.9rem;
+            line-height: 1;
+            user-select: none;
+            transition: color 0.15s, border-color 0.15s;
+        }
+        .cb-cmap-menu > summary::-webkit-details-marker { display: none; }
+        .cb-cmap-menu > summary:hover {
+            color: var(--paper);
+            border-color: var(--emerald-bright);
+        }
+        .cb-cmap-menu[open] > summary {
+            color: var(--emerald-bright);
+            border-color: var(--emerald-bright);
+        }
+        .cb-cmap-pop {
+            position: absolute;
+            right: 0;
+            bottom: calc(100% + 6px);
+            min-width: 180px;
+            background: rgba(12, 36, 32, 0.95);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 8px 10px;
+            backdrop-filter: blur(14px);
+            -webkit-backdrop-filter: blur(14px);
+            box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+            z-index: 60;
+        }
+        .cb-cmap-pop select {
+            width: 100%;
+        }
         .cb-sub {
             font-family: 'JetBrains Mono', monospace;
             font-size: 0.66rem;
@@ -1756,15 +1826,12 @@
         </section>
 
         <section class="control-group">
-            <label class="field-label">Vertical coordinate</label>
-            <div class="segmented" id="vcoord-toggle" role="tablist" aria-label="Vertical coordinate">
+            <label class="field-label" for="level-select" id="level-label">Pressure level</label>
+            <div class="segmented" id="vcoord-toggle" role="tablist" aria-label="Vertical coordinate"
+                 style="margin-bottom: 8px;">
                 <button type="button" data-coord="pressure" class="active">Pressure</button>
                 <button type="button" data-coord="theta">θ (isentropic)</button>
             </div>
-        </section>
-
-        <section class="control-group">
-            <label class="field-label" for="level-select" id="level-label">Pressure level</label>
             <select id="level-select"></select>
         </section>
 
@@ -1893,11 +1960,6 @@
             </label>
         </section>
 
-        <section class="control-group">
-            <label class="field-label" for="cmap-select">Colormap</label>
-            <select id="cmap-select"></select>
-        </section>
-
         <section class="control-group" id="decompose-group">
             <h4>Decomposition</h4>
             <div class="segmented decomp-seg" role="tablist" aria-label="Field decomposition">
@@ -2014,13 +2076,18 @@
             </p>
         </section>
 
-        <section class="control-group" id="parcels-section">
-            <h4>Parcels</h4>
-            <p class="field-help">
-                <span class="xs-kbd">⌥</span> + click globe to release parcels at 200 hPa.
-                They follow the monthly-mean 3-D wind.
-            </p>
-            <button type="button" class="xs-reset" id="parcels-clear" style="width:100%">Clear all parcels</button>
+        <section class="control-group">
+            <details class="advanced-details" id="advanced-details">
+                <summary>Advanced <span class="composite-badge">expert</span></summary>
+                <div id="parcels-section" style="margin-top:10px;">
+                    <h4 style="margin-top:0;">Parcels</h4>
+                    <p class="field-help">
+                        <span class="xs-kbd">⌥</span> + click globe to release parcels at 200 hPa.
+                        They follow the monthly-mean 3-D wind.
+                    </p>
+                    <button type="button" class="xs-reset" id="parcels-clear" style="width:100%">Clear all parcels</button>
+                </div>
+            </details>
         </section>
 
         <section class="control-group">
@@ -2094,6 +2161,15 @@
             <div class="cb-header">
                 <span id="cb-title">—</span>
                 <span id="cb-units">—</span>
+                <details class="cb-cmap-menu">
+                    <summary class="cb-cmap-btn" title="Change colormap"
+                             aria-label="Change colormap">⋯</summary>
+                    <div class="cb-cmap-pop">
+                        <label class="field-label" for="cmap-select"
+                               style="margin-bottom:4px;">Colormap</label>
+                        <select id="cmap-select"></select>
+                    </div>
+                </details>
             </div>
             <div id="cb-note" class="cb-note" hidden></div>
             <div id="cb-sub" class="cb-sub" hidden></div>
