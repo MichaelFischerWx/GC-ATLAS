@@ -2954,21 +2954,22 @@ class GlobeApp {
         el.classList.toggle('visible', !!visible);
     }
 
-    /** Update the "X of Y tiles" progress line on the loading overlay.
-     *  Called from the era5 onTileProgress subscription. Only renders
-     *  text when both pending and total > 0; otherwise clears the line.
-     *  The isentropic-PV gallery view kicks off 24 tile fetches at once,
-     *  which on Safari / cold cache can take 10-20 s — users were seeing
-     *  an indefinite spinner and thinking the site was stuck.
+    /** Update the tiles-remaining line on the loading overlay. Called
+     *  from the era5 onTileProgress subscription. Shows in-flight count
+     *  counting down to zero — honest about "tiles left" rather than
+     *  "X of Y loaded," where Y kept climbing as downstream fetches
+     *  (cross-month aggregation, derived-field ingredients, isentropic
+     *  cube warmup) kicked in. A moving denominator reads as misleading.
      */
-    setLoadingProgress({ pending, total }) {
+    setLoadingProgress({ pending /*, total (unused: see note above) */ }) {
         const el = document.getElementById('globe-loading');
         if (!el) return;
         const line = el.querySelector('.globe-loading-progress');
         if (!line) return;
-        if (pending > 0 && total > 0) {
-            const done = Math.max(0, total - pending);
-            line.textContent = `${done} of ${total} tiles loaded`;
+        if (pending > 0) {
+            line.textContent = pending === 1
+                ? '1 tile remaining'
+                : `${pending} tiles remaining`;
         } else {
             line.textContent = '';
         }
