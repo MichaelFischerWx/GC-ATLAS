@@ -31,11 +31,16 @@ const KT_PENNANT = 50;
 const KT_FULL    = 10;
 const KT_HALF    = 5;
 
-const L_SHAFT    = 0.065;    // world units
-const L_FEATHER  = 0.028;
-const L_HALF     = 0.015;
-const SPACING    = 0.011;    // along-shaft gap between glyphs
-const PENNANT_W  = 0.014;    // base of pennant triangle along shaft
+// Barb geometry — retuned to match the packing density in published
+// analysis charts (Tropical Tidbits, WPC, etc.). The earlier values
+// gave each feather a ~40%-of-length gap after it, which read as a
+// stretched-out, sparse glyph. The new spacing is closer to 20% of
+// feather length so multiple feathers cluster tightly near the tail.
+const L_SHAFT    = 0.060;    // world units
+const L_FEATHER  = 0.024;
+const L_HALF     = 0.012;
+const SPACING    = 0.005;    // along-shaft gap between glyphs (was 0.011)
+const PENNANT_W  = 0.010;    // base of pennant triangle along shaft
 
 const RADIUS_SPHERE = 1.006;
 const MAP_LIFT      = 0.003;
