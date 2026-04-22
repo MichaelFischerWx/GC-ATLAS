@@ -170,10 +170,14 @@ export function decompose(values, nlat, nlon, mode, annualMean = null, opts = {}
             const s = statsOf(values);
             return { values, vmin: s.vmin, vmax: s.vmax, symmetric: false, empty: true };
         }
-        // Don't NaN low-σ cells — that left visible holes in the deep
-        // tropics where 500 hPa T variance is small. Just guard against
-        // division by genuinely zero (or non-finite) σ. The percentile
-        // clamp on the symmetric colorbar handles extreme z's elsewhere.
+        // Soft denominator floor: clamp σ to the 2nd-percentile of finite
+        // positive σ values in the tile. Keeps low-variance cells from
+        // blowing up into implausible z-scores (|z| > 10) when a monthly
+        // anomaly is modest but the climo σ happens to be tiny — common
+        // for precipitation in normally-dry cells. Low-σ cells still
+        // render (no NaN holes in the tropics, per the prior fix), but
+        // their z saturates at |(v − m) / floor| instead of exploding.
+        const sigmaFloor = stdFloor(std);
         const out = new Float32Array(nlat * nlon);
         const n = values.length;
         for (let i = 0; i < n; i++) {
@@ -181,7 +185,8 @@ export function decompose(values, nlat, nlon, mode, annualMean = null, opts = {}
             const m = annualMean[i];
             const s = std[i];
             if (Number.isFinite(v) && Number.isFinite(m) && Number.isFinite(s) && s > 0) {
-                out[i] = (v - m) / s;
+                const sEff = sigmaFloor > 0 ? Math.max(s, sigmaFloor) : s;
+                out[i] = (v - m) / sEff;
             } else {
                 out[i] = NaN;
             }

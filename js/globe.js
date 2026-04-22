@@ -1574,6 +1574,10 @@ class GlobeApp {
         const mode = this.state.decompose;
         const modeTag = (mode && mode !== 'total')
             ? `<span class="hv-mode">${mode}</span>` : '';
+        // σ-anom is a unit-less z-score — override the field's native unit
+        // so the readout reads "+6.81 σ" instead of "6.81 mm/day zscore".
+        // Matches the colorbar unit logic (see updateColorbar).
+        const unitText = (mode === 'zscore') ? 'σ' : (meta.units || '');
         // In compare mode, append which period the cursor is over so the
         // value is unambiguous.
         const periodLabel = this.sampledPeriodLabel(lat, lon);
@@ -1584,7 +1588,7 @@ class GlobeApp {
             `${latS}<span class="hv-sep">·</span>${lonS}` +
             `<span class="hv-sep">·</span>` +
             `<span class="hv-value">${fmtValue(v)}</span>` +
-            `<span class="hv-unit">${meta.units || ''}</span>${modeTag}${periodTag}`
+            `<span class="hv-unit">${unitText}</span>${modeTag}${periodTag}`
         );
     }
 
@@ -3060,8 +3064,18 @@ class GlobeApp {
         let currentStdTile = null;
         let stdTileForMonth = null;
         if (mode === 'zscore') {
-            const climoPeriod = (this.state.referencePeriod !== 'default')
-                ? this.state.referencePeriod : 'default';
+            // σ denominator: 'best-match' is a per-year concept for the
+            // NUMERATOR (each year subtracts its closest 30-yr climo
+            // mean) but there's no 'best-match' tile tree — the σ for
+            // a composite can't be composed coherently across multiple
+            // 30-yr windows. Fall back to the active climatology's σ.
+            // Explicit periods (e.g. '1961-1990') keep sourcing their
+            // own σ tiles. Without this fallback, the std fetch 404s
+            // (period = 'best-match' → no manifest), decompose returns
+            // empty: true, and the globe silently paints raw values.
+            const refPeriod = this.state.referencePeriod;
+            const climoPeriod = (refPeriod !== 'default' && refPeriod !== 'best-match')
+                ? refPeriod : 'default';
             const stdCall = (m) => getField(field, {
                 month: m, level, coord: vCoord, theta,
                 kind: 'std', period: climoPeriod,
