@@ -1164,6 +1164,22 @@
             border-radius: 6px;
         }
         .mb-controls[hidden] { display: none; }
+        /* Amber-accented validation caveat for Q-budget and H-budget (shown
+           via JS based on xsDiag). Sibling of .mobile-panel-hint in
+           visual style; makes the "structure reliable, magnitudes want
+           a spot-check" message impossible to miss when either budget
+           is active. */
+        .budget-caveat {
+            margin: 8px 0;
+            padding: 8px 10px;
+            font-size: 0.7rem;
+            line-height: 1.5;
+            color: var(--paper-dim);
+            border-left: 2px solid var(--amber);
+            background: rgba(232, 194, 106, 0.05);
+            border-radius: 0 4px 4px 0;
+        }
+        .budget-caveat[hidden] { display: none; }
         .mb-row {
             display: flex;
             align-items: center;
@@ -2412,6 +2428,9 @@ C(P_M→K_M) = -(R/g) ∫ [ω][T] / p dp
                         <label class="mb-toggle"><input type="radio" name="mb-mode" value="1d_int"><span>∫dp/g</span></label>
                     </div>
                 </div>
+            </div>
+            <div class="budget-caveat" id="budget-caveat" hidden>
+                Budget closure here has not yet been formally validated against published atlases. Spatial patterns and sign conventions are canonical and reliable for pedagogy; for quantitative research use, cross-check magnitudes against a trusted reference before citing a number.
             </div>
             <canvas id="xs-canvas" width="380" height="200"></canvas>
             <div class="xs-cb-wrap">

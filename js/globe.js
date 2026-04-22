@@ -2092,6 +2092,15 @@ class GlobeApp {
                 mbInfo.setAttribute('hidden', '');
                 mbInfoBtn?.classList.remove('active');
             }
+            // Q-budget and H-budget: closure hasn't been formally validated
+            // against literature (ROADMAP item #8 pending). Surface a
+            // "structure reliable, magnitudes want a spot-check" caveat
+            // inline whenever either is active. M-budget has its own
+            // sharper caveats in the info popover already.
+            const caveat = document.getElementById('budget-caveat');
+            if (caveat) {
+                caveat.hidden = !(patch.xsDiag === 'qbudget' || patch.xsDiag === 'hbudget');
+            }
         }
         if ('showXSection' in patch) {
             const panel = document.getElementById('xsection-panel');
