@@ -2213,57 +2213,55 @@
                 </label>
             </div>
             <div class="lz-info" id="lorenz-info" hidden>
-                <p>Reservoirs (J/m², mass-weighted vertical integral):</p>
-                <pre>P_M = (R/2g) ∫ T̂² / (γ p) dp
-P_E = (R/2g) ∫ ⟨T*²⟩ / (γ p) dp
-K_M = (1/2g) ∫ ([u]² + [v]²) dp
-K_E = (1/2g) ∫ ⟨u*² + v*²⟩ dp</pre>
-                <p>where T̂ = [T] − T_ref, T* = T − [T], γ = κT_ref/p − ∂T_ref/∂p,
-                T_ref is set by the toggle above (Lorenz-sorted or area-mean),
-                [·] is zonal mean, and ⟨·⟩ is global area-mean. Leading factor
-                R/(2g) is the canonical Holton–Hakim / Vallis form.</p>
-                <p>Conversions (W/m²):</p>
+                <p><b>Lorenz energy cycle (stationary-eddy form).</b> Four reservoirs, four conversions. Reservoirs in <b>MJ m⁻²</b>, conversions in <b>W m⁻²</b>, all mass-weighted vertically over the 12 pressure levels and area-weighted globally (cosφ).</p>
+                <p><b>Reservoirs</b> — available potential + kinetic energy, mean + eddy:</p>
+                <pre>P_M = (R/2g) ∫ T̂² / (γ p) dp        (mean APE)
+P_E = (R/2g) ∫ ⟨T*²⟩ / (γ p) dp     (eddy APE)
+K_M = (1/2g) ∫ ([u]² + [v]²) dp     (mean KE)
+K_E = (1/2g) ∫ ⟨u*² + v*²⟩ dp       (eddy KE)</pre>
+                <p style="font-size: 0.74rem;">where T̂ = [T] − T_ref (zonal-mean departure from reference), T* = T − [T] (stationary-eddy departure from zonal mean), γ(p) = κT_ref/p − ∂T_ref/∂p (static stability), [·] is zonal mean, ⟨·⟩ is global area-mean. Leading factor R/(2g) is the Holton–Hakim / Vallis form (using c_p/2g instead overshoots by ~3.5×).</p>
+                <p><b>Conversions</b> — each has a clean physical reading:</p>
                 <pre>C(P_M→P_E) = -(R/g) ∫ ⟨v*T*⟩/(γp) · ∂[T]/∂y dp
               -(R/g) ∫ ⟨ω*T*⟩/(γp) · ∂[T]/∂p dp
+   ► baroclinic release — eddy heat flux
+     down the mean T gradient
+
 C(P_E→K_E) = -(R/g) ∫ ⟨ω*T*⟩ / p dp
-C(K_E→K_M) =  (1/g) ∫ ⟨u*v*⟩ cosφ ∂([u]/cosφ)/∂y dp
-              + (1/g) ∫ ⟨u*ω*⟩ ∂[u]/∂p dp
-C(P_M→K_M) = -(R/g) ∫ [ω][T] / p dp</pre>
-                <p><b>Stationary eddies only.</b> ' star' here is the deviation from the
-                zonal mean of the monthly-mean field — so this captures the energetics
-                of planetary waves locked to topography / land–sea contrast. The
-                <i>transient</i>-eddy contribution (high-frequency departures from the
-                monthly mean) is excluded; computing it would require daily ERA5,
-                which we don't currently host.</p>
-                <p>Reference: Lorenz (1955, <i>Tellus</i>); Peixoto &amp; Oort (1992),
-                <i>Physics of Climate</i>, ch. 13–14; Boer (1989, <i>JCli</i>) for the
-                stationary/transient decomposition.</p>
-                <p><b>Reference state choice (toggle at top of panel):</b></p>
+   ► eddy buoyancy flux — warm air rising,
+     cold air sinking in the eddies
+
+C(K_E→K_M) =  (1/g) ∫ ⟨u*v*⟩ cosφ · ∂([u]/cosφ)/∂y dp
+              +(1/g) ∫ ⟨u*ω*⟩ · ∂[u]/∂p dp
+   ► eddy momentum flux spinning up the
+     zonal-mean jets (barotropic)
+
+C(P_M→K_M) = -(R/g) ∫ [ω][T] / p dp
+   ► direct thermal conversion by the
+     zonal-mean meridional circulation
+     (Hadley cell drives this)</pre>
+                <p><b>Implementation notes:</b></p>
                 <ul style="margin: 4px 0 6px 16px; padding: 0; font-size: 0.74rem;">
-                    <li><b>Lorenz (sorted)</b> — the true minimum-PE reference state from
-                    Lorenz (1955): every parcel in the atmosphere is adiabatically
-                    re-stratified by θ, with highest θ at the top. Numerically intensive
-                    (~780k parcels sorted) but yields the canonical P_M.</li>
-                    <li><b>Area-mean</b> — T_ref(p) = global area-weighted mean of T at
-                    each pressure level. The common diagnostic approximation; gives a
-                    smaller P_M because it doesn't account for the stratified resorting.
-                    Boer (1989) showed this underestimates P_M by ~3×.</li>
+                    <li>Inputs are the monthly-mean u, v, ω, T fields on 12 pressure levels (10 → 1000 hPa) from ERA5.</li>
+                    <li>Vertical integration uses each level's half-distance layer (dp = (p_{k-1} + p_{k+1})/2 − (p_{k-1} + p_k)/2), one-sided at top and bottom.</li>
+                    <li>Meridional derivatives ∂/∂y use centered differences on a = 6.371·10⁶ m; vertical ∂/∂p likewise on the 12-level pressure grid.</li>
+                    <li>Global ⟨·⟩ uses a cosφ area weight over the full (181 × 360) grid, skipping NaN (land-masked) samples.</li>
                 </ul>
+                <p><b>Reference-state toggle</b> (controls T_ref, which sets γ and the T̂ used for P_M and C(P_M, K_M)):</p>
+                <ul style="margin: 4px 0 6px 16px; padding: 0; font-size: 0.74rem;">
+                    <li><b>Lorenz (sorted)</b> — the true minimum-PE reference from Lorenz (1955). Every parcel (~780k on the 12-level globe) is adiabatically re-stratified by θ, with highest θ at the top; T_ref(p) is the T at the rank where cumulative mass from the top equals (p / p_s)·total. This is the canonical "available" formulation.</li>
+                    <li><b>Area-mean</b> — T_ref(p) = global area-weighted mean of T at each pressure level. The textbook diagnostic approximation. Faster, but it overstates how much PE is "available" — a lot of the meridional T gradient it sees is actually unavailable (non-adiabatic to release).</li>
+                </ul>
+                <p><b>Why sorted ≠ area-mean, especially for C(P_M, K_M):</b> both formulations share u, v, ω, T — only T_ref (and hence T̂, γ) differ. In area-mean, T̂ still contains the full tropics-to-pole gradient, so the Hadley-cell overturning [ω] correlates strongly with T̂ and C(P_M, K_M) is large. In sorted, the reference has already absorbed most of that gradient; the "excess" T̂ is small and C(P_M, K_M) drops sharply. The factor-of-many difference you see between the two panels is Lorenz's (1955) original pedagogical point in visible form — the area-mean calc systematically overstates convertible energy.</p>
                 <p style="color: var(--ochre);"><b>Caveats:</b></p>
                 <ul style="margin: 4px 0 6px 16px; padding: 0; font-size: 0.74rem; color: var(--paper-dim);">
-                    <li>C(P_M,P_E) here includes both the meridional <b>and</b> vertical
-                    eddy-heat-flux terms; many references quote only the dominant
-                    meridional term.</li>
-                    <li>This is the <b>stationary-eddy</b> cycle — transients (which
-                    dominate baroclinic conversion in the literature totals) need daily
-                    data, which we don't currently host.</li>
+                    <li><b>Stationary eddies only.</b> * here is the departure of the monthly-mean field from its zonal mean — it captures planetary waves locked to topography / land-sea contrast. High-frequency (sub-monthly) <i>transient</i> eddies, which dominate baroclinic conversion in published totals, need daily data (currently out of scope).</li>
+                    <li>C(P_M, P_E) here includes both the meridional <b>and</b> vertical eddy-heat-flux terms; many references quote only the meridional term.</li>
+                    <li>Expect ~3-5× smaller conversions than Peixoto-Oort "total" numbers because transients are excluded.</li>
                 </ul>
                 <p style="color: var(--paper-dim); font-size: 0.74rem;">
-                    Use the cycle to <i>illustrate</i> structure (which arrows are large,
-                    which way energy flows). Toggle the reference state to see how
-                    methodology choice changes P_M and the conversions involving the
-                    mean state — pedagogically interesting in its own right.
+                    Use the cycle to <i>illustrate</i> structure — which arrows are large, which way energy flows, how seasonal cycles shift it (swipe through months). Toggle the reference state to see how a methodology choice shifts P_M and C(P_M, K_M) by an order of magnitude — that's the pedagogy in its own right.
                 </p>
+                <p style="color: var(--paper-dim); font-size: 0.74rem;">References: Lorenz (1955, <i>Tellus</i>); Peixoto &amp; Oort (1974; 1992, <i>Physics of Climate</i>, ch. 13-14); Boer (1989, <i>JCli</i>) for the stationary/transient decomposition; Holton &amp; Hakim (textbook ch. 10) for the canonical derivation.</p>
             </div>
             <svg id="lorenz-svg" viewBox="0 0 360 260" xmlns="http://www.w3.org/2000/svg">
                 <!-- boxes -->
