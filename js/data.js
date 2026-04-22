@@ -50,46 +50,43 @@ export function expectedTilesForView(state) {
     const isTheta = vCoord === 'theta' && meta.type === 'pl';
     const perIngredient = isTheta ? N_LEVELS : 1;
 
-    // Ingredient count by field type. For θ-coord views, each ingredient
-    // needs a full 12-level stack so PV on 330 K can interpolate.
+    // Ingredient count by field type for the PRIMARY view (the thing that
+    // makes f.isReal go true and hides the overlay). Wind-overlay tiles
+    // and background cross-month aggregation load in parallel but don't
+    // gate first paint, so they're intentionally excluded here — the
+    // display Y grows upward in setLoadingProgress if actual in-flight
+    // exceeds this floor, so no undercount visible to the user.
     let ingredients;
+    let needsTCube = isTheta;
     if (meta.type === 'sl') {
-        ingredients = 1;                 // surface fields: one tile
+        ingredients = 1;
+        needsTCube = false;
     } else if (field === 'pv') {
-        ingredients = isTheta ? 2 : 1;   // t + pv on θ; just pv on pressure
+        ingredients = 1;
     } else if (field === 'wspd') {
-        ingredients = isTheta ? 3 : 2;   // u, v (+t for θ-cube)
+        ingredients = 2;
     } else if (field === 'mse') {
-        ingredients = isTheta ? 3 : 3;   // t, z, q (t already counted)
+        ingredients = 3;
+        needsTCube = false;
     } else if (field === 'dls') {
-        return 2;                        // u and v at both 200 and 850 = 4, but cached per level; 2 is a safe floor
-    } else if (isTheta) {
-        ingredients = 2;                 // raw pressure-level field on θ: t + field
+        return 2;
     } else {
-        ingredients = 1;                 // raw pressure-level field: one tile
+        ingredients = 1;
+        if (isTheta && field === 't') needsTCube = false;
     }
 
     let n = ingredients * perIngredient;
+    if (needsTCube) n += N_LEVELS;
 
-    // σ-anom or ±1σ kind: pulls the std tile for the current field.
     if (decompose === 'zscore' || kind === 'std') n += 1;
-
-    // Non-default reference period for anomaly/zscore — roughly the
-    // same ingredient set fetched again from the reference tree.
     if ((decompose === 'anomaly' || decompose === 'zscore')
         && referencePeriod && referencePeriod !== 'default' && referencePeriod !== 'best-match') {
-        n += ingredients;
+        n += ingredients * perIngredient;
     }
-
-    // Contour overlay adds one tile at the current level.
     if (contourField) n += 1;
-
-    // Composite / custom-range: the ingredient set fetched per event year
-    // at the current month (not × 12; only current-month first paint).
     if (customRange?.years?.length) {
         n += customRange.years.length * ingredients;
     }
-
     return Math.max(1, n);
 }
 

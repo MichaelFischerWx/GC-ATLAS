@@ -2962,25 +2962,31 @@ class GlobeApp {
     }
 
     /** "X of Y tiles loaded" progress for the loading overlay.
-     *  Y is derived from the view itself (expectedTilesForView in data.js)
-     *  — a static upper-bound on first-paint tiles based on field type,
-     *  vertical coord, decomposition, ref period, composite years.
-     *  That denominator stays fixed while tiles drain; X is (Y − pending)
-     *  clamped to [0, Y] so late-arriving background aggregation fetches
-     *  can't push the number above the expected count.
-     *  Rationale: raw in-flight counting had a moving Y that made the
-     *  bar feel dishonest; expected-tiles-for-first-paint is knowable
-     *  up-front and stable.
+     *  Y starts at expectedTilesForView (first-paint canonical count),
+     *  but can grow upward if actual in-flight (from era5.js tilesInBatch)
+     *  exceeds the expected floor — e.g. wind-overlay tiles or background
+     *  cross-month aggregation kicking in alongside the first paint.
+     *  Y never shrinks, so the counter doesn't feel like it's walking back.
+     *  X is (Y − pending) clamped, so it monotonically rises.
      */
-    setLoadingProgress({ pending }) {
+    setLoadingProgress({ pending, total }) {
         const el = document.getElementById('globe-loading');
         if (!el) return;
         const line = el.querySelector('.globe-loading-progress');
         if (!line) return;
         const expected = this._expectedTiles || 0;
-        if (pending > 0 && expected > 0) {
-            const done = Math.max(0, Math.min(expected, expected - pending));
-            line.textContent = `${done} of ${expected} tiles loaded`;
+        // Anchor the high-water mark so Y can only grow. Cleared when the
+        // batch idles (pending hits 0).
+        if (pending === 0) {
+            this._progressHighWater = 0;
+        } else {
+            this._progressHighWater = Math.max(this._progressHighWater || 0,
+                                               expected, total || 0);
+        }
+        const y = this._progressHighWater;
+        if (pending > 0 && y > 0) {
+            const done = Math.max(0, y - pending);
+            line.textContent = `${done} of ${y} tiles loaded`;
         } else {
             line.textContent = '';
         }
