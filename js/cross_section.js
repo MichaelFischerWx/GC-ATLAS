@@ -7,7 +7,7 @@
 
 import { getField, LEVELS, GRID, FIELDS } from './data.js';
 import { sample } from './colormap.js';
-import { gcDistanceKm } from './arc.js';
+import { gcDistanceKm, arcPathLengthKm } from './arc.js';
 
 const LAT_TICKS = [-90, -60, -30, 0, 30, 60, 90];
 const P_TICKS   = [1000, 500, 200, 100, 50, 10];
@@ -200,9 +200,10 @@ export function computeArcCrossSection(fieldName, month, arc, { seasonal = false
     const meta = FIELDS[fieldName];
     const nSamples = arc.length;
     if (nSamples < 2) return null;
-    const distanceKm = gcDistanceKm(
-        arc[0].lat, arc[0].lon, arc[arc.length - 1].lat, arc[arc.length - 1].lon,
-    );
+    // Sum the actual sampled-segment lengths so curved (mid-pinned) arcs
+    // report their true along-path distance on the cross-section x-axis,
+    // not the endpoint-to-endpoint shortcut.
+    const distanceKm = arcPathLengthKm(arc);
 
     if (meta.type === 'sl') {
         const f = getField(fieldName, { month, seasonal });

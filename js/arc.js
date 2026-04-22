@@ -86,3 +86,75 @@ export function greatCircleArc(lat1, lon1, lat2, lon2, nSegments = 128) {
     }
     return out;
 }
+
+/**
+ * Great-circle midpoint of two (lat, lon) points — half-way between them
+ * along the minor great-circle arc. Used when the cross-section arc is
+ * auto-derived (mid not pinned by the user).
+ */
+export function greatCircleMidpoint(lat1, lon1, lat2, lon2) {
+    const v = latLonToVec3(lat1, lon1).add(latLonToVec3(lat2, lon2));
+    if (v.lengthSq() < 1e-12) return { lat: lat1, lon: lon1 };
+    return vec3ToLatLon(v.normalize());
+}
+
+/** Linear-lat/lon midpoint — same seam-aware logic as linearLatLonArc. */
+export function linearLatLonMidpoint(lat1, lon1, lat2, lon2) {
+    let dlon = lon2 - lon1;
+    if (dlon >  180) dlon -= 360;
+    if (dlon < -180) dlon += 360;
+    return {
+        lat: (lat1 + lat2) / 2,
+        lon: ((lon1 + dlon / 2 + 540) % 360) - 180,
+    };
+}
+
+/**
+ * Three-point arc — two sub-arcs concatenated through a pinned midpoint,
+ * sampled at N+1 points total with allocation proportional to each
+ * sub-arc's length so the spacing stays roughly uniform.
+ * `kind` is 'gc' (great-circle, globe view) or 'linear' (map view).
+ * Produces a kink at `mid` — that's intentional; the midpoint handle is
+ * a pedagogical choice ("follow this curved jet-streak") and the bend is
+ * a visible signal to the user that their curve is not geodesic.
+ */
+export function threePointArc(start, mid, end, nSegments = 128, { kind = 'gc' } = {}) {
+    const seg1 = (kind === 'linear')
+        ? linearLatLonArc(start.lat, start.lon, mid.lat, mid.lon, 2)
+        : greatCircleArc(start.lat, start.lon, mid.lat, mid.lon, 2);
+    const seg2 = (kind === 'linear')
+        ? linearLatLonArc(mid.lat, mid.lon, end.lat, end.lon, 2)
+        : greatCircleArc(mid.lat, mid.lon, end.lat, end.lon, 2);
+    // Rough sub-arc lengths (any monotonic proxy works for allocation).
+    const L1 = gcDistanceKm(start.lat, start.lon, mid.lat, mid.lon);
+    const L2 = gcDistanceKm(mid.lat, mid.lon, end.lat, end.lon);
+    const total = L1 + L2;
+    if (!(total > 0)) {
+        return (kind === 'linear')
+            ? linearLatLonArc(start.lat, start.lon, end.lat, end.lon, nSegments)
+            : greatCircleArc(start.lat, start.lon, end.lat, end.lon, nSegments);
+    }
+    // Allocate at least 1 segment to each half so we always get a 3-point shape.
+    const n1 = Math.max(1, Math.round(nSegments * L1 / total));
+    const n2 = Math.max(1, nSegments - n1);
+    const full1 = (kind === 'linear')
+        ? linearLatLonArc(start.lat, start.lon, mid.lat, mid.lon, n1)
+        : greatCircleArc(start.lat, start.lon, mid.lat, mid.lon, n1);
+    const full2 = (kind === 'linear')
+        ? linearLatLonArc(mid.lat, mid.lon, end.lat, end.lon, n2)
+        : greatCircleArc(mid.lat, mid.lon, end.lat, end.lon, n2);
+    // Drop the duplicate mid point from the second half.
+    return full1.concat(full2.slice(1));
+}
+
+/** Total along-path distance of a sampled arc (km). For curved / pinned-
+ *  midpoint arcs this is longer than the endpoint-to-endpoint great-circle
+ *  distance — the cross-section x-axis label should reflect the actual
+ *  path length, not the shortcut. */
+export function arcPathLengthKm(arc) {
+    let total = 0;
+    for (let i = 1; i < arc.length; i++) {
+        total += gcDistanceKm(arc[i - 1].lat, arc[i - 1].lon, arc[i].lat, arc[i].lon);
+    }
+    return total;
+}

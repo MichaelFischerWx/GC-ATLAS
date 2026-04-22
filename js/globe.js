@@ -17,7 +17,7 @@ import { ContourLabels } from './contour_labels.js';
 import { SunLight } from './sun.js';
 import { OrbitScene, ORBIT_RADIUS } from './orbit.js';
 import { computeZonalMean, computeArcCrossSection, renderCrossSection, samplePanel } from './cross_section.js';
-import { greatCircleArc, linearLatLonArc, latLonToVec3, gcDistanceKm } from './arc.js';
+import { greatCircleArc, linearLatLonArc, latLonToVec3, gcDistanceKm, greatCircleMidpoint, linearLatLonMidpoint, threePointArc } from './arc.js';
 import { loadManifest, onFieldLoaded, isReady as era5Ready, prefetchField, cachedMonth, registerClamps, setActivePeriod, getManifest } from './era5.js';
 import { decompose, annualMeanFrom, aggregatedDecompositionRange } from './decompose.js';
 import { HoverProbe } from './hover.js';
@@ -639,14 +639,15 @@ class GlobeApp {
                 if (chk) chk.checked = true;
                 this.setState({ showXSection: true });
             }
-            this.setState({ xsArc: { start: p, end: p } });
+            // Re-drawing from scratch wipes any pinned midpoint.
+            this.setState({ xsArc: { start: p, end: p, mid: null } });
         });
 
         el.addEventListener('pointermove', (e) => {
             if (!dragging) return;
             const p = pointToLatLon(e);
             if (!p) return;
-            this.setState({ xsArc: { start: startPt, end: p } });
+            this.setState({ xsArc: { start: startPt, end: p, mid: null } });
         });
 
         const endDrag = (e) => {
@@ -657,6 +658,81 @@ class GlobeApp {
         };
         el.addEventListener('pointerup', endDrag);
         el.addEventListener('pointercancel', endDrag);
+
+        // ── Handle-drag: click-and-drag the start / mid / end dots ─────────
+        // Once an arc exists, the three markers become draggable without any
+        // modifier key. Midpoint drag pins the arc into a three-point curve;
+        // endpoint drag leaves the mid unpinned so it auto-follows (unless
+        // the user already pinned it, in which case the curve updates shape
+        // but the mid stays where they put it).
+        // Shares `raycaster` + `ndc` with the shift-drag hit-test above.
+        let handleDrag = null; // { which: 'start' | 'mid' | 'end' }
+        const hitTestHandles = (clientX, clientY) => {
+            if (!this.arcGroup || !this.arcGroup.visible) return null;
+            const rect = el.getBoundingClientRect();
+            ndc.x =  ((clientX - rect.left) / rect.width)  * 2 - 1;
+            ndc.y = -((clientY - rect.top)  / rect.height) * 2 + 1;
+            raycaster.setFromCamera(ndc, this.camera);
+            const hits = raycaster.intersectObjects(
+                [this.arcStartDot, this.arcMidDot, this.arcEndDot], false);
+            if (!hits.length) return null;
+            const hit = hits[0].object;
+            if (hit === this.arcStartDot) return 'start';
+            if (hit === this.arcEndDot)   return 'end';
+            if (hit === this.arcMidDot)   return 'mid';
+            return null;
+        };
+        el.addEventListener('pointerdown', (e) => {
+            // Don't intercept modifier-held clicks — those belong to the
+            // existing shift-arc / alt-parcel handlers above.
+            if (e.shiftKey || e.altKey || e.metaKey || e.ctrlKey) return;
+            if (this.state.viewMode === 'orbit') return;
+            if (this.state.xsDiag !== 'field') return;
+            if (!this.state.xsArc) return;
+            const which = hitTestHandles(e.clientX, e.clientY);
+            if (!which) return;
+            handleDrag = { which };
+            this.controls.enabled = false;
+            e.preventDefault();
+            el.setPointerCapture(e.pointerId);
+            el.style.cursor = 'grabbing';
+        });
+        el.addEventListener('pointermove', (e) => {
+            if (!handleDrag) {
+                // Hover affordance: show a grab cursor when over a dot.
+                if (this.state.xsArc && this.state.xsDiag === 'field'
+                    && this.state.viewMode !== 'orbit' && !dragging) {
+                    const over = hitTestHandles(e.clientX, e.clientY);
+                    el.style.cursor = over ? 'grab' : '';
+                }
+                return;
+            }
+            const p = pointToLatLon(e);
+            if (!p) return;
+            const a = this.state.xsArc;
+            if (!a) return;
+            const patch = { ...a };
+            if (handleDrag.which === 'start') {
+                patch.start = p;
+                // If the mid is unpinned (null), leave it null — it'll
+                // auto-recompute on render. If it's pinned, leave it alone
+                // so the user's curve shape is preserved.
+            } else if (handleDrag.which === 'end') {
+                patch.end = p;
+            } else { // 'mid'
+                patch.mid = p;   // pin it
+            }
+            this.setState({ xsArc: patch });
+        });
+        const endHandleDrag = (e) => {
+            if (!handleDrag) return;
+            handleDrag = null;
+            this.controls.enabled = true;
+            el.style.cursor = '';
+            try { el.releasePointerCapture(e.pointerId); } catch { /* ignore */ }
+        };
+        el.addEventListener('pointerup', endHandleDrag);
+        el.addEventListener('pointercancel', endHandleDrag);
     }
 
     installMapDrag() {
@@ -765,6 +841,7 @@ class GlobeApp {
             globe: [
                 { kbd: 'drag',         desc: 'rotate the globe' },
                 { kbd: '⇧ + drag',    desc: 'draw cross-section arc' },
+                { kbd: 'drag dots',    desc: 'reshape arc (start / mid / end)' },
                 { kbd: '⌥ + click',   desc: 'release parcels' },
                 { kbd: 'scroll',       desc: 'zoom' },
             ],
@@ -773,6 +850,8 @@ class GlobeApp {
                 { kbd: 'scroll',       desc: 'zoom' },
             ] : [
                 { kbd: 'drag',         desc: 'pan the central meridian' },
+                { kbd: '⇧ + drag',    desc: 'draw cross-section arc' },
+                { kbd: 'drag dots',    desc: 'reshape arc (start / mid / end)' },
                 { kbd: 'scroll',       desc: 'zoom' },
             ],
             orbit: [
@@ -2460,14 +2539,18 @@ class GlobeApp {
         } else if (xsArc) {
             // Map view: straight-line-in-(lat, lon) sampling — reads as a
             // straight line on the equirectangular projection. Globe view:
-            // great-circle — reads as straight on the sphere.
-            const arcFn = (this.state.viewMode === 'map')
-                ? linearLatLonArc : greatCircleArc;
-            const arc = arcFn(
-                xsArc.start.lat, xsArc.start.lon,
-                xsArc.end.lat,   xsArc.end.lon,
-                192,
-            );
+            // great-circle — reads as straight on the sphere. When the user
+            // has pinned a midpoint (xsArc.mid set), we sample a three-point
+            // curve through it instead — lets the user follow a curved jet
+            // streak, an eye-wall track, etc.
+            const kind = this.state.viewMode === 'map' ? 'linear' : 'gc';
+            const arc = xsArc.mid
+                ? threePointArc(xsArc.start, xsArc.mid, xsArc.end, 192, { kind })
+                : (kind === 'linear'
+                    ? linearLatLonArc(xsArc.start.lat, xsArc.start.lon,
+                                      xsArc.end.lat,   xsArc.end.lon, 192)
+                    : greatCircleArc(xsArc.start.lat, xsArc.start.lon,
+                                     xsArc.end.lat,   xsArc.end.lon, 192));
             zm = computeArcCrossSection(field, month, arc, xsOpts);
             if (!zm) { zm = computeZonalMean(field, month); }
         } else {
@@ -2568,10 +2651,13 @@ class GlobeApp {
         if (!this.arcGroup) return;
         const a = this.state.xsArc;
         if (!a) { this.arcGroup.visible = false; return; }
-        // Same arc type as the cross-section sampling (see updateField).
-        const arcFn = (this.state.viewMode === 'map')
-            ? linearLatLonArc : greatCircleArc;
-        const arc = arcFn(a.start.lat, a.start.lon, a.end.lat, a.end.lon, 96);
+        // Same arc shape as the cross-section sampling (see updateField).
+        const kind = this.state.viewMode === 'map' ? 'linear' : 'gc';
+        const arc = a.mid
+            ? threePointArc(a.start, a.mid, a.end, 96, { kind })
+            : (kind === 'linear'
+                ? linearLatLonArc(a.start.lat, a.start.lon, a.end.lat, a.end.lon, 96)
+                : greatCircleArc(a.start.lat, a.start.lon, a.end.lat, a.end.lon, 96));
         const LIFT = 1.015;
         const pts = arc.map(({ lat, lon }) => this.project(lat, lon, LIFT));
         const flat = new Float32Array(pts.length * 3);
@@ -2584,16 +2670,25 @@ class GlobeApp {
         this.arcLine.geometry = new LineGeometry();
         this.arcLine.geometry.setPositions(flat);
         this.arcLine.computeLineDistances();
-        // Endpoint dots + midpoint marker (aligns with the centre x-tick in
-        // the cross-section panel, so users can read off where the centre
-        // of the arc sits on the globe).
+        // Endpoint dots at start / end. The mid dot sits at the pinned
+        // midpoint if the user has set one — otherwise at the auto-derived
+        // geometric midpoint along the straight arc. Pinned midpoints get
+        // a brighter fill to signal "this is user-controlled."
+        const midLL = a.mid
+            ? a.mid
+            : (kind === 'linear'
+                ? linearLatLonMidpoint(a.start.lat, a.start.lon, a.end.lat, a.end.lon)
+                : greatCircleMidpoint(a.start.lat, a.start.lon, a.end.lat, a.end.lon));
         const s = this.project(a.start.lat, a.start.lon, LIFT);
         const e = this.project(a.end.lat,   a.end.lon,   LIFT);
-        const midIdx = Math.floor(arc.length / 2);
-        const m = this.project(arc[midIdx].lat, arc[midIdx].lon, LIFT);
+        const m = this.project(midLL.lat, midLL.lon, LIFT);
         this.arcStartDot.position.copy(s);
         this.arcEndDot.position.copy(e);
         this.arcMidDot.position.copy(m);
+        // Pinned midpoint → brighter emerald; auto midpoint → softer amber.
+        if (this.arcMidDot.material) {
+            this.arcMidDot.material.color.setHex(a.mid ? 0x5FE0A5 : 0xFFE27A);
+        }
         // Hide the arc line when the panel is closed, in orbit view, or in
         // any diagnostic mode (all diagnostics are zonal).
         this.arcGroup.visible = this.state.showXSection
