@@ -110,41 +110,78 @@ export function linearLatLonMidpoint(lat1, lon1, lat2, lon2) {
 }
 
 /**
- * Three-point arc — two sub-arcs concatenated through a pinned midpoint,
- * sampled at N+1 points total with allocation proportional to each
- * sub-arc's length so the spacing stays roughly uniform.
- * `kind` is 'gc' (great-circle, globe view) or 'linear' (map view).
- * Produces a kink at `mid` — that's intentional; the midpoint handle is
- * a pedagogical choice ("follow this curved jet-streak") and the bend is
- * a visible signal to the user that their curve is not geodesic.
+ * Three-point arc — a smooth quadratic Bezier that passes through `start`,
+ * `mid`, and `end` at parameter values t = 0, 0.5, 1 respectively. The
+ * Bezier is C¹-continuous (no kink at the midpoint) and collapses to the
+ * straight start→end arc when `mid` is the geodesic midpoint, so the
+ * shape stays intuitive whether the user has pinned the middle or not.
+ *
+ * Math: for B(t) = (1−t)²P₀ + 2(1−t)t P₁ + t²P₂,  B(0.5) = ¼P₀ + ½P₁ + ¼P₂.
+ * Solving B(0.5) = mid gives the control point P₁ = 2·mid − ½(P₀ + P₂),
+ * i.e. the mid is a pass-through waypoint rather than a pull target.
+ *
+ * `kind = 'gc'`    — sample in 3D (unit vectors), normalize each Bezier
+ *                    sample back to the sphere and convert to (lat, lon).
+ *                    Degenerates to a great-circle arc when mid is on the
+ *                    geodesic.
+ * `kind = 'linear'` — sample the Bezier directly in (lat, lon) with the
+ *                    same shortest-longitude wrap used by linearLatLonArc.
  */
 export function threePointArc(start, mid, end, nSegments = 128, { kind = 'gc' } = {}) {
-    const seg1 = (kind === 'linear')
-        ? linearLatLonArc(start.lat, start.lon, mid.lat, mid.lon, 2)
-        : greatCircleArc(start.lat, start.lon, mid.lat, mid.lon, 2);
-    const seg2 = (kind === 'linear')
-        ? linearLatLonArc(mid.lat, mid.lon, end.lat, end.lon, 2)
-        : greatCircleArc(mid.lat, mid.lon, end.lat, end.lon, 2);
-    // Rough sub-arc lengths (any monotonic proxy works for allocation).
-    const L1 = gcDistanceKm(start.lat, start.lon, mid.lat, mid.lon);
-    const L2 = gcDistanceKm(mid.lat, mid.lon, end.lat, end.lon);
-    const total = L1 + L2;
-    if (!(total > 0)) {
-        return (kind === 'linear')
-            ? linearLatLonArc(start.lat, start.lon, end.lat, end.lon, nSegments)
-            : greatCircleArc(start.lat, start.lon, end.lat, end.lon, nSegments);
+    const N = Math.max(2, nSegments);
+    const out = [];
+    if (kind === 'linear') {
+        // Shortest-longitude deltas so the curve follows the ±180° seam
+        // correctly — same logic as linearLatLonArc.
+        let dlonM = mid.lon  - start.lon;
+        let dlonE = end.lon  - start.lon;
+        if (dlonM >  180) dlonM -= 360;
+        if (dlonM < -180) dlonM += 360;
+        if (dlonE >  180) dlonE -= 360;
+        if (dlonE < -180) dlonE += 360;
+        const midLonAbs = start.lon + dlonM;
+        const endLonAbs = start.lon + dlonE;
+        // P₁ in unwrapped (lat, lon) space.
+        const p1Lat = 2 * mid.lat - 0.5 * (start.lat + end.lat);
+        const p1Lon = 2 * midLonAbs - 0.5 * (start.lon + endLonAbs);
+        for (let i = 0; i <= N; i++) {
+            const t = i / N;
+            const u = 1 - t;
+            const lat = u * u * start.lat + 2 * u * t * p1Lat + t * t * end.lat;
+            const lon = u * u * start.lon + 2 * u * t * p1Lon + t * t * endLonAbs;
+            out.push({ lat, lon: ((lon + 540) % 360) - 180 });
+        }
+        return out;
     }
-    // Allocate at least 1 segment to each half so we always get a 3-point shape.
-    const n1 = Math.max(1, Math.round(nSegments * L1 / total));
-    const n2 = Math.max(1, nSegments - n1);
-    const full1 = (kind === 'linear')
-        ? linearLatLonArc(start.lat, start.lon, mid.lat, mid.lon, n1)
-        : greatCircleArc(start.lat, start.lon, mid.lat, mid.lon, n1);
-    const full2 = (kind === 'linear')
-        ? linearLatLonArc(mid.lat, mid.lon, end.lat, end.lon, n2)
-        : greatCircleArc(mid.lat, mid.lon, end.lat, end.lon, n2);
-    // Drop the duplicate mid point from the second half.
-    return full1.concat(full2.slice(1));
+    // Globe / great-circle: 3D quadratic Bezier on unit vectors, then
+    // normalize each sample back onto the sphere.
+    const P0 = latLonToVec3(start.lat, start.lon);
+    const P2 = latLonToVec3(end.lat,   end.lon);
+    const M  = latLonToVec3(mid.lat,   mid.lon);
+    const P1 = new THREE.Vector3(
+        2 * M.x - 0.5 * (P0.x + P2.x),
+        2 * M.y - 0.5 * (P0.y + P2.y),
+        2 * M.z - 0.5 * (P0.z + P2.z),
+    );
+    const tmp = new THREE.Vector3();
+    for (let i = 0; i <= N; i++) {
+        const t = i / N;
+        const u = 1 - t;
+        const w0 = u * u, w1 = 2 * u * t, w2 = t * t;
+        tmp.set(
+            w0 * P0.x + w1 * P1.x + w2 * P2.x,
+            w0 * P0.y + w1 * P1.y + w2 * P2.y,
+            w0 * P0.z + w1 * P1.z + w2 * P2.z,
+        );
+        // Projecting a 3D Bezier back to the sphere via normalize() is the
+        // simplest way to get a smooth sphere-embedded curve. For our
+        // midpoint displacements (typically < half a hemisphere) the
+        // parameterization stays well-behaved.
+        if (tmp.lengthSq() < 1e-12) continue;
+        tmp.normalize();
+        out.push(vec3ToLatLon(tmp));
+    }
+    return out;
 }
 
 /** Total along-path distance of a sampled arc (km). For curved / pinned-

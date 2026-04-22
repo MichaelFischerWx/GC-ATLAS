@@ -733,6 +733,20 @@ class GlobeApp {
         };
         el.addEventListener('pointerup', endHandleDrag);
         el.addEventListener('pointercancel', endHandleDrag);
+
+        // Double-click the midpoint dot to unpin it (arc reverts to straight
+        // great-circle / linear path). Mirrors the Unpin-midpoint button in
+        // the xs-panel footer — one is pointer-native, one is always visible.
+        el.addEventListener('dblclick', (e) => {
+            if (this.state.viewMode === 'orbit') return;
+            if (this.state.xsDiag !== 'field') return;
+            const a = this.state.xsArc;
+            if (!a || !a.mid) return;
+            const which = hitTestHandles(e.clientX, e.clientY);
+            if (which !== 'mid') return;
+            e.preventDefault();
+            this.setState({ xsArc: { start: a.start, end: a.end, mid: null } });
+        });
     }
 
     installMapDrag() {
@@ -841,7 +855,7 @@ class GlobeApp {
             globe: [
                 { kbd: 'drag',         desc: 'rotate the globe' },
                 { kbd: '⇧ + drag',    desc: 'draw cross-section arc' },
-                { kbd: 'drag dots',    desc: 'reshape arc (start / mid / end)' },
+                { kbd: 'drag dots',    desc: 'reshape arc · dblclick mid to unpin' },
                 { kbd: '⌥ + click',   desc: 'release parcels' },
                 { kbd: 'scroll',       desc: 'zoom' },
             ],
@@ -851,7 +865,7 @@ class GlobeApp {
             ] : [
                 { kbd: 'drag',         desc: 'pan the central meridian' },
                 { kbd: '⇧ + drag',    desc: 'draw cross-section arc' },
-                { kbd: 'drag dots',    desc: 'reshape arc (start / mid / end)' },
+                { kbd: 'drag dots',    desc: 'reshape arc · dblclick mid to unpin' },
                 { kbd: 'scroll',       desc: 'zoom' },
             ],
             orbit: [
@@ -2610,6 +2624,12 @@ class GlobeApp {
             }
         }
         if (reset) reset.hidden = zm.kind !== 'arc';
+        // "Unpin midpoint" only makes sense when the user has actually
+        // pinned one — hide otherwise so the footer stays lean.
+        const resetMid = document.getElementById('xs-reset-mid');
+        if (resetMid) {
+            resetMid.hidden = !(zm.kind === 'arc' && this.state.xsArc?.mid);
+        }
         this.updateArcLine();
     }
 
@@ -3910,6 +3930,12 @@ class GlobeApp {
         });
         document.getElementById('xs-reset')?.addEventListener('click', () => {
             this.setState({ xsArc: null });
+        });
+        document.getElementById('xs-reset-mid')?.addEventListener('click', () => {
+            const a = this.state.xsArc;
+            if (!a) return;
+            // Unpin the midpoint — arc reverts to straight start→end.
+            this.setState({ xsArc: { start: a.start, end: a.end, mid: null } });
         });
         document.getElementById('parcels-clear')?.addEventListener('click', () => {
             this.parcels?.clear();
