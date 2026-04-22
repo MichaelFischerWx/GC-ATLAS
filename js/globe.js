@@ -8,7 +8,7 @@ import { Line2 } from 'three/addons/lines/Line2.js';
 import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 import { fillRGBA, fillColorbar, COLORMAPS, meanLuminance } from './colormap.js';
-import { getField, FIELDS, LEVELS, THETA_LEVELS, MONTHS, GRID, invalidateIsentropicCache, isThetaOnly, customRangeYears } from './data.js';
+import { getField, FIELDS, LEVELS, THETA_LEVELS, MONTHS, GRID, invalidateIsentropicCache, isThetaOnly, customRangeYears, fieldHasStdTiles } from './data.js';
 import { loadIndices, getIndex, eventYears, compositeLabel } from './indices.js';
 import { ParticleField } from './particles.js';
 import { BarbField } from './barbs.js';
@@ -536,9 +536,15 @@ class GlobeApp {
         // keyboard/mouse controls, not a first-run tutorial.
         this.tipsPanel = document.getElementById('tips-panel');
         this.tipsContent = document.getElementById('tips-content');
-        const dismiss = document.getElementById('tips-dismiss');
+        const dismiss   = document.getElementById('tips-dismiss');
+        const tipsReopen = document.getElementById('tips-reopen');
         dismiss?.addEventListener('click', () => {
             this.tipsPanel?.classList.add('hidden');
+            tipsReopen?.removeAttribute('hidden');
+        });
+        tipsReopen?.addEventListener('click', () => {
+            this.tipsPanel?.classList.remove('hidden');
+            tipsReopen.setAttribute('hidden', '');
         });
         this.updateHintForViewMode();   // populate with the initial view's tips
 
@@ -2102,10 +2108,17 @@ class GlobeApp {
             // shows in the meantime).
             if (patch.climatologyPeriod !== 'default') {
                 loadManifest(patch.climatologyPeriod).then((ok) => {
-                    if (ok) this.updateField();
+                    if (ok) {
+                        this.updateField();
+                        // σ-anom availability depends on the newly-loaded
+                        // manifest's has_std flags — re-evaluate once it lands.
+                        this._refreshZscoreAvailability?.();
+                    }
                 });
             }
+            this._refreshZscoreAvailability?.();
         }
+        if ('field' in patch) this._refreshZscoreAvailability?.();
 
         // Eagerly prefetch all 12 months at this (field, level) so the
         // colorbar stabilises quickly once any tile lands.
@@ -3490,6 +3503,11 @@ class GlobeApp {
         rangeBtn  ?.addEventListener('click', () => {
             const s = Number(rangeStart.value), e = Number(rangeEnd.value);
             if (!Number.isFinite(s) || !Number.isFinite(e) || s > e) return;
+            // Brief spinner pulse — the prefetch fans out async so the
+            // button would otherwise look unresponsive even though tiles
+            // are streaming in.
+            rangeBtn.classList.add('is-computing');
+            setTimeout(() => rangeBtn.classList.remove('is-computing'), 900);
             // Prefetch the per-year tiles for every year in range at the
             // current (field, level). They land asynchronously and the
             // onFieldLoaded listener re-paints as each arrives.
@@ -3635,6 +3653,29 @@ class GlobeApp {
             if (refLabel) refLabel.textContent = (kind === 'std') ? 'σ comparison' : 'Anomaly reference';
         };
         applyKindUI(this.state.kind);
+        // σ-anom availability: the default 1991-2020 tree lacks std tiles for
+        // 8 pressure-level raw vars (t, u, v, q, r, vo, w, z); derived-field
+        // σ tiles land only once build_derived_std.py runs + pushes to GCS.
+        // Rather than silently falling back to mean, disable the button with
+        // a tooltip. Re-evaluated on field / kind / period changes.
+        this._refreshZscoreAvailability = () => {
+            const btn = document.querySelector('[data-decompose="zscore"]');
+            if (!btn) return;
+            const available = fieldHasStdTiles(
+                this.state.field, this.state.climatologyPeriod);
+            btn.classList.toggle('is-unavailable', !available);
+            btn.title = available
+                ? 'Standardized anomaly: (value − climo mean) ÷ climo σ. Unit-less z-score; |z| > 2 is unusual, > 3 is rare. Makes regions with different absolute variability (tropics vs midlatitudes) directly comparable.'
+                : `σ-anom is unavailable for this field in the ${this.state.climatologyPeriod === 'default' ? '1991–2020' : this.state.climatologyPeriod} climatology — no σ tiles have been published for it yet.`;
+            // If the user was on σ-anom and it just became unavailable,
+            // fall back to Total rather than painting nothing.
+            if (!available && this.state.decompose === 'zscore') {
+                this.setState({ decompose: 'total' });
+                document.querySelectorAll('[data-decompose]').forEach((b) =>
+                    b.classList.toggle('active', b.getAttribute('data-decompose') === 'total'));
+            }
+        };
+        this._refreshZscoreAvailability();
         document.querySelectorAll('[data-kind]').forEach((btn) => {
             btn.addEventListener('click', () => {
                 const kind = btn.getAttribute('data-kind');
@@ -3909,7 +3950,14 @@ class GlobeApp {
         sel    .addEventListener('change', refresh);
         cmpSel ?.addEventListener('change', refresh);
         thresh ?.addEventListener('input',  refresh);
-        btn.addEventListener('click', () => this._applyComposite());
+        btn.addEventListener('click', () => {
+            // Spinner pulse so the user gets immediate feedback — the tile
+            // prefetch fan-out runs async and the button would otherwise
+            // look dead until the first tile arrives.
+            btn.classList.add('is-computing');
+            setTimeout(() => btn.classList.remove('is-computing'), 900);
+            this._applyComposite();
+        });
         if (slidCB) {
             slidCB.checked = !!this.state.slidingClimo;
             slidCB.addEventListener('change', (e) => {
@@ -4720,8 +4768,10 @@ class GlobeApp {
             const swipeRadio = swipeOpt?.querySelector('input[type="radio"]');
             const swipeOk = this.state.compareMode && this.state.viewMode === 'map';
             if (swipeOpt) {
-                swipeOpt.style.opacity = swipeOk ? '' : '0.45';
-                swipeOpt.style.pointerEvents = swipeOk ? '' : 'none';
+                // Toggle .is-unavailable instead of opacity — keeps the option
+                // visible with its amber "how to enable" caption so the user
+                // learns what to do next rather than guessing.
+                swipeOpt.classList.toggle('is-unavailable', !swipeOk);
             }
             if (swipeRadio) {
                 swipeRadio.disabled = !swipeOk;
@@ -4740,8 +4790,7 @@ class GlobeApp {
             const xsPanel = document.getElementById('xsection-panel');
             const xsOk = xsPanel && !xsPanel.hidden;
             if (xsOpt) {
-                xsOpt.style.opacity = xsOk ? '' : '0.45';
-                xsOpt.style.pointerEvents = xsOk ? '' : 'none';
+                xsOpt.classList.toggle('is-unavailable', !xsOk);
             }
             if (xsRadio) {
                 xsRadio.disabled = !xsOk;

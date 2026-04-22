@@ -252,6 +252,22 @@
             border-color: var(--thalo-line);
             color: var(--sage);
         }
+        /* Spinner pulse — brief visual ack that a click was received while
+           the prefetch burst fans out. Added on click, removed on a short
+           timeout. */
+        .range-compute.is-computing::before {
+            content: '';
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            margin-right: 7px;
+            vertical-align: -1px;
+            border: 2px solid rgba(45, 189, 160, 0.35);
+            border-top-color: var(--emerald-bright);
+            border-radius: 50%;
+            animation: cb-spin 0.7s linear infinite;
+        }
+        @keyframes cb-spin { to { transform: rotate(360deg); } }
 
         /* ── Composite builder (parametric index-based event compositing) ── */
         .composite-details {
@@ -499,6 +515,14 @@
             color: var(--deep);
             font-weight: 600;
         }
+        /* Individual-button unavailable state — used on σ-anom when the
+           active field's period lacks σ tiles. Visually quieted and
+           click-inert; the attribute-level title tells the user why. */
+        .segmented button.is-unavailable {
+            opacity: 0.35;
+            cursor: not-allowed;
+            pointer-events: none;
+        }
 
         /* ── Canvas area ────────────────────────────────────── */
         .canvas-area {
@@ -648,6 +672,13 @@
             transition: border-color 0.15s, color 0.15s;
         }
         .cb-tick-input--right { text-align: right; }
+        /* Dotted underline as a pre-hover affordance — signals the number
+           is an editable input before the user mouses over it. */
+        .cb-tick-input:not(:focus):not(.is-override) {
+            text-decoration: underline dotted rgba(174, 195, 182, 0.35);
+            text-underline-offset: 3px;
+            text-decoration-thickness: 1px;
+        }
         .cb-tick-input:hover { border-color: rgba(255,255,255,0.10); }
         .cb-tick-input:focus {
             outline: none;
@@ -1378,6 +1409,21 @@
         .gif-opt input { margin-top: 3px; accent-color: var(--emerald-bright); }
         .gif-opt-title { font-weight: 600; color: var(--paper); }
         .gif-opt-sub { font-size: 0.78rem; color: var(--sage); margin-top: 2px; }
+        /* Amber "here's how to enable this" caption, shown via JS when the
+           option's prerequisite isn't met (panel closed / compare off). */
+        .gif-opt-hint {
+            display: none;
+            font-size: 0.74rem;
+            color: var(--amber);
+            margin-top: 4px;
+            letter-spacing: 0.02em;
+        }
+        /* Dim the title + sub in-place (not the whole label) so the amber
+           hint below them stays fully saturated and readable. */
+        .gif-opt.is-unavailable { pointer-events: none; }
+        .gif-opt.is-unavailable .gif-opt-title,
+        .gif-opt.is-unavailable .gif-opt-sub { opacity: 0.5; }
+        .gif-opt.is-unavailable .gif-opt-hint { display: block; }
         .gif-progress { margin-top: 4px; }
         .gif-progress.hidden { display: none; }
         .gif-progress-bar {
@@ -1484,6 +1530,32 @@
             border-radius: 4px;
         }
         .tips-dismiss:hover { color: var(--paper); background: rgba(255,255,255,0.06); }
+
+        /* ── Tips re-open pill (surfaces after user dismisses the card) ─ */
+        .tips-reopen {
+            position: absolute;
+            bottom: 18px; right: 18px;
+            width: 32px; height: 32px;
+            display: grid; place-items: center;
+            background: rgba(12, 36, 32, 0.85);
+            border: 1px solid var(--border);
+            border-radius: 50%;
+            color: var(--sage);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.95rem;
+            line-height: 1;
+            cursor: pointer;
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            z-index: 45;
+            transition: color 0.15s, border-color 0.15s, transform 0.2s;
+        }
+        .tips-reopen:hover {
+            color: var(--paper);
+            border-color: var(--emerald-bright);
+            transform: scale(1.05);
+        }
+        .tips-reopen[hidden] { display: none; }
 
         /* ── Hover readout tooltip ───────────────────────────── */
         .hover-tooltip {
@@ -1626,7 +1698,8 @@
         </a>
         <nav>
             <ul class="topbar-nav">
-                <li><a href="index.html">Home</a></li>
+                <li><a href="index.html#features"
+                       title="Back to the gallery of pre-configured views">← Gallery</a></li>
                 <li><a href="globe.html" class="active">Globe</a></li>
                 <li><a href="index.html#about">About</a></li>
                 <li><a href="https://michaelfischerwx.github.io/TC-ATLAS/" target="_blank" rel="noopener">TC-ATLAS</a></li>
@@ -1916,8 +1989,8 @@
         </section>
 
         <div class="sidebar-footer" id="sidebar-status">
-            <strong>Synthetic data</strong>
-            The globe is showing procedural fields shaped to look like ERA5 — a placeholder until the real climatology finishes staging. Everything you see will be replaced with observed 1991–2020 means.
+            <strong>Loading…</strong>
+            Fetching the ERA5 tile for this field.
         </div>
 
         <div class="sidebar-footer" style="margin-top:0; border-top:1px solid var(--border); padding-top:14px; font-size:0.72rem; line-height:1.55;">
@@ -1945,6 +2018,9 @@
             <div class="tips-title" id="tips-title">Controls</div>
             <div id="tips-content"></div>
         </aside>
+        <button class="tips-reopen" id="tips-reopen" type="button" hidden
+                aria-label="Show controls tips"
+                title="Show controls tips">?</button>
 
         <div class="view-toggle" role="group" aria-label="projection">
             <button id="view-globe" class="active" type="button">Globe</button>
@@ -2265,6 +2341,7 @@ C(P_M→K_M) = -(R/g) ∫ [ω][T] / p dp</pre>
                 <div>
                     <div class="gif-opt-title">Still image · cross-section panel (PNG)</div>
                     <div class="gif-opt-sub">Just the diagnostic panel: title + field + colorbar + caption. Panel must be open.</div>
+                    <div class="gif-opt-hint">Open the Cross-section panel first (Panels → Cross-section, or ⇧ + drag on the globe).</div>
                 </div>
             </label>
             <label class="gif-opt">
@@ -2286,6 +2363,7 @@ C(P_M→K_M) = -(R/g) ∫ [ω][T] / p dp</pre>
                 <div>
                     <div class="gif-opt-title">GIF · compare swipe sweep</div>
                     <div class="gif-opt-sub">Divider slides W → E in 10° steps (36 frames). Map-view compare must be active.</div>
+                    <div class="gif-opt-hint">Switch to Map view and enable Compare (sidebar → Compare → Compare A vs B).</div>
                 </div>
             </label>
             <div class="gif-progress hidden" id="gif-progress">

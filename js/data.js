@@ -25,6 +25,23 @@ function derivedHasPipelineStd(name, period) {
     return false;
 }
 
+// Does the active period's manifest carry σ tiles for this field?
+// Used by the UI to disable the σ-anom button when it would silently
+// fall back to mean (the default 1991-2020 tree is missing std for
+// 8 pressure-level raw vars; derived vars rely on build_derived_std.py).
+// Returns true optimistically when the manifest isn't loaded yet so we
+// don't disable the control during the initial page paint.
+export function fieldHasStdTiles(field, period) {
+    const m = getManifest(period === 'default' ? 'default' : period);
+    if (!m) return true;
+    for (const g of Object.values(m.groups || {})) {
+        if (field in g) return !!g[field].has_std;
+    }
+    // Derived fields aren't in any group's raw-variable list — fall
+    // back to the derived-std check.
+    return derivedHasPipelineStd(field, period);
+}
+
 export const GRID = { nlat: 181, nlon: 360 };
 export const LEVELS = [10, 50, 100, 150, 200, 250, 300, 500, 700, 850, 925, 1000];
 export const THETA_LEVELS = [280, 300, 315, 330, 350, 400, 500, 700];
