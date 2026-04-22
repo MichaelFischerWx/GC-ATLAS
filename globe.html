@@ -1615,6 +1615,37 @@
         }
         .sidebar-backdrop.open { opacity: 1; pointer-events: auto; }
 
+        /* Brief amber flash under the reference-period select when a
+           climatology-period change auto-resets an incompatible choice.
+           Fades out via JS after a few seconds. */
+        .ref-period-flash {
+            margin-top: 6px;
+            padding: 6px 8px;
+            font-size: 0.68rem;
+            line-height: 1.45;
+            color: var(--amber);
+            background: rgba(232, 194, 106, 0.08);
+            border-left: 2px solid var(--amber);
+            border-radius: 0 4px 4px 0;
+            transition: opacity 0.4s;
+        }
+        .ref-period-flash[hidden] { display: none; }
+        .ref-period-flash.is-fading { opacity: 0; }
+
+        /* In-sidebar explanation for why panels appear inert on mobile.
+           Default hidden; only surfaced inside the mobile media query below. */
+        .mobile-panel-hint {
+            display: none;
+            font-size: 0.7rem;
+            color: var(--sage);
+            line-height: 1.5;
+            margin-top: 10px;
+            padding: 8px 10px;
+            border-left: 2px solid var(--amber);
+            background: rgba(232, 194, 106, 0.05);
+            border-radius: 0 4px 4px 0;
+        }
+
         /* ── Responsive ─────────────────────────────────────── */
         @media (max-width: 820px) {
             .app { flex-direction: row; }   /* keep row — sidebar becomes drawer overlay */
@@ -1644,6 +1675,9 @@
             .xsection { display: none; }
             .lorenz   { display: none; }
             .tips-panel { display: none; }
+            /* Explain the hidden-panel situation inside the sidebar so
+               toggling a Panels checkbox doesn't look broken. */
+            .mobile-panel-hint { display: block; }
             .topbar-nav { gap: 4px; }
             .topbar-nav a { padding: 5px 8px; font-size: 0.75rem; }
             /* GIF modal — let the card breathe to the viewport edges. */
@@ -1736,7 +1770,7 @@
 
         <section class="control-group">
             <h4>Climatology</h4>
-            <div class="segmented kind-seg" id="kind-toggle">
+            <div class="segmented kind-seg" id="kind-toggle" role="tablist" aria-label="Display mode">
                 <button type="button" data-kind="mean" class="active" title="Climatological mean">Mean</button>
                 <button type="button" data-kind="std" title="Inter-annual standard deviation across the 30-year window — highlights ENSO, monsoon variability, storm-track regions">±1σ variability</button>
             </div>
@@ -1866,7 +1900,7 @@
 
         <section class="control-group" id="decompose-group">
             <h4>Decomposition</h4>
-            <div class="segmented decomp-seg">
+            <div class="segmented decomp-seg" role="tablist" aria-label="Field decomposition">
                 <button type="button" data-decompose="total" class="active">Total</button>
                 <button type="button" data-decompose="zonal">Zonal</button>
                 <button type="button" data-decompose="eddy">Eddy</button>
@@ -1883,6 +1917,7 @@
                     <option value="1991-2020">vs. 1991–2020 (WMO standard)</option>
                     <option value="1961-1990">vs. 1961–1990 (climate change)</option>
                 </select>
+                <p class="ref-period-flash" id="ref-period-flash" hidden></p>
             </div>
         </section>
 
@@ -1948,7 +1983,7 @@
             </div>
             <div class="wind-mode">
                 <div class="wind-mode-label">Wind</div>
-                <div class="segmented">
+                <div class="segmented" role="tablist" aria-label="Wind overlay">
                     <button type="button" data-wind-mode="off">Off</button>
                     <button type="button" data-wind-mode="particles" class="active">Particles</button>
                     <button type="button" data-wind-mode="barbs">Barbs</button>
@@ -1972,6 +2007,11 @@
             <label class="check"><input type="checkbox" id="toggle-xsection"> Cross-section</label>
             <label class="check"><input type="checkbox" id="toggle-lorenz"> Lorenz energy cycle</label>
             <label class="check"><input type="checkbox" id="toggle-timeseries"> Area-mean time series</label>
+            <p class="mobile-panel-hint">
+                Panels render on tablets and wider. On phones, toggling a panel stores
+                the state but doesn't draw the view — rotate to landscape on a tablet,
+                or reopen on a desktop to see these diagnostics.
+            </p>
         </section>
 
         <section class="control-group" id="parcels-section">

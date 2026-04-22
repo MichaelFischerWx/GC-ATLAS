@@ -2099,8 +2099,25 @@ class GlobeApp {
                     }
                 }
                 if (refSel.value === patch.climatologyPeriod) {
+                    const stalePeriod = refSel.value;
                     refSel.value = 'default';
                     this.state.referencePeriod = 'default';
+                    // Surface the silent reset — user just picked a
+                    // climatology period that matched their reference
+                    // period (self vs self → zero anomaly), so we
+                    // dropped them back to "Self · 12-month mean".
+                    const flash = document.getElementById('ref-period-flash');
+                    if (flash) {
+                        flash.textContent =
+                            `Reference period reset to "Self" — ${stalePeriod} is now your active climatology, so comparing against it would yield zero.`;
+                        flash.hidden = false;
+                        flash.classList.remove('is-fading');
+                        clearTimeout(this._refPeriodFlashTimer);
+                        this._refPeriodFlashTimer = setTimeout(() => {
+                            flash.classList.add('is-fading');
+                            setTimeout(() => { flash.hidden = true; }, 450);
+                        }, 5000);
+                    }
                 }
             }
             // Make sure the alternate manifest is loaded; if it isn't, kick
@@ -5004,6 +5021,11 @@ class GlobeApp {
         const levelSel = document.getElementById('level-select');
         const disabled = meta.type === 'sl';
         levelSel.disabled = disabled;
+        // Explain why the select is inert when the user hovers it — otherwise
+        // "the dropdown went grey" looks like a bug on single-level fields.
+        levelSel.title = disabled
+            ? `${meta.name || this.state.field} is a single-level field (${meta.units || ''}) — it has no vertical structure to pick a level from.`
+            : '';
         const wrap = levelSel.closest('.control-group');
         if (wrap) wrap.classList.toggle('is-disabled', disabled);
 
