@@ -35,14 +35,13 @@ import { CLIMO_WINDOWS, bestClimoFor, groupEventsByClimo } from './climo_windows
 
 const PLAY_INTERVAL_MS = 900;
 
-// Natural Earth 50 m coastline + lakes. Mirrored on GCS so the site doesn't
-// re-fetch ~2.4 MB from a third-party CDN on every load. Lakes (Great Lakes,
-// Caspian, Victoria, Baikal, Aral, …) draw alongside coastlines using the
-// same shared material — a single Coastlines toggle controls both.
-const IS_LOCAL_HOST = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
-const COASTLINE_BASE = IS_LOCAL_HOST
-    ? 'data/coastlines'
-    : 'https://storage.googleapis.com/gc-atlas-era5/coastlines';
+// Natural Earth 50 m coastline + lakes. Bundled in the repo so the site
+// has zero external dependencies for base geometry — works offline,
+// identical behaviour across localhost / GitHub Pages. Lakes (Great
+// Lakes, Caspian, Victoria, Baikal, Aral, …) draw alongside coastlines
+// using the same shared material — a single Coastlines toggle controls
+// both.
+const COASTLINE_BASE = 'assets/coastlines';
 const COASTLINE_URL = `${COASTLINE_BASE}/ne_50m_coastline.geojson`;
 const LAKES_URL     = `${COASTLINE_BASE}/ne_50m_lakes.geojson`;
 const AXIAL_TILT = 23.4 * Math.PI / 180;

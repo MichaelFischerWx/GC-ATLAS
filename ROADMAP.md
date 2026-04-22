@@ -103,7 +103,7 @@ Cross-section panel: **expand-to-fullscreen toggle**, **hover readout** (lat, p,
 ### Small polish (can do anytime)
 
 1. **Dark coastline on dark colormap fallback** — black coastlines vanish over viridis/magma. Auto-switch to white (or half-tone) on dark cmaps.
-2. **Bundle `ne_50m_coastline.geojson` locally** instead of fetching from jsdelivr (~2 MB on every page load). Push through GCS or commit.
+2. ~~Bundle `ne_50m_coastline.geojson` locally~~ — **done 2026-04-21.** Coastline + lakes geojsons now live in `assets/coastlines/` and ship with the repo. Zero external fetches for base geometry.
 3. **Favicon** (still 404, cosmetic).
 4. **`MAX_ARROWS = 7000` cap** — verify no visible truncation in any month.
 5. **Wind-by-speed colour** for particle mode (alternative to fixed amber).
