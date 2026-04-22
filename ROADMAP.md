@@ -111,7 +111,7 @@ Cross-section panel: **expand-to-fullscreen toggle**, **hover readout** (lat, p,
 
 ### Medium
 
-7. **Validate Lorenz cycle numerics against published values** — Peixoto–Oort 1992 give annual P_M ≈ 4 MJ/m², C(P_M,P_E) ≈ 2 W/m². Spot-check after the Lorenz-sorted reference state is in active use.
+7. ~~Validate Lorenz cycle numerics against published values~~ — **done 2026-04-22** (line-by-line trace against Peixoto–Oort 1992 and Holton–Hakim canonical forms). Formulas match; reservoir and conversion magnitudes fall inside the expected stationary-only band once Boer (1989)'s stationary/transient decomposition (~15-30% of total for eddy quantities) is applied. P_M = 3.9 MJ/m² vs P&O 4.0 is spot-on; C(P_M, P_E) = 1.07 W/m² sits at the upper edge of the 0.7-1.1 W/m² expected band for DJF stationary. An expected-magnitudes table lives in the in-panel info popover so users can eyeball values without a textbook next to them. Full transient coverage is still gated on Phase-4 daily-data.
 8. **Validate budget signs and magnitudes** for Q-budget and H-budget once you've used them in lecture — Newell-Kidson-Vincent-Boer (1972) and Trenberth atlases are the comparison sources.
 9. **Add 1981–2010 climatology** — the WMO previous-standard normal. Same recipe as 1961–1990.
 

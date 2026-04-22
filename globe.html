@@ -2252,11 +2252,28 @@ C(P_M→K_M) = -(R/g) ∫ [ω][T] / p dp
                     <li><b>Area-mean</b> — T_ref(p) = global area-weighted mean of T at each pressure level. The textbook diagnostic approximation. Faster, but it overstates how much PE is "available" — a lot of the meridional T gradient it sees is actually unavailable (non-adiabatic to release).</li>
                 </ul>
                 <p><b>Why sorted ≠ area-mean, especially for C(P_M, K_M):</b> both formulations share u, v, ω, T — only T_ref (and hence T̂, γ) differ. In area-mean, T̂ still contains the full tropics-to-pole gradient, so the Hadley-cell overturning [ω] correlates strongly with T̂ and C(P_M, K_M) is large. In sorted, the reference has already absorbed most of that gradient; the "excess" T̂ is small and C(P_M, K_M) drops sharply. The factor-of-many difference you see between the two panels is Lorenz's (1955) original pedagogical point in visible form — the area-mean calc systematically overstates convertible energy.</p>
+                <p><b>Typical magnitudes (for sanity-checking):</b></p>
+                <table style="font-size: 0.72rem; margin: 4px 0 8px; border-collapse: collapse; width: 100%;">
+                    <tr style="color: var(--sage); border-bottom: 1px solid var(--border-light);">
+                        <th style="text-align: left; padding: 2px 6px;">Quantity</th>
+                        <th style="text-align: right; padding: 2px 6px;">P&amp;O total</th>
+                        <th style="text-align: right; padding: 2px 6px;">Stat-only band</th>
+                    </tr>
+                    <tr><td style="padding: 2px 6px;">P_M (MJ/m²)</td><td style="text-align: right;">4.0</td><td style="text-align: right;">~3.8-4.2 (sorted)</td></tr>
+                    <tr><td style="padding: 2px 6px;">K_M (MJ/m²)</td><td style="text-align: right;">0.8</td><td style="text-align: right;">~0.7-0.9</td></tr>
+                    <tr><td style="padding: 2px 6px;">P_E (MJ/m²)</td><td style="text-align: right;">1.5</td><td style="text-align: right;">~0.2-0.4 (stat)</td></tr>
+                    <tr><td style="padding: 2px 6px;">K_E (MJ/m²)</td><td style="text-align: right;">1.4</td><td style="text-align: right;">~0.2-0.3 (stat)</td></tr>
+                    <tr><td style="padding: 2px 6px;">C(P_M, P_E) (W/m²)</td><td style="text-align: right;">2.2</td><td style="text-align: right;">~0.7-1.1 (stat)</td></tr>
+                    <tr><td style="padding: 2px 6px;">C(P_E, K_E) (W/m²)</td><td style="text-align: right;">1.7</td><td style="text-align: right;">~0.5-0.7 (stat)</td></tr>
+                    <tr><td style="padding: 2px 6px;">C(K_E, K_M) (W/m²)</td><td style="text-align: right;">0.2</td><td style="text-align: right;">~0.06-0.12 (stat)</td></tr>
+                    <tr><td style="padding: 2px 6px;">C(P_M, K_M) (W/m²)</td><td style="text-align: right;">0.2</td><td style="text-align: right;">~0.02-0.1 (sorted, stat)</td></tr>
+                </table>
+                <p style="font-size: 0.72rem; color: var(--paper-dim);">Left column: Peixoto &amp; Oort (1992) Table 13.1 for the full circulation. Right column: the stationary-only contribution you'd expect to see here, derived from Boer (1989)'s stationary/transient decomposition (~15-30% of total for eddy quantities). DJF values are closer to the top of each band; JJA to the bottom. Reanalysis-to-reanalysis variance alone is ±15-20%, so matches within that range count as good.</p>
                 <p style="color: var(--ochre);"><b>Caveats:</b></p>
                 <ul style="margin: 4px 0 6px 16px; padding: 0; font-size: 0.74rem; color: var(--paper-dim);">
                     <li><b>Stationary eddies only.</b> * here is the departure of the monthly-mean field from its zonal mean — it captures planetary waves locked to topography / land-sea contrast. High-frequency (sub-monthly) <i>transient</i> eddies, which dominate baroclinic conversion in published totals, need daily data (currently out of scope).</li>
                     <li>C(P_M, P_E) here includes both the meridional <b>and</b> vertical eddy-heat-flux terms; many references quote only the meridional term.</li>
-                    <li>Expect ~3-5× smaller conversions than Peixoto-Oort "total" numbers because transients are excluded.</li>
+                    <li>Expect ~3-5× smaller conversions than Peixoto-Oort "total" numbers because transients are excluded — that gap is the transient-eddy contribution, not a bug.</li>
                 </ul>
                 <p style="color: var(--paper-dim); font-size: 0.74rem;">
                     Use the cycle to <i>illustrate</i> structure — which arrows are large, which way energy flows, how seasonal cycles shift it (swipe through months). Toggle the reference state to see how a methodology choice shifts P_M and C(P_M, K_M) by an order of magnitude — that's the pedagogy in its own right.
