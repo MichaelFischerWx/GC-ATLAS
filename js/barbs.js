@@ -94,8 +94,16 @@ export class BarbField {
 
         for (let lat = -POLE_LIMIT; lat <= POLE_LIMIT; lat += LAT_STEP) {
             // Thin barbs toward the poles so density stays rough-ish uniform.
-            const lonStep = Math.min(30, LON_STEP / Math.max(0.1, Math.cos(lat * D2R)));
-            for (let lon = -180; lon < 180; lon += lonStep) {
+            // Integer count per row so the step evenly divides 360° — without
+            // this, a latitude like 16°N (rawStep ≈ 8.32°) leaves a ~2.2°
+            // "leftover" near the dateline that packs an extra barb right
+            // next to the one at lon=-180°. Across consecutive latitudes
+            // those extras align into a visible vertical comb.
+            const rawStep = Math.min(30, LON_STEP / Math.max(0.1, Math.cos(lat * D2R)));
+            const nLons   = Math.max(3, Math.round(360 / rawStep));
+            const lonStep = 360 / nLons;
+            for (let i = 0; i < nLons; i++) {
+                const lon = -180 + i * lonStep;
                 const uv = this.getUV(lat, lon);
                 if (!uv) continue;
                 const [u, v] = uv;

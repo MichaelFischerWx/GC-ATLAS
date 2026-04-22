@@ -455,6 +455,20 @@ class GlobeApp {
             if (name === 'u' || name === 'v' || name === 'u10' || name === 'v10' ||
                 (isenActive && name === 't')) this.windCache.stale = true;
 
+            // Barbs are drawn ONCE from the wind cache at rebuild time, so
+            // they don't self-heal the way particles do (particles resample
+            // the cache every frame). When a newly-loaded u/v tile is the
+            // one that matches the current level + month + period, rebuild
+            // the barb mesh so it shows the new-level wind, not the cached
+            // old-level wind from before the level change.
+            const isWindForBarbs = (name === 'u' || name === 'v'
+                                 || name === 'u10' || name === 'v10'
+                                 || (isenActive && name === 't'));
+            if (this.barbs && s.windMode === 'barbs' && isWindForBarbs
+                && levelMatches && monthMatches && isActivePeriod) {
+                this.barbs.rebuild(s.viewMode);
+            }
+
             if (s.showXSection && feedsCurrentField && monthMatches) this.updateXSection();
             // ψ needs v at every level; M needs u at every level; N² needs T;
             // EP flux needs u, v, w, t. Refresh the panel whenever a relevant
