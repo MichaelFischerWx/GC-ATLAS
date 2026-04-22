@@ -679,6 +679,21 @@
             background: rgba(14, 140, 110, 0.08);
         }
         .cb-auto:not(.is-active) { opacity: 0.55; }
+        /* Tiny caption below the tick row — nudges users to the fact that
+           the min / max numbers are editable inputs. Same style in the
+           main colorbar and the cross-section colorbar. */
+        .cb-hint {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.6rem;
+            letter-spacing: 0.06em;
+            color: var(--sage);
+            opacity: 0.5;
+            text-align: center;
+            margin-top: 3px;
+            font-style: italic;
+            user-select: none;
+            pointer-events: none;
+        }
 
         /* ── Zonal-mean cross-section panel ─────────────────── */
         .xsection {
@@ -992,8 +1007,18 @@
             font-size: 0.7rem;
             color: var(--sage);
             margin-top: 3px;
+            gap: 6px;
+        }
+        .xs-cb-mid {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
         }
         #xs-cb-units { color: var(--emerald-bright); letter-spacing: 0.04em; }
+        /* Inputs in the xs-cb row: same .cb-tick-input styling as the main
+           colorbar, slightly narrower so the units + reset button fit on
+           380-px-wide xs panels without wrapping. */
+        .xs-cb-labels .cb-tick-input { width: 64px; padding: 1px 4px; }
         .xs-footer {
             margin-top: 8px;
             font-size: 0.72rem;
@@ -1232,10 +1257,15 @@
         }
         .view-toggle button:hover:not(.active) { color: var(--paper); background: rgba(255,255,255,0.05); }
 
-        /* ── Share-link button (top right, under view-toggle) ─── */
-        .share-btn {
+        /* ── Share / Save toolbar (top right, under view-toggle) ─── */
+        .share-toolbar {
             position: absolute;
             top: 62px; right: 18px;
+            display: flex;
+            gap: 8px;
+            z-index: 55;
+        }
+        .share-btn {
             display: inline-flex;
             align-items: center;
             background: rgba(12, 36, 32, 0.85);
@@ -1249,7 +1279,6 @@
             cursor: pointer;
             backdrop-filter: blur(10px);
             -webkit-backdrop-filter: blur(10px);
-            z-index: 55;
             transition: color 0.15s, border-color 0.15s;
         }
         .share-btn:hover { color: var(--paper); border-color: var(--emerald); }
@@ -1532,9 +1561,9 @@
             .hamburger { display: flex; }
             .globe-stage { width: 100%; }
             .view-toggle { top: 72px; right: 14px; }  /* below topbar, clear of hamburger */
-            /* Push share-btn below the view-toggle row so the two don't
-               stack on top of each other on phones. */
-            .share-btn { top: 116px; right: 14px; }
+            /* Push share-toolbar below the view-toggle row so the two
+               don't stack on top of each other on phones. */
+            .share-toolbar { top: 116px; right: 14px; gap: 6px; }
             .colorbar { left: 12px; right: 12px; bottom: 12px; min-width: 0; }
             /* Diagnostic panels are wider than the phone viewport — hide
                on mobile. The toggles in the sidebar still set state, but
@@ -1923,15 +1952,27 @@
             <button id="view-orbit" type="button">Orbit</button>
         </div>
 
-        <button id="share-link-btn" class="share-btn" type="button"
-                title="Copy a URL that reproduces this exact view (field, year, month, level, compare state, …)">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                 stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;">
-                <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
-                <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
-            </svg>
-            <span id="share-link-label">Share link</span>
-        </button>
+        <div class="share-toolbar">
+            <button id="save-view-btn" class="share-btn" type="button"
+                    title="Save this view as a PNG or GIF">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                     stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                    <polyline points="7 10 12 15 17 10"/>
+                    <line x1="12" y1="15" x2="12" y2="3"/>
+                </svg>
+                <span>Save view</span>
+            </button>
+            <button id="share-link-btn" class="share-btn" type="button"
+                    title="Copy a URL that reproduces this exact view (field, year, month, level, compare state, …)">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                     stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;">
+                    <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
+                    <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
+                </svg>
+                <span id="share-link-label">Share link</span>
+            </button>
+        </div>
 
         <div class="colorbar" aria-hidden="true">
             <div class="cb-header">
@@ -1949,6 +1990,7 @@
                 <input id="cb-max" class="cb-tick-input cb-tick-input--right" type="text" inputmode="decimal" autocomplete="off" spellcheck="false"
                        title="Click to override colorbar maximum. Persists across months/levels/modes; resets on field change.">
             </div>
+            <div class="cb-hint">click min / max to override</div>
         </div>
 
         <div class="lorenz" id="lorenz-panel" hidden>
@@ -2134,10 +2176,18 @@ C(P_M→K_M) = -(R/g) ∫ [ω][T] / p dp</pre>
             <div class="xs-cb-wrap">
                 <canvas id="xs-cb-canvas" class="xs-cb"></canvas>
                 <div class="xs-cb-labels">
-                    <span id="xs-cb-min">—</span>
-                    <span id="xs-cb-units">—</span>
-                    <span id="xs-cb-max">—</span>
+                    <input id="xs-cb-min" class="cb-tick-input" type="text" inputmode="decimal" autocomplete="off" spellcheck="false"
+                           title="Click to override cross-section colorbar minimum. Resets on field or diagnostic-mode change.">
+                    <span class="xs-cb-mid">
+                        <span id="xs-cb-units">—</span>
+                        <button id="xs-cb-auto" class="cb-auto" type="button"
+                                title="Reset cross-section colorbar range to auto"
+                                aria-label="Reset cross-section colorbar range to auto">↺ Auto</button>
+                    </span>
+                    <input id="xs-cb-max" class="cb-tick-input cb-tick-input--right" type="text" inputmode="decimal" autocomplete="off" spellcheck="false"
+                           title="Click to override cross-section colorbar maximum. Resets on field or diagnostic-mode change.">
                 </div>
+                <div class="cb-hint">click min / max to override</div>
             </div>
             <div class="xs-footer">
                 <span id="xs-hint"><span class="xs-kbd">⇧</span> + drag globe to draw an arc</span>

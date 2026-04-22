@@ -118,6 +118,40 @@ export class GifExporter {
         ctx.closePath();
     }
 
+    /** Paint a subtle "GC-ATLAS" attribution watermark in the bottom-right
+     *  corner. Runs on every export path (still, animated, annual, swipe,
+     *  cross-section) so attribution survives cropping and re-sharing. */
+    _drawWatermark(ctx, w, h) {
+        const padX = 12, padY = 10;
+        const main = 'GC-ATLAS';
+        const sub  = 'michaelfischerwx.github.io/GC-ATLAS';
+        const mainFont = 'bold 13px ui-monospace, "JetBrains Mono", Menlo, monospace';
+        const subFont  = '10px ui-monospace, "JetBrains Mono", Menlo, monospace';
+
+        ctx.save();
+        ctx.textAlign = 'right';
+        ctx.textBaseline = 'alphabetic';
+        const x    = w - padX;
+        const ySub = h - padY;
+        const yMain = ySub - 13;
+
+        // 1 px dark offset so the mark stays legible over bright ocean /
+        // convection colormaps without needing a filled background pill.
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
+        ctx.font = mainFont;
+        ctx.fillText(main, x + 1, yMain + 1);
+        ctx.font = subFont;
+        ctx.fillText(sub, x + 1, ySub + 1);
+
+        ctx.fillStyle = 'rgba(240, 246, 242, 0.85)';
+        ctx.font = mainFont;
+        ctx.fillText(main, x, yMain);
+        ctx.fillStyle = 'rgba(181, 208, 191, 0.75)';
+        ctx.font = subFont;
+        ctx.fillText(sub, x, ySub);
+        ctx.restore();
+    }
+
     /** Paint the caption ribbon onto the capture canvas (top-left). */
     _drawCaption(ctx) {
         const { title, sub } = this._buildCaption();
@@ -172,6 +206,7 @@ export class GifExporter {
         ctx.fillRect(0, 0, w, h);
         ctx.drawImage(src, 0, 0, w, h);
         this._drawCaption(ctx);
+        this._drawWatermark(ctx, w, h);
         return ctx.getImageData(0, 0, w, h);
     }
 
@@ -320,6 +355,7 @@ export class GifExporter {
         if (scale !== 1) ctx.imageSmoothingQuality = 'high';
         ctx.drawImage(src, 0, 0, w, h);
         this._drawCaption(ctx);
+        this._drawWatermark(ctx, w, h);
         const mime = format === 'jpeg' ? 'image/jpeg' : 'image/png';
         return await new Promise((resolve, reject) => {
             cap.toBlob(
@@ -395,6 +431,10 @@ export class GifExporter {
         ctx.fillStyle = '#8bb0a1';
         ctx.font = '11px ui-monospace, "JetBrains Mono", Menlo, monospace';
         ctx.fillText(`${title}  ·  ${sub}`, padX, y + 4);
+
+        // Attribution watermark (bottom-right, stays clear of the
+        // bottom-left footer caption above).
+        this._drawWatermark(ctx, w, h);
 
         const mime = format === 'jpeg' ? 'image/jpeg' : 'image/png';
         return await new Promise((resolve, reject) => {

@@ -124,6 +124,12 @@ const SPEC = [
     ['userVmax',           'cbmax',
         v => v == null ? null : String(v),
         s => { const n = Number(s); return Number.isFinite(n) ? n : undefined; }],
+    ['xsUserVmin',         'xscbmin',
+        v => v == null ? null : String(v),
+        s => { const n = Number(s); return Number.isFinite(n) ? n : undefined; }],
+    ['xsUserVmax',         'xscbmax',
+        v => v == null ? null : String(v),
+        s => { const n = Number(s); return Number.isFinite(n) ? n : undefined; }],
 
     // ── map central meridian ───────────────────────────────────────
     ['mapCenterLon',       'mc',

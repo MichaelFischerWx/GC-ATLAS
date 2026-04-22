@@ -126,6 +126,8 @@ class GlobeApp {
             compareYear: null,       // when set, swipe right-half draws this year's tile (year-vs-* compare)
             userVmin: null,          // manual colorbar min override; null = auto
             userVmax: null,          // manual colorbar max override; null = auto
+            xsUserVmin: null,        // cross-section colorbar min override; null = auto
+            xsUserVmax: null,        // cross-section colorbar max override; null = auto
             mapCenterLon: 0,         // central meridian for the flat map (-180..180)
             showXSection: false,
             showLorenz: false,
@@ -1825,6 +1827,16 @@ class GlobeApp {
             // range. Persists across level / month / mode changes per design.
             this.state.userVmin = null;
             this.state.userVmax = null;
+            // Same for the cross-section panel.
+            this.state.xsUserVmin = null;
+            this.state.xsUserVmax = null;
+        }
+        if ('xsDiag' in patch) {
+            // Each xs diagnostic has its own units (ψ in 10⁹ kg/s, M in 10⁹
+            // m²/s, N² in 10⁻⁴ s⁻², EP flux, budgets …). A clamp set for one
+            // mode is meaningless for the next, so reset on mode change.
+            this.state.xsUserVmin = null;
+            this.state.xsUserVmax = null;
         }
         if ('showCoastlines' in patch && this.coastGroup) this.coastGroup.visible = !!patch.showCoastlines;
         if ('showGraticule' in patch && this.gratGroup)   this.gratGroup.visible   = !!patch.showGraticule;
@@ -2440,6 +2452,10 @@ class GlobeApp {
         if (zm.contourInterval == null) {
             zm.contourInterval = FIELDS[field]?.contour || 0;
         }
+        // User colorbar overrides, applied post-compute so renderCrossSection
+        // and the colorbar DOM both reflect the same clamped range.
+        if (this.state.xsUserVmin != null) zm.vmin = this.state.xsUserVmin;
+        if (this.state.xsUserVmax != null) zm.vmax = this.state.xsUserVmax;
         renderCrossSection(canvas, zm, effCmap);
         this.updateXSectionColorbar(zm, effCmap);
         // Stash for the hover handler — it inverse-maps cursor → (lat, p, value).
@@ -2498,9 +2514,21 @@ class GlobeApp {
             const el = document.getElementById(id);
             if (el) el.textContent = text;
         };
-        setTxt('xs-cb-min',   fmtValue(zm.vmin));
-        setTxt('xs-cb-max',   fmtValue(zm.vmax));
+        // xs-cb-min / xs-cb-max are <input>s — same override-accent treatment
+        // as the main colorbar inputs. Skip .value writes while focused so we
+        // don't yank a mid-edit cursor.
+        const setInput = (id, text, isOverride) => {
+            const el = document.getElementById(id);
+            if (!el) return;
+            if (document.activeElement !== el) el.value = text;
+            el.classList.toggle('is-override', !!isOverride);
+        };
+        setInput('xs-cb-min', fmtValue(zm.vmin), this.state.xsUserVmin != null);
+        setInput('xs-cb-max', fmtValue(zm.vmax), this.state.xsUserVmax != null);
         setTxt('xs-cb-units', zm.units || '');
+        const autoBtn = document.getElementById('xs-cb-auto');
+        if (autoBtn) autoBtn.classList.toggle('is-active',
+            this.state.xsUserVmin != null || this.state.xsUserVmax != null);
     }
 
     updateArcLine() {
@@ -3287,6 +3315,30 @@ class GlobeApp {
         }
         cbAutoEl?.addEventListener('click', () => {
             this.setState({ userVmin: null, userVmax: null });
+        });
+
+        // Cross-section colorbar: same override pattern as the main colorbar
+        // but feeds xsUserVmin / xsUserVmax and re-triggers updateXSection.
+        const xsCbMinEl  = document.getElementById('xs-cb-min');
+        const xsCbMaxEl  = document.getElementById('xs-cb-max');
+        const xsCbAutoEl = document.getElementById('xs-cb-auto');
+        const commitXsCbRange = () => {
+            let xsUserVmin = parseCbInput(xsCbMinEl?.value);
+            let xsUserVmax = parseCbInput(xsCbMaxEl?.value);
+            if (xsUserVmin != null && xsUserVmax != null && xsUserVmin > xsUserVmax) {
+                [xsUserVmin, xsUserVmax] = [xsUserVmax, xsUserVmin];
+            }
+            this.setState({ xsUserVmin, xsUserVmax });
+        };
+        xsCbMinEl?.addEventListener('change', commitXsCbRange);
+        xsCbMaxEl?.addEventListener('change', commitXsCbRange);
+        for (const el of [xsCbMinEl, xsCbMaxEl]) {
+            el?.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') { e.preventDefault(); el.blur(); }
+            });
+        }
+        xsCbAutoEl?.addEventListener('click', () => {
+            this.setState({ xsUserVmin: null, xsUserVmax: null });
         });
 
         document.getElementById('toggle-coastlines').addEventListener('change', (e) => {
@@ -4702,6 +4754,10 @@ class GlobeApp {
         const close = () => { modal.classList.add('hidden'); };
 
         openBtn.addEventListener('click', open);
+        // Floating "Save view" pill up top-right (next to Share link) opens
+        // the same modal so users don't have to scroll the sidebar.
+        const floatingSaveBtn = document.getElementById('save-view-btn');
+        if (floatingSaveBtn) floatingSaveBtn.addEventListener('click', open);
         closeBtn.addEventListener('click', close);
         cancelBtn.addEventListener('click', close);
         modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
