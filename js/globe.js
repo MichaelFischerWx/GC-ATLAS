@@ -8,7 +8,7 @@ import { Line2 } from 'three/addons/lines/Line2.js';
 import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 import { fillRGBA, fillColorbar, COLORMAPS, meanLuminance } from './colormap.js';
-import { getField, FIELDS, LEVELS, THETA_LEVELS, MONTHS, GRID, invalidateIsentropicCache, isThetaOnly, customRangeYears, fieldHasStdTiles } from './data.js';
+import { getField, FIELDS, LEVELS, THETA_LEVELS, MONTHS, GRID, invalidateIsentropicCache, isThetaOnly, customRangeYears, fieldHasStdTiles, expectedTilesForView } from './data.js';
 import { loadIndices, getIndex, eventYears, compositeLabel } from './indices.js';
 import { ParticleField } from './particles.js';
 import { BarbField } from './barbs.js';
@@ -2753,6 +2753,13 @@ class GlobeApp {
             seasonal,
         });
         this.setLoadingOverlay(!f.isReal);
+        // Stash the expected-tiles-for-first-paint snapshot for the overlay
+        // progress counter. Computed once per updateField call; stays stable
+        // while the tiles stream in. Only needs to be refreshed on pending
+        // loads (once painted, overlay is hidden anyway).
+        if (!f.isReal) {
+            this._expectedTiles = expectedTilesForView(this.state);
+        }
 
         // Decide the effective decomposition for paint. Three transforms
         // can override the user-selected mode:
@@ -2954,22 +2961,26 @@ class GlobeApp {
         el.classList.toggle('visible', !!visible);
     }
 
-    /** Update the tiles-remaining line on the loading overlay. Called
-     *  from the era5 onTileProgress subscription. Shows in-flight count
-     *  counting down to zero — honest about "tiles left" rather than
-     *  "X of Y loaded," where Y kept climbing as downstream fetches
-     *  (cross-month aggregation, derived-field ingredients, isentropic
-     *  cube warmup) kicked in. A moving denominator reads as misleading.
+    /** "X of Y tiles loaded" progress for the loading overlay.
+     *  Y is derived from the view itself (expectedTilesForView in data.js)
+     *  — a static upper-bound on first-paint tiles based on field type,
+     *  vertical coord, decomposition, ref period, composite years.
+     *  That denominator stays fixed while tiles drain; X is (Y − pending)
+     *  clamped to [0, Y] so late-arriving background aggregation fetches
+     *  can't push the number above the expected count.
+     *  Rationale: raw in-flight counting had a moving Y that made the
+     *  bar feel dishonest; expected-tiles-for-first-paint is knowable
+     *  up-front and stable.
      */
-    setLoadingProgress({ pending /*, total (unused: see note above) */ }) {
+    setLoadingProgress({ pending }) {
         const el = document.getElementById('globe-loading');
         if (!el) return;
         const line = el.querySelector('.globe-loading-progress');
         if (!line) return;
-        if (pending > 0) {
-            line.textContent = pending === 1
-                ? '1 tile remaining'
-                : `${pending} tiles remaining`;
+        const expected = this._expectedTiles || 0;
+        if (pending > 0 && expected > 0) {
+            const done = Math.max(0, Math.min(expected, expected - pending));
+            line.textContent = `${done} of ${expected} tiles loaded`;
         } else {
             line.textContent = '';
         }

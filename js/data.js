@@ -31,6 +31,68 @@ function derivedHasPipelineStd(name, period) {
 // 8 pressure-level raw vars; derived vars rely on build_derived_std.py).
 // Returns true optimistically when the manifest isn't loaded yet so we
 // don't disable the control during the initial page paint.
+/**
+ * Estimate how many ERA5 tile fetches the current view needs for its
+ * first paint. Used by the loading overlay to show an honest "X of Y"
+ * counter. Based on static field/ingredient logic (FIELDS metadata,
+ * θ-cube stack, σ-anom std tile, contour overlay, composite year
+ * count) rather than live in-flight tiles — which drift as downstream
+ * aggregation kicks in. This is therefore a FLOOR on the load, not
+ * an exact total; background cross-month aggregation may add more
+ * after the overlay has already hidden on first paint.
+ */
+export function expectedTilesForView(state) {
+    const { field, vCoord, decompose, kind, contourField, customRange, referencePeriod } = state || {};
+    const meta = FIELDS[field];
+    if (!meta) return 1;
+
+    const N_LEVELS = 12;
+    const isTheta = vCoord === 'theta' && meta.type === 'pl';
+    const perIngredient = isTheta ? N_LEVELS : 1;
+
+    // Ingredient count by field type. For θ-coord views, each ingredient
+    // needs a full 12-level stack so PV on 330 K can interpolate.
+    let ingredients;
+    if (meta.type === 'sl') {
+        ingredients = 1;                 // surface fields: one tile
+    } else if (field === 'pv') {
+        ingredients = isTheta ? 2 : 1;   // t + pv on θ; just pv on pressure
+    } else if (field === 'wspd') {
+        ingredients = isTheta ? 3 : 2;   // u, v (+t for θ-cube)
+    } else if (field === 'mse') {
+        ingredients = isTheta ? 3 : 3;   // t, z, q (t already counted)
+    } else if (field === 'dls') {
+        return 2;                        // u and v at both 200 and 850 = 4, but cached per level; 2 is a safe floor
+    } else if (isTheta) {
+        ingredients = 2;                 // raw pressure-level field on θ: t + field
+    } else {
+        ingredients = 1;                 // raw pressure-level field: one tile
+    }
+
+    let n = ingredients * perIngredient;
+
+    // σ-anom or ±1σ kind: pulls the std tile for the current field.
+    if (decompose === 'zscore' || kind === 'std') n += 1;
+
+    // Non-default reference period for anomaly/zscore — roughly the
+    // same ingredient set fetched again from the reference tree.
+    if ((decompose === 'anomaly' || decompose === 'zscore')
+        && referencePeriod && referencePeriod !== 'default' && referencePeriod !== 'best-match') {
+        n += ingredients;
+    }
+
+    // Contour overlay adds one tile at the current level.
+    if (contourField) n += 1;
+
+    // Composite / custom-range: the ingredient set fetched per event year
+    // at the current month (not × 12; only current-month first paint).
+    if (customRange?.years?.length) {
+        n += customRange.years.length * ingredients;
+    }
+
+    return Math.max(1, n);
+}
+
 export function fieldHasStdTiles(field, period) {
     const m = getManifest(period === 'default' ? 'default' : period);
     if (!m) return true;
