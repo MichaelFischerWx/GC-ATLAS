@@ -8,7 +8,7 @@ import { Line2 } from 'three/addons/lines/Line2.js';
 import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 import { fillRGBA, fillColorbar, COLORMAPS, meanLuminance } from './colormap.js';
-import { getField, FIELDS, LEVELS, THETA_LEVELS, MONTHS, GRID, invalidateIsentropicCache, isThetaOnly, customRangeYears, fieldHasStdTiles, expectedTilesForView } from './data.js';
+import { getField, FIELDS, LEVELS, THETA_LEVELS, MONTHS, GRID, invalidateIsentropicCache, isThetaOnly, customRangeYears, fieldHasStdTiles, expectedTilesForView, hasCachedIngredients } from './data.js';
 import { loadIndices, getIndex, eventYears, compositeLabel } from './indices.js';
 import { ParticleField } from './particles.js';
 import { BarbField } from './barbs.js';
@@ -3091,10 +3091,14 @@ class GlobeApp {
                     const range = aggregatedDecompositionRange(
                         isenMode,
                         (m) => {
-                            const g = getField(fieldName, {
-                                month: m, coord: 'theta', theta,
-                                year: this.state.year,
-                            });
+                            // Cache-peek before getField — same rationale as
+                            // the pressure-coord call site below: avoids
+                            // leaking ~11 extra fetches that _pvComputeRaw /
+                            // buildThetaCube would kick off when bailing.
+                            const args = { month: m, coord: 'theta', theta,
+                                           year: this.state.year };
+                            if (!hasCachedIngredients(fieldName, args)) return null;
+                            const g = getField(fieldName, args);
                             return g.isReal ? g : null;
                         },
                         GRID.nlat, GRID.nlon, annualMeanForAgg,
@@ -3283,14 +3287,16 @@ class GlobeApp {
         const range = aggregatedDecompositionRange(
             mode,
             (m) => {
-                // Each iteration fetches the active time-slice tile for
-                // month m (year, custom-range composite, or climatology
-                // mean, per the current mode).
-                const fm = getField(field, {
-                    month: m, level, coord: vCoord, theta,
-                    year: this.state.year,
-                    customRange: this.state.customRange,
-                });
+                // Peek the cache first — if month m's ingredients aren't
+                // all present, skip rather than calling getField (which
+                // would trigger fetches we don't need and that leak into
+                // the first-paint load window). Stable-colorbar aggregation
+                // remains correct: it uses whatever's cached, refreshes
+                // whenever a new tile lands via the onFieldLoaded re-render.
+                const args = { month: m, level, coord: vCoord, theta,
+                               year: this.state.year, customRange: this.state.customRange };
+                if (!hasCachedIngredients(field, args)) return null;
+                const fm = getField(field, args);
                 return fm.isReal ? fm : null;
             },
             GRID.nlat, GRID.nlon, annualMeanForAgg,

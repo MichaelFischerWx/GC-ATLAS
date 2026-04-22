@@ -90,6 +90,52 @@ export function expectedTilesForView(state) {
     return Math.max(1, n);
 }
 
+/**
+ * Returns true iff every raw ERA5 tile needed to compute `name` at
+ * (month, level, coord, theta) is already in cache. NEVER triggers
+ * fetches. Used by aggregatedDecompositionRange's cross-month callback
+ * so peeking at not-yet-cached months doesn't leak ~11 needless tile
+ * fetches per batch (buildThetaCube / requestEra5 in the compute path
+ * kick off a fetch and THEN return null on the first miss, leaving
+ * pointless work in flight).
+ */
+export function hasCachedIngredients(name, { month, level, coord = 'pressure', theta = 330, year = null, customRange = null } = {}) {
+    const meta = FIELDS[name];
+    if (!meta) return false;
+    // Composites compute off per-year tiles; skip the cache check for
+    // aggregation purposes (composite paths have their own logic).
+    if (customRange?.years?.length) return false;
+    const period = year != null ? 'per_year' : 'default';
+    const has = (n, lvl) => !!cachedMonth(n, month, lvl, 'mean', period, year);
+
+    if (meta.type === 'sl') return has(name, null);
+
+    const isTheta = coord === 'theta';
+    if (isTheta) {
+        // θ-coord views need T at every pressure level for the θ cube,
+        // plus the specific field's ingredient stacks.
+        for (const L of LEVELS) if (!has('t', L)) return false;
+        if (name === 'pv') {
+            for (const L of LEVELS) if (!has('pv', L)) return false;
+        } else if (name === 'mse') {
+            for (const L of LEVELS) { if (!has('z', L) || !has('q', L)) return false; }
+        } else if (name === 'wspd') {
+            for (const L of LEVELS) { if (!has('u', L) || !has('v', L)) return false; }
+        } else if (name === 'dls') {
+            for (const L of [200, 850]) { if (!has('u', L) || !has('v', L)) return false; }
+        } else if (name !== 't') {
+            for (const L of LEVELS) if (!has(name, L)) return false;
+        }
+        return true;
+    }
+    // Pressure coord at a specific level.
+    if (name === 'wspd') return has('u', level) && has('v', level);
+    if (name === 'mse')  return has('t', level) && has('z', level) && has('q', level);
+    if (name === 'dls')  return has('u', 200) && has('v', 200) && has('u', 850) && has('v', 850);
+    if (name === 'pv')   return has('pv', level);
+    return has(name, level);
+}
+
 export function fieldHasStdTiles(field, period) {
     const m = getManifest(period === 'default' ? 'default' : period);
     if (!m) return true;
