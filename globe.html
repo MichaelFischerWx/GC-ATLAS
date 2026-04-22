@@ -1436,6 +1436,15 @@
             font-size: 0.85rem;
             letter-spacing: 0.04em;
         }
+        /* "X of Y tiles loaded" counter on the loading overlay. Tucked
+           to the right of the main text, muted; empty when not loading. */
+        .globe-loading-progress {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.72rem;
+            color: var(--paper-dim);
+            letter-spacing: 0.02em;
+        }
+        .globe-loading-progress:empty { display: none; }
         .globe-loading-spinner {
             width: 16px;
             height: 16px;

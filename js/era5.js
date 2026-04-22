@@ -30,6 +30,24 @@ function tileBaseFor(period) {
 const manifests = new Map();    // period → manifest JSON (or null while loading)
 const cache = new Map();        // key (with period prefix) → { values } | 'pending'
 const subscribers = new Set();  // fns({ name, month, level, period })
+// Tile-progress subscribers — fire on every fetch start + complete so the
+// loading overlay can show "X of Y tiles loaded" instead of an indefinite
+// spinner. `totalThisBatch` resets to the current pending count whenever
+// pending falls to 0 (i.e., between user-driven load bursts), so a gallery
+// tile click that kicks off 24 fetches reports "0 → 24" cleanly rather
+// than accumulating forever.
+const progressSubscribers = new Set();
+let tilesPending = 0;
+let tilesInBatch = 0;
+function notifyProgress() {
+    for (const fn of progressSubscribers) {
+        fn({ pending: tilesPending, total: tilesInBatch });
+    }
+}
+export function onTileProgress(fn) {
+    progressSubscribers.add(fn);
+    return () => progressSubscribers.delete(fn);
+}
 
 // Back-compat: many callers still reference `manifest` as the default tree.
 // Keep a getter that returns the default-period manifest.
@@ -219,6 +237,11 @@ async function fetchTile(name, group, meta, month, level, kind = 'mean', period 
     const key = keyOf(name, month, level, kind, period, year);
     cache.set(key, 'pending');
     const url = tilePathFor(meta, group, name, level, month, kind, period, year);
+    // Progress: reset the batch total if we were idle, otherwise add to it.
+    if (tilesPending === 0) tilesInBatch = 0;
+    tilesPending += 1;
+    tilesInBatch += 1;
+    notifyProgress();
     try {
         const resp = await fetch(url);
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
@@ -269,6 +292,10 @@ async function fetchTile(name, group, meta, month, level, kind = 'mean', period 
         console.warn(`[era5] tile failed ${url}:`, err);
         cache.delete(key);
     }
+    // Progress: decrement and notify regardless of success/failure so a
+    // 404'd tile doesn't leave the counter stuck below zero.
+    tilesPending = Math.max(0, tilesPending - 1);
+    notifyProgress();
 }
 
 // Per-field percentile clamp registry, populated lazily on first request from

@@ -18,7 +18,7 @@ import { SunLight } from './sun.js';
 import { OrbitScene, ORBIT_RADIUS } from './orbit.js';
 import { computeZonalMean, computeArcCrossSection, renderCrossSection, samplePanel } from './cross_section.js';
 import { greatCircleArc, linearLatLonArc, latLonToVec3, gcDistanceKm, greatCircleMidpoint, linearLatLonMidpoint, threePointArc } from './arc.js';
-import { loadManifest, onFieldLoaded, isReady as era5Ready, prefetchField, cachedMonth, registerClamps, setActivePeriod, getManifest } from './era5.js';
+import { loadManifest, onFieldLoaded, onTileProgress, isReady as era5Ready, prefetchField, cachedMonth, registerClamps, setActivePeriod, getManifest } from './era5.js';
 import { decompose, annualMeanFrom, aggregatedDecompositionRange } from './decompose.js';
 import { HoverProbe } from './hover.js';
 import { computeMassStreamfunction, computeAngularMomentum, computeBruntVaisala, computeGeostrophicWind } from './diagnostics.js';
@@ -302,6 +302,11 @@ class GlobeApp {
                 if (needsPerYear) this.updateField();
             })
             .catch((err) => console.warn('[era5] per-year manifest load failed:', err));
+        // Progress subscription — renders "X of Y tiles loaded" beneath
+        // the loading spinner so isentropic / deep-stack views feel like
+        // progress rather than limbo.
+        onTileProgress((p) => this.setLoadingProgress(p));
+
         onFieldLoaded(({ name, month, level, period, year }) => {
             const s = this.state;
             const levelMatches = (level == null || level === s.level);
@@ -2930,10 +2935,34 @@ class GlobeApp {
         if (!el) {
             el = document.createElement('div');
             el.id = 'globe-loading';
-            el.innerHTML = '<div class="globe-loading-card"><div class="globe-loading-spinner"></div><div class="globe-loading-text">Loading ERA5 tiles…</div></div>';
+            el.innerHTML = '<div class="globe-loading-card">'
+                + '<div class="globe-loading-spinner"></div>'
+                + '<div class="globe-loading-text">Loading ERA5 tiles…</div>'
+                + '<div class="globe-loading-progress"></div>'
+                + '</div>';
             this.mount.appendChild(el);
         }
         el.classList.toggle('visible', !!visible);
+    }
+
+    /** Update the "X of Y tiles" progress line on the loading overlay.
+     *  Called from the era5 onTileProgress subscription. Only renders
+     *  text when both pending and total > 0; otherwise clears the line.
+     *  The isentropic-PV gallery view kicks off 24 tile fetches at once,
+     *  which on Safari / cold cache can take 10-20 s — users were seeing
+     *  an indefinite spinner and thinking the site was stuck.
+     */
+    setLoadingProgress({ pending, total }) {
+        const el = document.getElementById('globe-loading');
+        if (!el) return;
+        const line = el.querySelector('.globe-loading-progress');
+        if (!line) return;
+        if (pending > 0 && total > 0) {
+            const done = Math.max(0, total - pending);
+            line.textContent = `${done} of ${total} tiles loaded`;
+        } else {
+            line.textContent = '';
+        }
     }
 
     applyDecomposition(f, mode) {
