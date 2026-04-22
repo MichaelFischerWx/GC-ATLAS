@@ -120,35 +120,46 @@ export class GifExporter {
 
     /** Paint a subtle "GC-ATLAS" attribution watermark in the bottom-right
      *  corner. Runs on every export path (still, animated, annual, swipe,
-     *  cross-section) so attribution survives cropping and re-sharing. */
+     *  cross-section) so attribution survives cropping and re-sharing.
+     *  Includes the Copernicus credit so exported images carry the
+     *  required C3S attribution even when shared off-site. */
     _drawWatermark(ctx, w, h) {
         const padX = 12, padY = 10;
-        const main = 'GC-ATLAS';
-        const sub  = 'michaelfischerwx.github.io/GC-ATLAS';
-        const mainFont = 'bold 13px ui-monospace, "JetBrains Mono", Menlo, monospace';
-        const subFont  = '10px ui-monospace, "JetBrains Mono", Menlo, monospace';
+        const brand  = 'GC-ATLAS';
+        const site   = 'michaelfischerwx.github.io/GC-ATLAS';
+        // Required Copernicus product-license credit — kept compact so
+        // it fits comfortably on small exports; full attribution (incl.
+        // disclaimer + Hersbach citation) lives in the site footer.
+        const credit = 'Modified Copernicus C3S information · ERA5 (Hersbach et al. 2020)';
+        const brandFont  = 'bold 13px ui-monospace, "JetBrains Mono", Menlo, monospace';
+        const subFont    = '10px ui-monospace, "JetBrains Mono", Menlo, monospace';
+        const creditFont = '9px ui-monospace, "JetBrains Mono", Menlo, monospace';
 
         ctx.save();
         ctx.textAlign = 'right';
         ctx.textBaseline = 'alphabetic';
-        const x    = w - padX;
-        const ySub = h - padY;
-        const yMain = ySub - 13;
+        const x       = w - padX;
+        const yCredit = h - padY;
+        const ySite   = yCredit - 12;
+        const yBrand  = ySite   - 13;
 
-        // 1 px dark offset so the mark stays legible over bright ocean /
+        // 1-px dark offset so each line stays legible over bright ocean /
         // convection colormaps without needing a filled background pill.
+        const lines = [
+            { text: brand,  font: brandFont,  y: yBrand,  fg: 'rgba(240, 246, 242, 0.85)' },
+            { text: site,   font: subFont,    y: ySite,   fg: 'rgba(181, 208, 191, 0.75)' },
+            { text: credit, font: creditFont, y: yCredit, fg: 'rgba(181, 208, 191, 0.65)' },
+        ];
         ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
-        ctx.font = mainFont;
-        ctx.fillText(main, x + 1, yMain + 1);
-        ctx.font = subFont;
-        ctx.fillText(sub, x + 1, ySub + 1);
-
-        ctx.fillStyle = 'rgba(240, 246, 242, 0.85)';
-        ctx.font = mainFont;
-        ctx.fillText(main, x, yMain);
-        ctx.fillStyle = 'rgba(181, 208, 191, 0.75)';
-        ctx.font = subFont;
-        ctx.fillText(sub, x, ySub);
+        for (const ln of lines) {
+            ctx.font = ln.font;
+            ctx.fillText(ln.text, x + 1, ln.y + 1);
+        }
+        for (const ln of lines) {
+            ctx.font = ln.font;
+            ctx.fillStyle = ln.fg;
+            ctx.fillText(ln.text, x, ln.y);
+        }
         ctx.restore();
     }
 
