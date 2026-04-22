@@ -80,7 +80,15 @@
             align-items: center;
             justify-content: space-between;
         }
-        .topbar-brand { display: flex; align-items: center; gap: 12px; }
+        .topbar-brand {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            text-decoration: none;
+            color: inherit;
+            transition: opacity 0.18s;
+        }
+        .topbar-brand:hover { opacity: 0.82; }
         .topbar-mark {
             width: 28px; height: 28px;
             display: grid; place-items: center;
@@ -1802,8 +1810,9 @@
         </a>
         <nav>
             <ul class="topbar-nav">
+                <li><a href="index.html" title="Back to the landing page">Home</a></li>
                 <li><a href="index.html#features"
-                       title="Back to the gallery of pre-configured views">← Gallery</a></li>
+                       title="Back to the gallery of pre-configured views">Gallery</a></li>
                 <li><a href="globe.html" class="active">Globe</a></li>
                 <li><a href="index.html#about">About</a></li>
                 <li><a href="https://michaelfischerwx.github.io/TC-ATLAS/" target="_blank" rel="noopener">TC-ATLAS</a></li>

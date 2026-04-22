@@ -88,7 +88,15 @@
             justify-content: space-between;
             height: 56px;
         }
-        .topbar-brand { display: flex; align-items: center; gap: 12px; }
+        .topbar-brand {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            text-decoration: none;
+            color: inherit;
+            transition: opacity 0.18s;
+        }
+        .topbar-brand:hover { opacity: 0.82; }
         .topbar-mark {
             width: 28px; height: 28px;
             display: grid; place-items: center;
@@ -593,7 +601,7 @@
 <!-- ═══════════════ TOP BAR ═══════════════ -->
 <header class="topbar">
     <div class="topbar-inner">
-        <div class="topbar-brand">
+        <a href="index.html" class="topbar-brand" title="GC-ATLAS home">
             <div class="topbar-mark">
                 <!-- Mini GC-ATLAS brand glyph: tilted globe with two
                      emerald subtropical-jet bands. Simplified from
@@ -613,7 +621,7 @@
                 </svg>
             </div>
             <div class="topbar-logo">GC<span class="accent">-</span>ATLAS</div>
-        </div>
+        </a>
         <nav>
             <ul class="topbar-nav" id="topbar-nav">
                 <li><a href="#features" class="nav-active">Features</a></li>
