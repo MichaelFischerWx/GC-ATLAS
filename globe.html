@@ -1317,9 +1317,25 @@
             font-size: 0.74rem;
             line-height: 1.55;
             color: var(--paper-dim);
-            max-height: 320px;
+            /* Cap at 60% of viewport — doesn't crowd the panel on small
+               screens, but scales up for users on a big display so the
+               expanded content fits mostly in one view. */
+            max-height: 60vh;
             overflow-y: auto;
+            /* Always-visible scrollbar (macOS default hides it, which
+               hid the fact that there's more content below). */
+            scrollbar-width: thin;
+            scrollbar-color: rgba(139, 176, 161, 0.45) transparent;
         }
+        .lz-info::-webkit-scrollbar { width: 8px; }
+        .lz-info::-webkit-scrollbar-thumb {
+            background: rgba(139, 176, 161, 0.45);
+            border-radius: 4px;
+        }
+        .lz-info::-webkit-scrollbar-thumb:hover {
+            background: rgba(139, 176, 161, 0.7);
+        }
+        .lz-info::-webkit-scrollbar-track { background: transparent; }
         .lz-info[hidden] { display: none; }
         .lz-info p { margin: 6px 0; }
         .lz-info pre {
