@@ -557,6 +557,31 @@
         @media (max-width: 640px) {
             .topbar-nav { display: none; }
             .nav-hamburger { display: inline-flex; }
+            /* Mobile dropdown — open state turns the nav list into a
+               tappable menu anchored below the topbar. */
+            .topbar-nav.open {
+                display: flex;
+                flex-direction: column;
+                gap: 2px;
+                position: absolute;
+                top: 56px;
+                right: 14px;
+                background: rgba(12, 36, 32, 0.96);
+                border: 1px solid var(--border-light);
+                border-radius: 8px;
+                padding: 8px;
+                backdrop-filter: blur(14px);
+                -webkit-backdrop-filter: blur(14px);
+                box-shadow: 0 8px 22px rgba(0, 0, 0, 0.45);
+                min-width: 160px;
+                z-index: 1001;
+            }
+            .topbar-nav.open li { width: 100%; }
+            .topbar-nav.open a { display: block; padding: 9px 12px; }
+            .nav-hamburger.is-open {
+                color: var(--paper);
+                border-color: var(--emerald-bright);
+            }
             .feature-grid { grid-template-columns: 1fr; }
             .hero-title { font-size: 2.1rem; }
             .section-title { font-size: 1.55rem; }
@@ -590,13 +615,15 @@
             <div class="topbar-logo">GC<span class="accent">-</span>ATLAS</div>
         </div>
         <nav>
-            <ul class="topbar-nav">
+            <ul class="topbar-nav" id="topbar-nav">
                 <li><a href="#features" class="nav-active">Features</a></li>
                 <li><a href="#about">About</a></li>
                 <li><a href="globe.html" style="color: var(--emerald-bright);">Atlas →</a></li>
                 <li><a href="https://michaelfischerwx.github.io/TC-ATLAS/" target="_blank" rel="noopener">TC-ATLAS</a></li>
             </ul>
-            <button class="nav-hamburger" aria-label="menu">☰</button>
+            <button class="nav-hamburger" id="nav-hamburger" type="button"
+                    aria-label="menu" aria-expanded="false"
+                    aria-controls="topbar-nav">☰</button>
         </nav>
     </div>
 </header>
@@ -888,6 +915,44 @@
 </footer>
 
 <!-- ═══════════════ HERO GLOBE (Three.js graticule placeholder) ═══════════════ -->
+<!-- Topbar hamburger (mobile only, <640px). Toggles the nav dropdown;
+     closes on link-click or outside-click for natural "tap to navigate"
+     behaviour. -->
+<script>
+(function () {
+    const btn  = document.getElementById('nav-hamburger');
+    const nav  = document.getElementById('topbar-nav');
+    if (!btn || !nav) return;
+    const close = () => {
+        nav.classList.remove('open');
+        btn.classList.remove('is-open');
+        btn.setAttribute('aria-expanded', 'false');
+    };
+    const toggle = (e) => {
+        e.stopPropagation();
+        const isOpen = nav.classList.toggle('open');
+        btn.classList.toggle('is-open', isOpen);
+        btn.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+    };
+    btn.addEventListener('click', toggle);
+    // Close after picking a link so the user lands on the target without
+    // an open overlay sitting on top of it.
+    nav.addEventListener('click', (e) => {
+        if (e.target.closest('a')) close();
+    });
+    // Tap outside to dismiss.
+    document.addEventListener('click', (e) => {
+        if (!nav.classList.contains('open')) return;
+        if (nav.contains(e.target) || btn.contains(e.target)) return;
+        close();
+    });
+    // Esc to dismiss (keyboard).
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') close();
+    });
+})();
+</script>
+
 <script type="importmap">
 {
     "imports": {
