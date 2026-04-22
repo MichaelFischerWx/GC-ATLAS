@@ -10,10 +10,17 @@
 //
 // Rebuilt whenever the wind field or projection changes; cheap enough
 // (~1000 barbs × 3–6 segments) to dispose and regenerate per frame of
-// user input. All lines go into one THREE.LineSegments, all pennants
-// into one Mesh, so the whole overlay renders in two draw calls.
+// user input. All lines go into one LineSegments2 (screen-space-width
+// anti-aliased polylines via three/addons/lines/*) and all pennants
+// into one Mesh, so the whole overlay still renders in two draw calls.
+// LineSegments2 replaces the older LineBasicMaterial + THREE.LineSegments
+// pairing so we get real pixel-width strokes on HiDPI displays instead
+// of the 1-physical-pixel look that read as "cheap" at high DPR.
 
 import * as THREE from 'three';
+import { LineSegments2 } from 'three/addons/lines/LineSegments2.js';
+import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js';
+import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 
 const LAT_STEP   = 8;        // degrees between barb rows
 const LON_STEP   = 8;        // degrees between barb columns
@@ -44,17 +51,32 @@ export class BarbField {
         this.object = new THREE.Group();
         this.object.frustumCulled = false;
 
-        this.lineMat = new THREE.LineBasicMaterial({
-            color: 0xffffff, transparent: true, opacity: 0.92, depthWrite: false,
+        // Cream-tinted "print ink" colour — reads warmer than stark white
+        // and sits better over the saturated regions of the colormap.
+        const INK = 0xF4F0E0;
+        this.lineMat = new LineMaterial({
+            color: INK,
+            linewidth: 1.8,           // screen-space pixels (worldUnits:false)
+            worldUnits: false,
+            transparent: true,
+            opacity: 0.85,
+            depthWrite: false,
+            resolution: new THREE.Vector2(window.innerWidth, window.innerHeight),
         });
         this.pennantMat = new THREE.MeshBasicMaterial({
-            color: 0xffffff, transparent: true, opacity: 0.92, depthWrite: false,
+            color: INK, transparent: true, opacity: 0.88, depthWrite: false,
             side: THREE.DoubleSide,
         });
     }
 
     setVisible(v) { this.object.visible = v; }
-    updateResolution() { /* no-op — LineBasicMaterial uses 1px lines */ }
+    // Called on window resize — Line2 / LineSegments2 need current screen
+    // resolution to compute their pixel-space width correctly.
+    updateResolution(w, h) {
+        if (this.lineMat && this.lineMat.resolution) {
+            this.lineMat.resolution.set(w, h);
+        }
+    }
     onProjectionChanged() { this.rebuild(this._viewMode); }
     refresh()             { this.rebuild(this._viewMode); }
 
@@ -79,10 +101,14 @@ export class BarbField {
         }
 
         if (segs.length) {
-            const g = new THREE.BufferGeometry();
-            g.setAttribute('position', new THREE.Float32BufferAttribute(segs, 3));
-            const lines = new THREE.LineSegments(g, this.lineMat);
+            // LineSegmentsGeometry consumes a flat xyz*2-per-segment array via
+            // setPositions(), same shape we built up above.
+            const g = new LineSegmentsGeometry();
+            g.setPositions(segs);
+            const lines = new LineSegments2(g, this.lineMat);
+            lines.computeLineDistances();
             lines.renderOrder = 5;
+            lines.frustumCulled = false;
             this.object.add(lines);
         }
         if (tris.length) {
