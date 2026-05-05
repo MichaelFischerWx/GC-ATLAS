@@ -14,6 +14,10 @@ running means where applicable) anchored to the central month:
     PMM   — Pacific Meridional Mode
     TNI   — Trans-Niño Index (EP vs CP ENSO discriminator)
     NPGO  — North Pacific Gyre Oscillation (Kuroshio / N-Pacific gyre mode)
+    AMO   — Atlantic Multidecadal Oscillation
+    QBO   — Quasi-Biennial Oscillation (30-hPa equatorial zonal wind)
+    SAM   — Southern Annular Mode (a.k.a. AAO)
+    IOD   — Indian Ocean Dipole (Dipole Mode Index)
 
 Two upstream formats are handled:
 
@@ -154,6 +158,49 @@ SOURCES = {
                        "California Current nutrient supply, and "
                        "ecosystem regime change. Di Lorenzo et al. (2008).",
         "url": "https://psl.noaa.gov/data/correlation/npgo.data",
+        "parser": "psl",
+    },
+    "amo": {
+        "label": "AMO",
+        "long_name": "Atlantic Multidecadal Oscillation",
+        "description": "Detrended N-Atlantic SST anomaly (Kaplan SST V2, "
+                       "unsmoothed). The dominant ~60-yr Atlantic SST "
+                       "mode — Atlantic hurricane activity, Sahel rainfall, "
+                       "and N-American summer drought all track its phase. "
+                       "Enfield et al. (2001).",
+        "url": "https://psl.noaa.gov/data/correlation/amon.us.data",
+        "parser": "psl",
+    },
+    "qbo": {
+        "label": "QBO",
+        "long_name": "Quasi-Biennial Oscillation",
+        "description": "30-hPa equatorial zonal-mean zonal wind (m/s). "
+                       "Stratospheric ~28-month easterly/westerly cycle "
+                       "that modulates Atlantic hurricane shear "
+                       "environment (Gray 1984) and tropical convection.",
+        "url": "https://psl.noaa.gov/data/correlation/qbo.data",
+        "parser": "psl",
+    },
+    "sam": {
+        "label": "SAM",
+        "long_name": "Southern Annular Mode (Antarctic Oscillation)",
+        "description": "SH counterpart to the AO — leading EOF of "
+                       "700-hPa height S of 20°S. Positive = strong "
+                       "polar vortex, poleward-shifted SH westerly jet. "
+                       "Modulates SH storm tracks and Antarctic sea-ice. "
+                       "Sometimes called AAO.",
+        "url": "https://psl.noaa.gov/data/correlation/aao.data",
+        "parser": "psl",
+    },
+    "iod": {
+        "label": "IOD",
+        "long_name": "Indian Ocean Dipole (Dipole Mode Index)",
+        "description": "Tropical Indian Ocean SST gradient: W (50–70°E, "
+                       "10°S–10°N) minus E (90–110°E, 10°S–0°). Positive "
+                       "IOD = warm W / cool E → E-African flooding, "
+                       "Indonesian drought, modulates IO + W. Pacific "
+                       "TC season. Saji et al. (1999). HadISST source.",
+        "url": "https://psl.noaa.gov/data/timeseries/month/data/dmi.had.long.data",
         "parser": "psl",
     },
 }
