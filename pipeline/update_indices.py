@@ -1,15 +1,19 @@
 """Fetch monthly climate indices from NOAA and emit data/indices.json.
 
 The frontend's composite-builder lets the user pick events where an index
-exceeds a threshold in a given month. Five indices ship in the initial
-cut; all are monthly values (3-month running means where applicable)
-anchored to the central month:
+exceeds a threshold in a given month. All values are monthly (3-month
+running means where applicable) anchored to the central month:
 
     RONI  — Relative Oceanic Niño Index (ENSO, warming-detrended)
     ONI   — Oceanic Niño Index (ENSO, traditional)
     PNA   — Pacific / North American teleconnection
     NAO   — North Atlantic Oscillation
     AO    — Arctic Oscillation
+    PDO   — Pacific Decadal Oscillation
+    AMM   — Atlantic Meridional Mode
+    PMM   — Pacific Meridional Mode
+    TNI   — Trans-Niño Index (EP vs CP ENSO discriminator)
+    NPGO  — North Pacific Gyre Oscillation (Kuroshio / N-Pacific gyre mode)
 
 Two upstream formats are handled:
 
@@ -127,6 +131,29 @@ SOURCES = {
                        "seed ENSO through the seasonal footprinting "
                        "mechanism. Chiang & Vimont (2004).",
         "url": "https://psl.noaa.gov/data/timeseries/monthly/PMM/pmmsst.data",
+        "parser": "psl",
+    },
+    "tni": {
+        "label": "TNI",
+        "long_name": "Trans-Niño Index",
+        "description": "Standardized Niño-1+2 SSTa minus standardized "
+                       "Niño-4 SSTa — captures the east–central tropical "
+                       "Pacific SST gradient. Distinguishes Eastern-Pacific "
+                       "(EP) from Central-Pacific (CP, 'Modoki') ENSO "
+                       "events independent of overall warm/cold state. "
+                       "Trenberth & Stepaniak (2001).",
+        "url": "https://psl.noaa.gov/data/correlation/tni.data",
+        "parser": "psl",
+    },
+    "npgo": {
+        "label": "NPGO",
+        "long_name": "North Pacific Gyre Oscillation",
+        "description": "Second EOF of N-Pacific SSH (and SST) — the "
+                       "low-frequency gyre-circulation mode that pairs "
+                       "with the PDO. Tracks Kuroshio Extension shifts, "
+                       "California Current nutrient supply, and "
+                       "ecosystem regime change. Di Lorenzo et al. (2008).",
+        "url": "https://psl.noaa.gov/data/correlation/npgo.data",
         "parser": "psl",
     },
 }
