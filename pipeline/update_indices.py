@@ -58,6 +58,13 @@ log = logging.getLogger("update_indices")
 
 # ── source catalogue ─────────────────────────────────────────────────
 # NOTE: URLs are public and stable; if NOAA restructures, update here.
+# Per-index metadata. Each entry carries:
+#   url        — raw data file (used by the fetcher AND surfaced as a link)
+#   parser     — psl | cpc_seasonal
+#   provider   — short attribution string ("NOAA CPC", "NOAA PSL")
+#   provider_url — landing page for the provider's index portal
+#   paper      — short citation label, e.g. "Enfield et al. (2001)"
+#   paper_url  — DOI / publisher link to the seminal paper, when available
 SOURCES = {
     "roni": {
         "label": "RONI",
@@ -67,6 +74,10 @@ SOURCES = {
                        "3-month running mean anchored to central month.",
         "url": "https://www.cpc.ncep.noaa.gov/data/indices/RONI.ascii.txt",
         "parser": "cpc_seasonal",
+        "provider": "NOAA CPC",
+        "provider_url": "https://www.cpc.ncep.noaa.gov/data/indices/",
+        "paper": "L'Heureux et al. (2024)",
+        "paper_url": "https://doi.org/10.1029/2024GL108592",
     },
     "oni": {
         "label": "ONI",
@@ -76,6 +87,10 @@ SOURCES = {
                        "central month. 1991–2020 base period.",
         "url": "https://psl.noaa.gov/data/correlation/oni.data",
         "parser": "psl",
+        "provider": "NOAA PSL",
+        "provider_url": "https://psl.noaa.gov/data/climateindices/list/",
+        "paper": "NOAA CPC ONI definition",
+        "paper_url": "https://origin.cpc.ncep.noaa.gov/products/analysis_monitoring/ensostuff/ONI_v5.php",
     },
     "pna": {
         "label": "PNA",
@@ -85,6 +100,10 @@ SOURCES = {
                        "west coast + trough over the eastern US.",
         "url": "https://psl.noaa.gov/data/correlation/pna.data",
         "parser": "psl",
+        "provider": "NOAA PSL",
+        "provider_url": "https://psl.noaa.gov/data/climateindices/list/",
+        "paper": "Wallace & Gutzler (1981)",
+        "paper_url": "https://doi.org/10.1175/1520-0493(1981)109<0784:TITGHF>2.0.CO;2",
     },
     "nao": {
         "label": "NAO",
@@ -94,6 +113,10 @@ SOURCES = {
                        "NW European winters.",
         "url": "https://psl.noaa.gov/data/correlation/nao.data",
         "parser": "psl",
+        "provider": "NOAA PSL",
+        "provider_url": "https://psl.noaa.gov/data/climateindices/list/",
+        "paper": "Hurrell (1995)",
+        "paper_url": "https://doi.org/10.1126/science.269.5224.676",
     },
     "ao": {
         "label": "AO",
@@ -103,6 +126,10 @@ SOURCES = {
                        "strong polar vortex, cold air bottled up.",
         "url": "https://psl.noaa.gov/data/correlation/ao.data",
         "parser": "psl",
+        "provider": "NOAA PSL",
+        "provider_url": "https://psl.noaa.gov/data/climateindices/list/",
+        "paper": "Thompson & Wallace (1998)",
+        "paper_url": "https://doi.org/10.1029/98GL00950",
     },
     "pdo": {
         "label": "PDO",
@@ -114,6 +141,10 @@ SOURCES = {
                        "regimes. Mantua et al. (1997).",
         "url": "https://psl.noaa.gov/data/correlation/pdo.data",
         "parser": "psl",
+        "provider": "NOAA PSL",
+        "provider_url": "https://psl.noaa.gov/data/climateindices/list/",
+        "paper": "Mantua et al. (1997)",
+        "paper_url": "https://doi.org/10.1175/1520-0477(1997)078<1069:APICOW>2.0.CO;2",
     },
     "amm": {
         "label": "AMM",
@@ -125,6 +156,10 @@ SOURCES = {
                        "Chiang & Vimont (2004).",
         "url": "https://psl.noaa.gov/data/timeseries/monthly/AMM/ammsst.data",
         "parser": "psl",
+        "provider": "NOAA PSL",
+        "provider_url": "https://psl.noaa.gov/data/timeseries/monthly/AMM/",
+        "paper": "Chiang & Vimont (2004)",
+        "paper_url": "https://doi.org/10.1175/JCLI-3324.1",
     },
     "pmm": {
         "label": "PMM",
@@ -136,6 +171,10 @@ SOURCES = {
                        "mechanism. Chiang & Vimont (2004).",
         "url": "https://psl.noaa.gov/data/timeseries/monthly/PMM/pmmsst.data",
         "parser": "psl",
+        "provider": "NOAA PSL",
+        "provider_url": "https://psl.noaa.gov/data/timeseries/monthly/PMM/",
+        "paper": "Chiang & Vimont (2004)",
+        "paper_url": "https://doi.org/10.1175/JCLI-3324.1",
     },
     "tni": {
         "label": "TNI",
@@ -148,6 +187,10 @@ SOURCES = {
                        "Trenberth & Stepaniak (2001).",
         "url": "https://psl.noaa.gov/data/correlation/tni.data",
         "parser": "psl",
+        "provider": "NOAA PSL",
+        "provider_url": "https://psl.noaa.gov/data/climateindices/list/#TNI",
+        "paper": "Trenberth & Stepaniak (2001)",
+        "paper_url": "https://doi.org/10.1175/1520-0442(2001)014<1697:LIOENO>2.0.CO;2",
     },
     "npgo": {
         "label": "NPGO",
@@ -159,6 +202,10 @@ SOURCES = {
                        "ecosystem regime change. Di Lorenzo et al. (2008).",
         "url": "https://psl.noaa.gov/data/correlation/npgo.data",
         "parser": "psl",
+        "provider": "NOAA PSL",
+        "provider_url": "https://www.npgo.org/",
+        "paper": "Di Lorenzo et al. (2008)",
+        "paper_url": "https://doi.org/10.1029/2007GL032838",
     },
     "amo": {
         "label": "AMO",
@@ -170,6 +217,10 @@ SOURCES = {
                        "Enfield et al. (2001).",
         "url": "https://psl.noaa.gov/data/correlation/amon.us.data",
         "parser": "psl",
+        "provider": "NOAA PSL",
+        "provider_url": "https://psl.noaa.gov/data/timeseries/AMO/",
+        "paper": "Enfield et al. (2001)",
+        "paper_url": "https://doi.org/10.1029/2000GL012745",
     },
     "qbo": {
         "label": "QBO",
@@ -180,6 +231,10 @@ SOURCES = {
                        "environment (Gray 1984) and tropical convection.",
         "url": "https://psl.noaa.gov/data/correlation/qbo.data",
         "parser": "psl",
+        "provider": "NOAA PSL",
+        "provider_url": "https://psl.noaa.gov/data/climateindices/list/",
+        "paper": "Baldwin et al. (2001)",
+        "paper_url": "https://doi.org/10.1029/1999RG000073",
     },
     "sam": {
         "label": "SAM",
@@ -191,6 +246,10 @@ SOURCES = {
                        "Sometimes called AAO.",
         "url": "https://psl.noaa.gov/data/correlation/aao.data",
         "parser": "psl",
+        "provider": "NOAA CPC",
+        "provider_url": "https://www.cpc.ncep.noaa.gov/products/precip/CWlink/daily_ao_index/aao/aao.shtml",
+        "paper": "Thompson & Wallace (2000)",
+        "paper_url": "https://doi.org/10.1175/1520-0442(2000)013<1000:AMITEC>2.0.CO;2",
     },
     "iod": {
         "label": "IOD",
@@ -202,8 +261,18 @@ SOURCES = {
                        "TC season. Saji et al. (1999). HadISST source.",
         "url": "https://psl.noaa.gov/data/timeseries/month/data/dmi.had.long.data",
         "parser": "psl",
+        "provider": "NOAA PSL (Met Office HadISST)",
+        "provider_url": "https://psl.noaa.gov/gcos_wgsp/Timeseries/DMI/",
+        "paper": "Saji et al. (1999)",
+        "paper_url": "https://doi.org/10.1038/43854",
     },
 }
+
+# Optional fields propagated from SOURCES into each index entry in the
+# output JSON. Centralised so you don't have to remember to update build()
+# when the SOURCES schema grows.
+_INDEX_META_FIELDS = ("label", "long_name", "description",
+                      "provider", "provider_url", "paper", "paper_url")
 
 
 def _is_missing(v: float, sentinels: tuple[float, ...]) -> bool:
@@ -318,13 +387,13 @@ def build(only: set[str] | None = None) -> dict:
         n_months = sum(1 for y in values for v in values[y] if v is not None)
         log.info(f"{key}: {len(years)} years ({years[0] if years else '—'}–"
                  f"{years[-1] if years else '—'}), {n_months} months")
-        indices[key] = {
-            "label": meta["label"],
-            "long_name": meta["long_name"],
-            "description": meta["description"],
-            "source": meta["url"],
-            "values": values,
-        }
+        # Pull through every metadata field defined in _INDEX_META_FIELDS so
+        # adding a new field to SOURCES (provider, paper_url, ...) shows up
+        # in the JSON without having to touch this builder.
+        entry = {k: meta[k] for k in _INDEX_META_FIELDS if k in meta}
+        entry["source"] = meta["url"]    # back-compat alias for old frontend
+        entry["values"] = values
+        indices[key] = entry
     return {
         "updated": date.today().isoformat(),
         "indices": indices,
