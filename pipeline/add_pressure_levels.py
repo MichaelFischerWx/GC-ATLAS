@@ -334,6 +334,9 @@ def parse_args() -> argparse.Namespace:
                     help="target grid spacing (default 1.0; native is 0.5)")
     ap.add_argument("--no-download", action="store_true",
                     help="use existing sidecar NetCDFs (skip CDS fetch)")
+    ap.add_argument("--incremental", action="store_true",
+                    help="for sidecars that already exist, fetch only months "
+                         "newer than the sidecar's latest time stamp and append.")
     ap.add_argument("--no-helmholtz", action="store_true",
                     help="skip chi/psi computation (only direct-fetched vars)")
     ap.add_argument("--no-compress", action="store_true",
@@ -435,11 +438,48 @@ def main() -> int:
     elif not args.dry_run:
         import cdsapi
         client = cdsapi.Client()
+        if args.incremental:
+            from _cds_incremental import (existing_max_time,
+                                          latest_published_month,
+                                          missing_months, fetch_and_append)
         for short in direct_vars:
             var_meta = next(v for v in pl_cfg["variables"] if v["short"] == short)
             for raw_dir, (s, e) in fetch_targets:
                 sp = sidecar_path(raw_dir, short, levels)
                 raw_dir.mkdir(parents=True, exist_ok=True)
+                if sp.exists() and args.incremental:
+                    last = existing_max_time(sp)
+                    if last is None:
+                        LOG.info("incremental %s: unreadable, re-fetching", sp.name)
+                        sp.unlink()
+                    else:
+                        horizon = latest_published_month()
+                        target = (min(horizon[0], e), horizon[1]) if horizon[0] <= e else (e, 12)
+                        miss = missing_months(last, target)
+                        if not miss:
+                            LOG.info("skip %s (up-to-date through %s)",
+                                     sp.name, last.strftime("%Y-%m"))
+                            sidecars[short].append(sp)
+                            continue
+                        LOG.info("incremental %s: fetching %s", sp.name, miss)
+                        base_req = {
+                            "product_type": "monthly_averaged_reanalysis",
+                            "variable": var_meta["cds_name"],
+                            "time": "00:00",
+                            "grid": [cfg["grid"], cfg["grid"]],
+                            "area": cfg["area"],
+                            "data_format": "netcdf",
+                            "pressure_level": [str(L) for L in levels],
+                        }
+                        try:
+                            n = fetch_and_append(client,
+                                                 "reanalysis-era5-pressure-levels-monthly-means",
+                                                 base_req, miss, sp, log_label=short)
+                            LOG.info("done %s incremental +%d months", sp.name, n)
+                        except Exception as exc:
+                            LOG.error("FAILED incremental %s: %s", short, exc)
+                        sidecars[short].append(sp)
+                        continue
                 if sp.exists():
                     LOG.info("skip %s sidecar exists", sp.name)
                     sidecars[short].append(sp)

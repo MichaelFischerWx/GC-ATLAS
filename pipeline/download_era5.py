@@ -11,6 +11,8 @@ Usage:
     python pipeline/download_era5.py --var u        # just one field
     python pipeline/download_era5.py --group single_levels
     python pipeline/download_era5.py --force        # re-download everything
+    python pipeline/download_era5.py --incremental  # append newly-published
+                                                    # months onto existing files
 """
 from __future__ import annotations
 
@@ -52,6 +54,10 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--period", help="START-END, e.g. 1961-1990 (overrides config; output goes to data/raw_START_END/)")
     ap.add_argument("--dry-run", action="store_true", help="print requests only")
     ap.add_argument("--force", action="store_true", help="overwrite existing files")
+    ap.add_argument("--incremental", action="store_true",
+                    help="for files that already exist, fetch only months newer "
+                         "than the file's latest time stamp and append. Ignored "
+                         "if --force is also set.")
     return ap.parse_args()
 
 
@@ -90,6 +96,48 @@ def main() -> int:
             if args.var and args.var != var["short"]:
                 continue
             out_path = out_root / f"era5_{group_name}_{var['short']}.nc"
+
+            if out_path.exists() and args.incremental and not args.force:
+                from _cds_incremental import (existing_max_time,
+                                              latest_published_month,
+                                              missing_months, fetch_and_append)
+                last = existing_max_time(out_path)
+                if last is None:
+                    LOG.info("incremental %s: can't read existing time axis — full fetch", out_path.name)
+                else:
+                    # Cap fetch at the lesser of (period end, CDS publish horizon).
+                    horizon = latest_published_month()
+                    target = (min(horizon[0], end), horizon[1]) if horizon[0] <= end else (end, 12)
+                    if horizon[0] > end:
+                        target = (end, 12)
+                    miss = missing_months(last, target)
+                    if not miss:
+                        LOG.info("skip    %s  (up-to-date through %s)",
+                                 out_path.name, last.strftime("%Y-%m"))
+                        skipped += 1
+                        continue
+                    LOG.info("incremental %s: existing through %s, fetching %s",
+                             out_path.name, last.strftime("%Y-%m"), miss)
+                    queued += 1
+                    if args.dry_run:
+                        continue
+                    base_req = build_request(var, cfg, group_name, start, end)
+                    base_req.pop("year", None); base_req.pop("month", None)
+                    t0 = time.time()
+                    try:
+                        n = fetch_and_append(client, group_cfg["dataset"], base_req,
+                                             miss, out_path, log_label=var["short"])
+                    except Exception as exc:
+                        LOG.error("FAILED incremental %s: %s", var["short"], exc)
+                        continue
+                    LOG.info("done    %s incremental +%d months (%.0fs)",
+                             out_path.name, n, time.time() - t0)
+                    if n:
+                        fetched += 1
+                    else:
+                        skipped += 1
+                    continue
+
             if out_path.exists() and not args.force:
                 LOG.info("skip    %s  (exists)", out_path.name)
                 skipped += 1
