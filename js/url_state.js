@@ -98,9 +98,9 @@ const SPEC = [
         v => v === 'total' ? null : v,
         s => ['total','zonal','eddy','anomaly','zscore'].includes(s) ? s : undefined],
     // 3-month centered seasonal mean, anchored on state.month. On → DJF
-    // when month=1, JJA when month=7, NDJ when month=12. Ignored by
-    // advanced cross-section diagnostics (psi, M, ug, N², EP flux,
-    // budgets) — only applies to field display + field cross-section.
+    // when month=1, JJA when month=7, NDJ when month=12. Applies to the
+    // globe, the cross-section panel (field sections and diagnostics) and
+    // the Lorenz panel.
     ['seasonal',           'sn',  v => v ? '1' : null, s => s === '1'],
 
     // ── compare overlay (map view) ─────────────────────────────────
@@ -155,6 +155,8 @@ const SPEC = [
     ['xsDiag',             'xd',
         v => v === 'field' ? null : v,
         s => ['field','psi','M','ug','N2','epflux','mbudget','qbudget','hbudget'].includes(s) ? s : undefined],
+    // ψ / EP-flux panel as (year or composite) − active climatology.
+    ['xsAnom',             'xa',  v => v ? '1' : null, s => s === '1'],
 ];
 
 /** Encode a state snapshot as a URL hash (without the leading '#'). */

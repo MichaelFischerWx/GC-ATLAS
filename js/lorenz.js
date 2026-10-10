@@ -37,7 +37,7 @@
 // departures from the monthly mean) require daily data and are out of scope.
 // Returns SI numbers; caller renders them in a schematic.
 
-import { cachedMonth } from './era5.js';
+import { sourceMonth } from './diag_source.js';
 import { LEVELS, GRID } from './data.js';
 
 const R_DRY = 287.04;
@@ -65,9 +65,9 @@ function nlev() { return LEVELS.length; }
  *      (LEVELS[k] / p_s) × total_w; θ at that rank is θ_r(LEVELS[k]).
  *   4. Convert θ_r → T_r via T_r = θ_r · (LEVELS[k]/1000)^κ.
  *
- * Returns null if any T tile is missing.
+ * `tiles` holds the T tile at each LEVELS[k] (already loaded by the caller).
  */
-function lorenzReferenceState(month) {
+function lorenzReferenceState(tiles) {
     const { nlat, nlon } = GRID;
     const N = nlev();
 
@@ -80,14 +80,6 @@ function lorenzReferenceState(month) {
         dpLayer[k] = pBot - pTop;
     }
     const pSurface = LEVELS[N - 1] * 100;
-
-    // Pre-load all temperature tiles; bail early if any are missing.
-    const tiles = new Array(N);
-    for (let k = 0; k < N; k++) {
-        const tile = cachedMonth('t', month, LEVELS[k]);
-        if (!tile) return null;
-        tiles[k] = tile;
-    }
 
     // Build flat (θ, w) arrays. cosφ < 1e-3 (poles) skipped — they carry no
     // mass anyway. Rough size: 12 levels × 181 lats × 360 lons ≈ 780k entries.
@@ -258,8 +250,11 @@ function dByDp_levels(arr, nlat, k, i) {
  *                                   (area-mean of T at each pressure level — the
  *                                   common approximation used in most reanalysis
  *                                   diagnostics; underestimates P_M by ~3×).
+ * @param {object} [opts]           { seasonal, source }: the 3-month centred
+ *                                   mean flag and the time slice (diag_source.js;
+ *                                   null = active climatology).
  */
-export function computeLorenzCycle(month, refType = 'lorenz') {
+export function computeLorenzCycle(month, refType = 'lorenz', { seasonal = false, source = null } = {}) {
     const { nlat, nlon } = GRID;
     const N = nlev();
 
@@ -268,10 +263,10 @@ export function computeLorenzCycle(month, refType = 'lorenz') {
     // tiles arrive.
     const U = [], V = [], W = [], T = [];
     for (let k = 0; k < N; k++) {
-        const u = cachedMonth('u', month, LEVELS[k]);
-        const v = cachedMonth('v', month, LEVELS[k]);
-        const w = cachedMonth('w', month, LEVELS[k]);
-        const t = cachedMonth('t', month, LEVELS[k]);
+        const u = sourceMonth('u', month, LEVELS[k], source, seasonal);
+        const v = sourceMonth('v', month, LEVELS[k], source, seasonal);
+        const w = sourceMonth('w', month, LEVELS[k], source, seasonal);
+        const t = sourceMonth('t', month, LEVELS[k], source, seasonal);
         if (!u || !v || !w || !t) return null;
         U.push(u); V.push(v); W.push(w); T.push(t);
     }
@@ -280,7 +275,7 @@ export function computeLorenzCycle(month, refType = 'lorenz') {
     // Choice of reference state matters substantially — see refType arg.
     let Tref;
     if (refType === 'lorenz') {
-        Tref = lorenzReferenceState(month);
+        Tref = lorenzReferenceState(T);
         if (!Tref) return null;
     } else {
         Tref = new Float32Array(N);

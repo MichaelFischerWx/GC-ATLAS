@@ -26,7 +26,7 @@
 //     normalised units so arrow length is visually proportional in (φ, log p)
 //     space (Edmon–Hoskins–McIntyre convention).
 
-import { cachedMonth } from './era5.js';
+import { sourceMonth } from './diag_source.js';
 import { LEVELS, GRID } from './data.js';
 
 const A_EARTH = 6.371e6;
@@ -82,7 +82,9 @@ function zonalCov(tileA, tileB, nlat, nlon) {
     return cov;
 }
 
-export function computeEPFlux(month, { seasonal = false } = {}) {
+/** F_φ and F_p (SI) on the (k, i) panel grid for one time slice
+ *  (diag_source.js), or null while any tile is missing. */
+function epFluxComponents(month, seasonal, source) {
     const { nlat, nlon } = GRID;
     const nlev = LEVELS.length;
 
@@ -94,9 +96,9 @@ export function computeEPFlux(month, { seasonal = false } = {}) {
     const u_zm   = new Float32Array(nlev * nlat);     // for context (not used in QG form)
 
     for (let k = 0; k < nlev; k++) {
-        const tU = cachedMonth('u', month, LEVELS[k], 'mean', 'default', null, seasonal);
-        const tV = cachedMonth('v', month, LEVELS[k], 'mean', 'default', null, seasonal);
-        const tT = cachedMonth('t', month, LEVELS[k], 'mean', 'default', null, seasonal);
+        const tU = sourceMonth('u', month, LEVELS[k], source, seasonal);
+        const tV = sourceMonth('v', month, LEVELS[k], source, seasonal);
+        const tT = sourceMonth('t', month, LEVELS[k], source, seasonal);
         if (!tU || !tV || !tT) return null;
         const thetaFactor = Math.pow(1000 / LEVELS[k], KAPPA);
         // Compose θ tile in-place into a temporary array.
@@ -170,6 +172,30 @@ export function computeEPFlux(month, { seasonal = false } = {}) {
             } else {
                 Fp[idx] = aCos * fCor[i] * cvT / dth;
             }
+        }
+    }
+    return { Fphi, Fp };
+}
+
+/**
+ * Stationary-eddy EP flux for `source` (null = active climatology).
+ * `anomaly: true` with a year / composite source returns the departure from
+ * the active climatology instead. ∇·F is linear in F, so the anomaly is
+ * built from F(source) − F(climatology): divergence and arrows alike.
+ */
+export function computeEPFlux(month, { seasonal = false, source = null, anomaly = false } = {}) {
+    const { nlat } = GRID;
+    const nlev = LEVELS.length;
+    const F = epFluxComponents(month, seasonal, source);
+    if (!F) return null;
+    const { Fphi, Fp } = F;
+    const isAnomaly = anomaly && source != null;
+    if (isAnomaly) {
+        const ref = epFluxComponents(month, seasonal, null);
+        if (!ref) return null;
+        for (let idx = 0; idx < Fphi.length; idx++) {
+            Fphi[idx] -= ref.Fphi[idx];
+            Fp[idx]   -= ref.Fp[idx];
         }
     }
 
@@ -278,7 +304,7 @@ export function computeEPFlux(month, { seasonal = false } = {}) {
         values: divF,
         vmin, vmax,
         levels: LEVELS.slice(),
-        name: 'EP flux (stationary eddy)',
+        name: isAnomaly ? 'EP flux anomaly (stationary eddy)' : 'EP flux (stationary eddy)',
         units: 'm s⁻¹ day⁻¹',
         isSymmetric: true,
         isDiagnostic: true,

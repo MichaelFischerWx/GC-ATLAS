@@ -12,7 +12,7 @@
 //
 // Output values in 10⁹ kg s⁻¹ for display.
 
-import { cachedMonth } from './era5.js';
+import { sourceMonth } from './diag_source.js';
 import { LEVELS, GRID } from './data.js';
 
 const A_EARTH = 6.371e6;         // m
@@ -28,16 +28,52 @@ const N2_UNIT  = 1e-4;           // 10⁻⁴ s⁻²  (tropospheric N² ≈ 1, st
 /**
  * Compute the monthly-mean mass streamfunction ψ(lat, p). Requires v tiles
  * at all pressure levels for the given month; returns null if any are
- * missing (caller should prefetch and retry on the next fire).
+ * missing (caller should prefetch and retry on the next fire). Every
+ * diagnostic here reads its tiles from `source` (see diag_source.js:
+ * null = active climatology, { year }, or { years } composite).
+ * `anomaly: true` with a year / composite source returns ψ(source) −
+ * ψ(active climatology).
  */
-export function computeMassStreamfunction(month, { seasonal = false } = {}) {
+export function computeMassStreamfunction(month, { seasonal = false, source = null, anomaly = false } = {}) {
+    const psi = psiValues(month, seasonal, source);
+    if (!psi) return null;
+    const isAnomaly = anomaly && source != null;
+    if (isAnomaly) {
+        const ref = psiValues(month, seasonal, null);
+        if (!ref) return null;
+        for (let i = 0; i < psi.length; i++) psi[i] -= ref[i];
+    }
+
+    // Symmetric range so the divergent colormap centres on zero.
+    let absMax = 0;
+    for (const v of psi) {
+        if (Number.isFinite(v) && Math.abs(v) > absMax) absMax = Math.abs(v);
+    }
+    if (absMax === 0) absMax = 1;
+
+    return {
+        kind: 'zonal',
+        type: 'pl',
+        values: psi,
+        vmin: -absMax,
+        vmax:  absMax,
+        levels: LEVELS.slice(),
+        name: isAnomaly ? 'Mass streamfunction anomaly ψ′' : 'Mass streamfunction ψ',
+        units: '10⁹ kg s⁻¹',
+        isSymmetric: true,
+        isDiagnostic: true,
+    };
+}
+
+/** ψ(k, lat) in 10⁹ kg s⁻¹ for one time slice, or null while tiles load. */
+function psiValues(month, seasonal, source) {
     const { nlat, nlon } = GRID;
     const nlev = LEVELS.length;
 
     // Zonal-mean v at each (k, lat) — NaN-aware.
     const vzm = new Float32Array(nlev * nlat);
     for (let k = 0; k < nlev; k++) {
-        const tile = cachedMonth('v', month, LEVELS[k], 'mean', 'default', null, seasonal);
+        const tile = sourceMonth('v', month, LEVELS[k], source, seasonal);
         if (!tile) return null;
         for (let i = 0; i < nlat; i++) {
             let s = 0, n = 0;
@@ -71,26 +107,7 @@ export function computeMassStreamfunction(month, { seasonal = false } = {}) {
             psi[k * nlat + i] = scale * accum / PSI_UNIT;
         }
     }
-
-    // Symmetric range so the divergent colormap centres on zero.
-    let absMax = 0;
-    for (const v of psi) {
-        if (Number.isFinite(v) && Math.abs(v) > absMax) absMax = Math.abs(v);
-    }
-    if (absMax === 0) absMax = 1;
-
-    return {
-        kind: 'zonal',
-        type: 'pl',
-        values: psi,
-        vmin: -absMax,
-        vmax:  absMax,
-        levels: LEVELS.slice(),
-        name: 'Mass streamfunction ψ',
-        units: '10⁹ kg s⁻¹',
-        isSymmetric: true,
-        isDiagnostic: true,
-    };
+    return psi;
 }
 
 /**
@@ -103,14 +120,14 @@ export function computeMassStreamfunction(month, { seasonal = false } = {}) {
  * producing the upper-tropospheric zonal jet near the Hadley cell's
  * poleward edge.
  */
-export function computeAngularMomentum(month, { seasonal = false } = {}) {
+export function computeAngularMomentum(month, { seasonal = false, source = null } = {}) {
     const { nlat, nlon } = GRID;
     const nlev = LEVELS.length;
 
     // Zonal-mean u at each (k, lat).
     const uzm = new Float32Array(nlev * nlat);
     for (let k = 0; k < nlev; k++) {
-        const tile = cachedMonth('u', month, LEVELS[k], 'mean', 'default', null, seasonal);
+        const tile = sourceMonth('u', month, LEVELS[k], source, seasonal);
         if (!tile) return null;
         for (let i = 0; i < nlat; i++) {
             let s = 0, n = 0;
@@ -170,7 +187,7 @@ export function computeAngularMomentum(month, { seasonal = false } = {}) {
  * Deep tropics (|φ| < 5°) are masked: f → 0 makes u_g singular and the
  * geostrophic approximation fundamentally invalid there.
  */
-export function computeGeostrophicWind(month, { seasonal = false } = {}) {
+export function computeGeostrophicWind(month, { seasonal = false, source = null } = {}) {
     const { nlat, nlon } = GRID;
     const nlev = LEVELS.length;
 
@@ -178,7 +195,7 @@ export function computeGeostrophicWind(month, { seasonal = false } = {}) {
     // m²/s² → m unit conversion at load time, so we work directly with height.
     const zZm = new Float32Array(nlev * nlat);
     for (let k = 0; k < nlev; k++) {
-        const tile = cachedMonth('z', month, LEVELS[k], 'mean', 'default', null, seasonal);
+        const tile = sourceMonth('z', month, LEVELS[k], source, seasonal);
         if (!tile) return null;
         for (let i = 0; i < nlat; i++) {
             let s = 0, n = 0;
@@ -264,7 +281,7 @@ export function computeGeostrophicWind(month, { seasonal = false } = {}) {
  * a strongly stable layer, the tropical free troposphere is weakly stable,
  * and the boundary layer / inversions in mid-latitudes show finer structure.
  */
-export function computeBruntVaisala(month, { seasonal = false } = {}) {
+export function computeBruntVaisala(month, { seasonal = false, source = null } = {}) {
     const { nlat, nlon } = GRID;
     const nlev = LEVELS.length;
 
@@ -272,7 +289,7 @@ export function computeBruntVaisala(month, { seasonal = false } = {}) {
     const Tzm = new Float32Array(nlev * nlat);
     const Thzm = new Float32Array(nlev * nlat);
     for (let k = 0; k < nlev; k++) {
-        const tile = cachedMonth('t', month, LEVELS[k], 'mean', 'default', null, seasonal);
+        const tile = sourceMonth('t', month, LEVELS[k], source, seasonal);
         if (!tile) return null;
         const thetaFactor = Math.pow(1000 / LEVELS[k], KAPPA);
         for (let i = 0; i < nlat; i++) {

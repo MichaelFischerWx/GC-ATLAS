@@ -27,6 +27,7 @@ import { computeLorenzCycle } from './lorenz.js';
 import { buildMBudgetView } from './m_budget.js';
 import { buildQBudgetView } from './q_budget.js';
 import { buildHBudgetView } from './h_budget.js';
+import { sourceFromState, sourceKey, sourceYears, sourceHasMonth, sourceMonth } from './diag_source.js';
 import { ParcelField } from './parcels.js';
 import { GifExporter, downloadBlob } from './gif_export.js';
 import { encodeStateToHash, decodeHashToPatch, writeHashDebounced } from './url_state.js';
@@ -130,9 +131,8 @@ class GlobeApp {
             kind: 'mean',            // 'mean' (climatology) | 'std' (inter-annual ±1σ)
             // 3-month centered seasonal mean anchored on state.month.
             // On → DJF when month=1, JJA when month=7, etc. Propagates
-            // through getField (data.js) and cross-section field panel.
-            // Advanced diagnostic cross-sections (ψ, M, EP, budgets)
-            // ignore it until their component tiles are plumbed too.
+            // through getField (data.js), the cross-section panel (field
+            // sections and diagnostics) and the Lorenz panel.
             seasonal: false,
             referencePeriod: 'default',  // 'default' (1991-2020) | '1961-1990' | …
             climatologyPeriod: 'default', // active climatology — drives mean + std + decomp reference
@@ -163,6 +163,9 @@ class GlobeApp {
             lorenzRef: 'lorenz',     // 'lorenz' (sorted) | 'simple' (area-mean)
             xsArc: null,             // { start:{lat,lon}, end:{lat,lon} } or null for zonal-mean
             xsDiag: 'field',         // 'field' | 'psi' | 'M' | 'N2' | 'epflux' | 'mbudget'
+            // ψ / EP-flux panel shows (selection − active climatology) while
+            // the globe shows a single year or a composite.
+            xsAnom: false,
             mbTerm: 'total',         // 'total' | 'meanY' | 'meanP' | 'eddyY' | 'eddyP' | 'torque'
             mbForm: 'u',             // 'u' (∂[u]/∂t m/s/day) | 'M' (∂[M]/∂t scaled)
             mbMode: '2d',            // '2d' | '1d_mean' (mass-weighted profile) | '1d_int' (∫dp/g, N/m²)
@@ -308,7 +311,12 @@ class GlobeApp {
         const altClimoPeriod = s.climatologyPeriod && s.climatologyPeriod !== 'default' && s.climatologyPeriod !== '1991-2020';
         if (altClimoPeriod) {
             loadManifest(s.climatologyPeriod)
-                .then((ok) => { if (ok) { setActivePeriod(s.climatologyPeriod); this.updateField(); } })
+                .then((ok) => {
+                    if (!ok) return;
+                    setActivePeriod(s.climatologyPeriod);
+                    this.updateField();
+                    this._refreshDiagPanels();
+                })
                 .catch((err) => console.warn(`[era5] climatology period ${s.climatologyPeriod} manifest load failed:`, err));
         }
         if (needsRefPeriod) {
@@ -323,7 +331,12 @@ class GlobeApp {
             .then((ok) => {
                 if (!ok) return;
                 this.populateYearSelect();
-                if (needsPerYear) this.updateField();
+                if (needsPerYear) {
+                    this.updateField();
+                    // Panels drawn before this manifest landed couldn't
+                    // request their per-year tiles yet.
+                    this._refreshDiagPanels();
+                }
             })
             .catch((err) => console.warn('[era5] per-year manifest load failed:', err));
         // Progress subscription — renders "X of Y tiles loaded" beneath
@@ -431,15 +444,16 @@ class GlobeApp {
                     && period === 'per_year') {
                     this._scheduleTimeseriesRender();
                 }
-                // The cross-section diagnostics and the Lorenz panel always
-                // read the active climatology, even while the globe shows a
-                // single year or a composite — keep them refreshing as their
-                // tiles land (they used to stall on "Loading" here).
+                // In year / composite mode the diagnostic panels read the
+                // per-year tiles (active-period arrivals, handled below);
+                // the active climatology only feeds the ψ / EP-flux
+                // anomaly baseline.
                 const isActiveClimo = period === s.climatologyPeriod
                     || (period === 'default' && s.climatologyPeriod === 'default');
-                if (isActiveClimo && monthMatches) {
-                    if (s.showXSection && xsDiagUses(s.xsDiag, name)) this.updateXSection();
-                    if (s.showLorenz && ['u', 'v', 'w', 't'].includes(name)) this.updateLorenz();
+                if (isActiveClimo && this._diagMonthMatches(month)
+                    && s.showXSection && this._xsAnomActive()
+                    && xsDiagUses(s.xsDiag, name)) {
+                    this.updateXSection();
                 }
                 return;   // don't trigger any of the active-period logic
             }
@@ -508,17 +522,16 @@ class GlobeApp {
                 this.barbs.rebuild(s.viewMode);
             }
 
-            if (s.showXSection && feedsCurrentField && monthMatches) this.updateXSection();
             // ψ needs v at every level; M needs u at every level; N² needs T;
             // EP flux needs u, v, w, t. Refresh the panel whenever a relevant
-            // tile lands so the diagnostic sharpens as the cache warms up.
-            const diagNeeds = xsDiagUses(s.xsDiag, name);
-            if (s.showXSection && diagNeeds && monthMatches) {
-                this.updateXSection();
-            }
+            // tile lands so it sharpens as the cache warms up — with the
+            // seasonal mean on, the neighbouring months' tiles count too.
+            const diagMonth = this._diagMonthMatches(month);
+            const xsNeeds = s.xsDiag === 'field' ? feedsCurrentField : xsDiagUses(s.xsDiag, name);
+            if (s.showXSection && xsNeeds && diagMonth) this.updateXSection();
             // Lorenz cycle needs u, v, w, t at every level for the current month.
             const lorenzIngredient = (name === 'u' || name === 'v' || name === 'w' || name === 't');
-            if (s.showLorenz && lorenzIngredient && monthMatches) {
+            if (s.showLorenz && lorenzIngredient && diagMonth) {
                 this.updateLorenz();
             }
             // Area-mean time-series: any per-year tile of the displayed
@@ -1979,10 +1992,11 @@ class GlobeApp {
             this.state.xsUserVmin = null;
             this.state.xsUserVmax = null;
         }
-        if ('xsDiag' in patch) {
+        if ('xsDiag' in patch || 'xsAnom' in patch) {
             // Each xs diagnostic has its own units (ψ in 10⁹ kg/s, M in 10⁹
-            // m²/s, N² in 10⁻⁴ s⁻², EP flux, budgets …). A clamp set for one
-            // mode is meaningless for the next, so reset on mode change.
+            // m²/s, N² in 10⁻⁴ s⁻², EP flux, budgets …), and an anomaly spans
+            // a fraction of the full field's range. A clamp set for one mode
+            // is meaningless for the next, so reset on mode change.
             this.state.xsUserVmin = null;
             this.state.xsUserVmax = null;
         }
@@ -2094,15 +2108,8 @@ class GlobeApp {
         if ('showLorenz' in patch) {
             const panel = document.getElementById('lorenz-panel');
             if (panel) panel.hidden = !patch.showLorenz;
-            if (patch.showLorenz) {
-                // Lorenz needs u, v, w, t at every level — kick a full prefetch.
-                for (const L of LEVELS) {
-                    prefetchField('u', { level: L });
-                    prefetchField('v', { level: L });
-                    prefetchField('w', { level: L });
-                    prefetchField('t', { level: L });
-                }
-            }
+            // Lorenz needs u, v, w, t at every level for the globe's time slice.
+            if (patch.showLorenz) this._prefetchIngredients({ pl: ['u', 'v', 'w', 't'] });
         }
         if ('showTimeseries' in patch) {
             const panel = document.getElementById('timeseries-panel');
@@ -2430,7 +2437,11 @@ class GlobeApp {
     }
 
     updateLorenz() {
-        const cycle = computeLorenzCycle(this.state.month, this.state.lorenzRef);
+        const { month, seasonal, lorenzRef } = this.state;
+        const notice = this._diagSourceNotice();
+        const cycle = notice ? null
+            : computeLorenzCycle(month, lorenzRef, { seasonal, source: this._diagSource() });
+        this._lzPending = !cycle && !notice;
         const setText = (id, t) => { const el = document.getElementById(id); if (el) el.textContent = t; };
         const setConv = (id, val) => {
             const el = document.getElementById(id);
@@ -2446,13 +2457,23 @@ class GlobeApp {
             setText(id, mj >= 100 ? mj.toFixed(0) : mj.toFixed(1));
         };
         const title = document.getElementById('lorenz-title');
-        if (title) title.textContent = 'Lorenz energy cycle · stationary eddies' + this._climoOnlySuffix();
+        if (title) title.textContent = 'Lorenz energy cycle · stationary eddies'
+            + (notice ? ` · ${notice}` : this._diagSourceSuffix());
+        const foot = document.getElementById('lorenz-foot-note');
+        if (foot) foot.textContent = this._diagEddyNote();
         if (!cycle) {
             // Ingredients not cached yet — e.g. a shared link that opens the
-            // panel (URL restore skips setState's prefetch). Fetch them;
-            // onFieldLoaded re-runs this as they land.
-            this._prefetchIngredients({ pl: ['u', 'v', 'w', 't'] });
-            setText('lz-PM','…'); setText('lz-PE','…'); setText('lz-KM','…'); setText('lz-KE','…');
+            // panel (URL restore skips setState's prefetch), or a new year /
+            // composite. Fetch them; onFieldLoaded re-runs this as they land.
+            // Blank the conversions too so the last slice's numbers don't
+            // sit under the new title.
+            if (!notice) {
+                this._prefetchIngredients({ pl: ['u', 'v', 'w', 't'] });
+                this._scheduleDiagRetry();
+            }
+            const ph = notice ? '—' : '…';
+            setText('lz-PM', ph); setText('lz-PE', ph); setText('lz-KM', ph); setText('lz-KE', ph);
+            for (const id of ['lz-c-PMPE', 'lz-c-PEKE', 'lz-c-KEKM', 'lz-c-PMKM']) setConv(id, NaN);
             return;
         }
         setReservoir('lz-PM', cycle.reservoirs.PM);
@@ -2479,22 +2500,64 @@ class GlobeApp {
         setArrow('lz-arrow-PMKM', cycle.conversions.C_PM_KM);
     }
 
-    /** Prefetch every tile a cross-section diagnostic reads. The displayed
-     *  month (± one when the 3-month seasonal mean is on) goes first so the
-     *  panel fills in quickly; the rest of the year follows so month
-     *  scrubbing stays smooth. Idempotent: cached / in-flight tiles are
+    /** Prefetch every tile a cross-section diagnostic reads, for the
+     *  globe's time slice. Idempotent: cached / in-flight tiles are
      *  skipped. */
     prefetchXsDiag(diag) {
         const ing = XS_DIAG_INGREDIENTS[diag];
-        if (ing) this._prefetchIngredients(ing);
+        if (ing) this._prefetchIngredients(ing, this._xsAnomActive());
     }
 
-    /** Prefetch { pl: [...], sl: [...] } ingredient tiles (see
-     *  prefetchXsDiag for the ordering). */
-    _prefetchIngredients(ing) {
-        const m = this.state.month;
-        const first = this.state.seasonal ? [((m + 10) % 12) + 1, m, (m % 12) + 1] : [m];
-        for (const months of [first, undefined]) {
+    /** Prefetch { pl: [...], sl: [...] } ingredient tiles for the panels'
+     *  time slice. Climatology: the displayed month (± one with the
+     *  seasonal mean) first, then the rest of the year so month scrubbing
+     *  stays smooth. Year / composite: the displayed month(s) of each year
+     *  only — a composite month of the MSE budget is already ~80 tiles per
+     *  event year. `withClimo` adds the climatology for those months (the
+     *  ψ / EP-flux anomaly baseline). */
+    _prefetchIngredients(ing, withClimo = false) {
+        const src = this._diagSource();
+        if (!src) { this._prefetchClimoIngredients(ing, true); return; }
+        if (withClimo) this._prefetchClimoIngredients(ing, false);
+        // Per-year fan-out is debounced on the slice: the year slider fires
+        // on every step of a drag, and only the year it stops on should
+        // pull a full level stack. Repeat requests for the same slice (tile
+        // arrivals re-render the panel) join the pending batch instead of
+        // postponing it.
+        const months = this._diagMonths();
+        const sliceKey = () => `${sourceKey(this._diagSource())}|${this._diagMonths().join(',')}`;
+        const key = sliceKey();
+        const pend = this._diagPrefetch;
+        if (pend && pend.key === key) {
+            for (const n of ing.pl || []) pend.pl.add(n);
+            for (const n of ing.sl || []) pend.sl.add(n);
+            return;
+        }
+        if (pend) clearTimeout(pend.timer);
+        const batch = { key, pl: new Set(ing.pl || []), sl: new Set(ing.sl || []) };
+        batch.timer = setTimeout(() => {
+            if (this._diagPrefetch === batch) this._diagPrefetch = null;
+            if (sliceKey() !== key) return;   // the user moved on
+            for (const m of months) {
+                for (const year of sourceYears(src, m)) {
+                    for (const L of LEVELS) {
+                        for (const name of batch.pl) {
+                            prefetchField(name, { level: L, months: [m], period: 'per_year', year });
+                        }
+                    }
+                    for (const name of batch.sl) {
+                        prefetchField(name, { months: [m], period: 'per_year', year });
+                    }
+                }
+            }
+        }, 250);
+        this._diagPrefetch = batch;
+    }
+
+    /** Active-climatology ingredient tiles: the displayed month(s), then
+     *  (allMonths) the rest of the year. */
+    _prefetchClimoIngredients(ing, allMonths) {
+        for (const months of (allMonths ? [this._diagMonths(), undefined] : [this._diagMonths()])) {
             for (const L of LEVELS) {
                 for (const name of ing.pl || []) prefetchField(name, { level: L, months });
             }
@@ -2503,13 +2566,16 @@ class GlobeApp {
     }
 
     /** True when every pressure-level tile the diagnostic needs for this
-     *  month is cached (single-level overlays are optional). */
+     *  month is cached (single-level overlays are optional) — for the
+     *  globe's time slice, plus the climatology in the anomaly view. */
     _xsDiagReady(diag) {
         const ing = XS_DIAG_INGREDIENTS[diag];
         if (!ing) return true;
         const { month, seasonal } = this.state;
-        return LEVELS.every(L => (ing.pl || []).every(name =>
-            cachedMonth(name, month, L, 'mean', 'default', null, seasonal)));
+        const sources = [this._diagSource()];
+        if (this._xsAnomActive()) sources.push(null);
+        return sources.every(src => LEVELS.every(L => (ing.pl || []).every(name =>
+            sourceMonth(name, month, L, src, seasonal))));
     }
 
     /** The diagnostic couldn't be drawn. Usually its ingredient tiles aren't
@@ -2520,8 +2586,14 @@ class GlobeApp {
      *  updateXSection as tiles land. If the tiles are all there, the
      *  selection itself isn't drawable (e.g. the all-terms overlay in 2-D). */
     _xsDiagPending(canvas, diag) {
-        const ready = this._xsDiagReady(diag);
-        if (!ready) this.prefetchXsDiag(diag);
+        // A year / composite that can't supply this month never loads.
+        const notice = this._diagSourceNotice();
+        const ready = !notice && this._xsDiagReady(diag);
+        this._xsPending = !notice && !ready;
+        if (this._xsPending) {
+            this.prefetchXsDiag(diag);
+            this._scheduleDiagRetry();
+        }
         const opt = document.querySelector(`#xs-diag-select option[value="${diag}"]`);
         const label = opt ? opt.textContent.trim() : diag;
         const DPR = Math.min(window.devicePixelRatio || 1, 2);
@@ -2533,23 +2605,29 @@ class GlobeApp {
         ctx.font = `${11 * DPR}px 'JetBrains Mono', monospace`;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText(ready ? 'Not available for this term / aggregation'
-                           : `Loading tiles for ${label}…`,
+        ctx.fillText(notice ? notice
+                     : ready ? 'Not available for this term / aggregation'
+                     : `Loading tiles for ${label}…`,
                      canvas.width / 2, canvas.height / 2);
         const title = document.getElementById('xs-title');
-        if (title) title.textContent = label;
+        if (title) title.textContent = label + this._diagSourceSuffix({ anomaly: this._xsAnomActive() });
         this._xsLastZm = null;
     }
 
     updateXSection() {
         const canvas = document.getElementById('xs-canvas');
         if (!canvas) return;
-        const { field, month, xsArc, cmap, showContours, xsDiag, seasonal } = this.state;
-        // Seasonal is now honoured by every diagnostic (cachedMonth +
-        // the diagnostic modules all accept the flag). One shared opts
-        // object feeds both the plain-field paths and the diagnostic
-        // helpers below.
-        const xsOpts = { seasonal };
+        const { field, month, xsArc, cmap, showContours, xsDiag, seasonal, year, customRange } = this.state;
+        // The panel shows the globe's time slice — climatology, one year or
+        // a composite — with the seasonal mean when it's on. Diagnostics read
+        // it as a diag_source descriptor (+ the ψ / EP-flux anomaly flag);
+        // the field sections take the same slice through getField.
+        const source = this._diagSource();
+        const anomaly = this._xsAnomActive();
+        const xsOpts = { seasonal, source, anomaly };
+        const fieldOpts = { seasonal, year, customRange };
+        const anomRow = document.getElementById('xs-anom-row');
+        if (anomRow) anomRow.hidden = !((xsDiag === 'psi' || xsDiag === 'epflux') && source);
         let zm;
         let effCmap = cmap;
         if (xsDiag === 'psi') {
@@ -2558,7 +2636,7 @@ class GlobeApp {
                 return this._xsDiagPending(canvas, xsDiag);
             } else {
                 effCmap = 'RdBu_r';
-                zm.contourInterval = 20;             // 10⁹ kg/s
+                zm.contourInterval = anomaly ? 5 : 20;   // 10⁹ kg/s
             }
         } else if (xsDiag === 'M') {
             zm = computeAngularMomentum(month, xsOpts);
@@ -2590,7 +2668,7 @@ class GlobeApp {
                 return this._xsDiagPending(canvas, xsDiag);
             } else {
                 effCmap = 'RdBu_r';                  // ∇·F shading: westerly + / easterly −
-                zm.contourInterval = 2;              // m s⁻¹ day⁻¹
+                zm.contourInterval = anomaly ? 1 : 2;    // m s⁻¹ day⁻¹
             }
         } else if (xsDiag === 'mbudget') {
             zm = buildMBudgetView(month, {
@@ -2598,6 +2676,7 @@ class GlobeApp {
                 form: this.state.mbForm,
                 mode: this.state.mbMode,
                 seasonal,
+                source,
             });
             if (!zm) {
                 return this._xsDiagPending(canvas, xsDiag);
@@ -2611,6 +2690,7 @@ class GlobeApp {
                 form: 'q',
                 mode: this.state.mbMode,
                 seasonal,
+                source,
             });
             if (!zm) {
                 return this._xsDiagPending(canvas, xsDiag);
@@ -2624,6 +2704,7 @@ class GlobeApp {
                 form: 'h',
                 mode: this.state.mbMode,
                 seasonal,
+                source,
             });
             if (!zm) {
                 return this._xsDiagPending(canvas, xsDiag);
@@ -2646,10 +2727,10 @@ class GlobeApp {
                                       xsArc.end.lat,   xsArc.end.lon, 192)
                     : greatCircleArc(xsArc.start.lat, xsArc.start.lon,
                                      xsArc.end.lat,   xsArc.end.lon, 192));
-            zm = computeArcCrossSection(field, month, arc, xsOpts);
-            if (!zm) { zm = computeZonalMean(field, month); }
+            zm = computeArcCrossSection(field, month, arc, fieldOpts);
+            if (!zm) { zm = computeZonalMean(field, month, fieldOpts); }
         } else {
-            zm = computeZonalMean(field, month);
+            zm = computeZonalMean(field, month, fieldOpts);
         }
         // Propagate display options into the renderer: gridlines always on,
         // contours gated by the main Contours toggle for field sections,
@@ -2667,6 +2748,7 @@ class GlobeApp {
         // and the colorbar DOM both reflect the same clamped range.
         if (this.state.xsUserVmin != null) zm.vmin = this.state.xsUserVmin;
         if (this.state.xsUserVmax != null) zm.vmax = this.state.xsUserVmax;
+        this._xsPending = false;
         renderCrossSection(canvas, zm, effCmap);
         this.updateXSectionColorbar(zm, effCmap);
         // Stash for the hover handler — it inverse-maps cursor → (lat, p, value).
@@ -2675,29 +2757,39 @@ class GlobeApp {
         const hint  = document.getElementById('xs-hint');
         const reset = document.getElementById('xs-reset');
         if (title) {
+            // Field sections name the year / composite only when getField
+            // actually served it (zm.slice).
+            const fieldSlice = ['per_year', 'custom_range'].includes(zm.slice?.period)
+                ? this._diagSourceSuffix() : '';
             if (zm.isDiagnostic) {
-                title.textContent = `${zm.name}  (${zm.units})${this._climoOnlySuffix()}`;
+                title.textContent = `${zm.name}  (${zm.units})${this._diagSourceSuffix({ anomaly })}`;
             } else if (zm.kind === 'arc') {
                 const km = Math.round(zm.distanceKm).toLocaleString();
                 const suffix = zm.type === 'pl' ? '' : `  (${zm.units})`;
-                title.textContent = `Arc · ${zm.name} · ${km} km${suffix}`;
+                title.textContent = `Arc · ${zm.name} · ${km} km${suffix}${fieldSlice}`;
             } else {
                 const suffix = zm.type === 'pl' ? '' : `  (${zm.units})`;
-                title.textContent = `Zonal mean · ${zm.name}${suffix}`;
+                title.textContent = `Zonal mean · ${zm.name}${suffix}${fieldSlice}`;
             }
         }
         if (hint) {
             if (zm.isDiagnostic) {
                 // Accurate footer per diagnostic.
+                const ref = activePeriodLabel();
                 const desc = {
-                    psi: 'ψ(φ, p) = (2π a cos φ / g) · ∫₀ᵖ [v] dp',
+                    psi: anomaly
+                        ? `ψ′ = ψ(selection) − ψ(${ref}) · ψ = (2π a cos φ / g) · ∫₀ᵖ [v] dp`
+                        : 'ψ(φ, p) = (2π a cos φ / g) · ∫₀ᵖ [v] dp',
                     M:   'M = (Ω a cos φ + u) · a cos φ · from zonal-mean u',
                     ug:  '[u_g] = -(g/f) · ∂[z]/∂y · masked |φ| < 5° (f → 0)',
                     N2:  'N² = -(g²p / R T θ) · ∂θ/∂p · static stability',
-                    epflux: 'F = (-a cos φ [u′v′], a cos φ f [v′θ′] / ∂[θ]/∂p) — stationary eddies; shading: ∇·F (m s⁻¹ day⁻¹)',
-                    mbudget: '∂[M]/∂t = -∇·([v][M]) - ∇·([v*M*]) + torque · stationary eddies only · 1° monthly clim',
+                    epflux: anomaly
+                        ? `ΔF = F(selection) − F(${ref}) — stationary eddies; shading: ∇·ΔF (m s⁻¹ day⁻¹)`
+                        : 'F = (-a cos φ [u′v′], a cos φ f [v′θ′] / ∂[θ]/∂p) — stationary eddies; shading: ∇·F (m s⁻¹ day⁻¹)',
+                    mbudget: '∂[M]/∂t = -∇·([v][M]) - ∇·([v*M*]) + torque · stationary eddies only · 1° monthly means',
                 }[xsDiag] || 'Zonal-mean diagnostic';
-                hint.innerHTML = desc;
+                const eddyDiag = ['epflux', 'mbudget', 'qbudget', 'hbudget'].includes(xsDiag);
+                hint.innerHTML = desc + (eddyDiag ? this._diagEddyNote() : '');
             } else if (zm.kind === 'arc') {
                 hint.innerHTML = '<span class="xs-kbd">⇧</span> + drag to redraw';
             } else {
@@ -3020,14 +3112,122 @@ class GlobeApp {
         el.classList.toggle('visible', !!visible);
     }
 
-    /** The cross-section diagnostics and the Lorenz panel are computed
-     *  from the active climatology only. When the globe is showing a single
-     *  year or a composite, say so — otherwise e.g. "ψ for Jan 1998" is
-     *  really the 1991–2020 January ψ. */
-    _climoOnlySuffix() {
+    // ── time slice of the diagnostic panels ──────────────────────────
+    // The cross-section diagnostics and the Lorenz panel follow the globe:
+    // active climatology, single year, or composite / custom range.
+
+    /** diag_source.js descriptor for the globe's time selection. */
+    _diagSource() { return sourceFromState(this.state); }
+
+    /** Months the panels average for the displayed month: the centred three
+     *  with the seasonal mean on. */
+    _diagMonths() {
+        const m = this.state.month;
+        return this.state.seasonal ? [((m + 10) % 12) + 1, m, (m % 12) + 1] : [m];
+    }
+
+    _diagMonthMatches(month) { return this._diagMonths().includes(month); }
+
+    /** "Jan", or "DJF" with the seasonal mean on. */
+    _diagMonthLabel() {
         const s = this.state;
-        if (s.year == null && !s.customRange) return '';
-        return ` · ${activePeriodLabel()} climatology`;
+        if (!s.seasonal) return MONTHS[s.month - 1];
+        return this._diagMonths().map(m => 'JFMAMJJASOND'[m - 1]).join('');
+    }
+
+    /** ψ / EP-flux anomaly view: selection − active climatology. Only
+     *  meaningful while the globe shows a year or a composite. */
+    _xsAnomActive() {
+        const s = this.state;
+        return !!s.xsAnom && (s.xsDiag === 'psi' || s.xsDiag === 'epflux')
+            && !!this._diagSource();
+    }
+
+    /** Title suffix naming the time slice: '' for the climatology (titles as
+     *  before), " · Jan 1998", " · Jan · RONI ≥ +1.0 composite, 8 yr",
+     *  " · Jan · 1991–2000 mean"; the anomaly view appends " − 1991–2020". */
+    _diagSourceSuffix({ anomaly = false } = {}) {
+        const src = this._diagSource();
+        if (!src) return '';
+        const mon = this._diagMonthLabel();
+        let label;
+        if (src.year != null) {
+            label = `${mon} ${src.year}`;
+        } else {
+            const cr = this.state.customRange;
+            const n = sourceYears(src, this.state.month).length;
+            const count = n ? `, ${n} yr` : '';
+            if (this._diagIsRange()) {
+                label = `${mon} · ${cr.start}–${cr.end} mean${count}`;
+            } else {
+                // cr.label reads "RONI ≥ +1.0 · Jan": the event test and the
+                // month it's evaluated in, which needn't be the month shown.
+                const test = (cr.label || 'Event').replace(/ · [A-Z][a-z]{2}$/, '');
+                const evMonth = Number.isFinite(cr.month) && cr.month !== this.state.month
+                    ? ` (${MONTHS[cr.month - 1]})` : '';
+                label = `${mon} · ${test}${evMonth} composite${count}`;
+            }
+        }
+        return ` · ${label}` + (anomaly ? ` − ${activePeriodLabel()}` : '');
+    }
+
+    /** Contiguous custom range (vs. an event composite). */
+    _diagIsRange() {
+        const cr = this.state.customRange;
+        return !!cr && !cr.id && Number.isFinite(cr.start) && Number.isFinite(cr.end);
+    }
+
+    /** Footer note for eddy diagnostics of a multi-year slice: the eddies
+     *  are departures of the multi-year-mean flow, not the mean of each
+     *  year's eddies. */
+    _diagEddyNote() {
+        if (!this._diagSource()?.years) return '';
+        const cr = this.state.customRange;
+        return this._diagIsRange()
+            ? ` · eddies of the ${cr.start}–${cr.end} mean flow`
+            : ' · eddies of the composite-mean flow';
+    }
+
+    /** Panel notice when the selected year / composite can't supply the
+     *  displayed month (not published yet, or outside the per-year
+     *  archive) — instead of "Loading" forever. Null otherwise. */
+    _diagSourceNotice() {
+        const src = this._diagSource();
+        if (this._diagMonths().some(m => sourceHasMonth(src, m))) return null;
+        const mon = MONTHS[this.state.month - 1];
+        if (src.year == null) return `No composite year has ${mon} in the per-year archive`;
+        const latest = latestPerYearMonth();
+        if (latest && src.year * 100 + this.state.month > latest.year * 100 + latest.month) {
+            return `${mon} ${src.year} isn't published yet (latest ${MONTHS[latest.month - 1]} ${latest.year})`;
+        }
+        return `${mon} ${src.year} is outside the per-year archive`;
+    }
+
+    /** A tile whose fetch fails (dropped connection, transient 5xx) fires
+     *  no event, so a panel waiting on it would sit on "Loading" until the
+     *  next interaction. Pending panels re-check after a quiet spell, which
+     *  re-requests whatever is still missing — a few times per slice, so a
+     *  tile that is really absent can't start a request loop. */
+    _scheduleDiagRetry() {
+        const key = `${sourceKey(this._diagSource())}|${this._diagMonths().join(',')}`;
+        if (this._diagRetry?.key !== key) {
+            clearTimeout(this._diagRetry?.timer);
+            this._diagRetry = { key, n: 0, timer: null };
+        }
+        const r = this._diagRetry;
+        clearTimeout(r.timer);
+        if (r.n >= 3) return;
+        r.timer = setTimeout(() => {
+            r.n += 1;
+            if (this.state.showXSection && this._xsPending) this.updateXSection();
+            if (this.state.showLorenz && this._lzPending) this.updateLorenz();
+        }, 4000);
+    }
+
+    /** Redraw whichever diagnostic panels are open. */
+    _refreshDiagPanels() {
+        if (this.state.showXSection) this.updateXSection();
+        if (this.state.showLorenz) this.updateLorenz();
     }
 
     /** Notice text when single-year mode asks for a month the per-year
@@ -4132,6 +4332,15 @@ class GlobeApp {
             diagSel.value = this.state.xsDiag;
             diagSel.addEventListener('change', () => {
                 this.setState({ xsDiag: diagSel.value });
+            });
+        }
+        // ψ / EP flux: show the selected year / composite minus the active
+        // climatology. The row only shows while that comparison exists.
+        const anomToggle = document.getElementById('xs-anom-toggle');
+        if (anomToggle) {
+            anomToggle.checked = !!this.state.xsAnom;
+            anomToggle.addEventListener('change', () => {
+                this.setState({ xsAnom: anomToggle.checked });
             });
         }
         // M-budget sub-controls — present only when xsDiag === 'mbudget'.
@@ -5305,6 +5514,7 @@ class GlobeApp {
         check('toggle-timeseries', s.showTimeseries);
         check('toggle-compare',    s.compareMode);
         check('toggle-seasonal',   s.seasonal);
+        check('xs-anom-toggle',    s.xsAnom);
         // Seasonal label shows the current 3-month window in parentheses
         // next to the checkbox so users see exactly what they're averaging.
         this._refreshSeasonalLabel();

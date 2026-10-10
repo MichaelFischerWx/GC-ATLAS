@@ -15,13 +15,14 @@ const P_TICKS   = [1000, 500, 200, 100, 50, 10];
 /**
  * Zonal mean — NaN-aware average at each latitude.
  * Returns { kind:'zonal', type, values, vmin, vmax, ... }.
+ * `year` / `customRange` select the same time slice as the globe (getField).
  */
-export function computeZonalMean(fieldName, month, { seasonal = false } = {}) {
+export function computeZonalMean(fieldName, month, { seasonal = false, year = null, customRange = null } = {}) {
     const meta = FIELDS[fieldName];
     const { nlat, nlon } = GRID;
 
     if (meta.type === 'sl') {
-        const f = getField(fieldName, { month, seasonal });
+        const f = getField(fieldName, { month, seasonal, year, customRange });
         const zm = new Float32Array(nlat);
         let vmin = Infinity, vmax = -Infinity;
         for (let i = 0; i < nlat; i++) {
@@ -39,14 +40,16 @@ export function computeZonalMean(fieldName, month, { seasonal = false } = {}) {
         }
         if (!Number.isFinite(vmin)) { vmin = 0; vmax = 1; }
         return { kind: 'zonal', type: 'sl', values: zm, vmin, vmax,
-                 name: meta.name, units: meta.units };
+                 name: meta.name, units: meta.units, slice: f.isReal ? sliceOf(f) : null };
     }
 
     const nlev = LEVELS.length;
     const zm = new Float32Array(nlev * nlat);
     let vmin = Infinity, vmax = -Infinity;
+    let slice = null;
     for (let k = 0; k < nlev; k++) {
-        const f = getField(fieldName, { month, level: LEVELS[k], seasonal });
+        const f = getField(fieldName, { month, level: LEVELS[k], seasonal, year, customRange });
+        if (f.isReal) slice ??= sliceOf(f);
         for (let i = 0; i < nlat; i++) {
             let s = 0, n = 0;
             for (let j = 0; j < nlon; j++) {
@@ -63,7 +66,14 @@ export function computeZonalMean(fieldName, month, { seasonal = false } = {}) {
     }
     if (!Number.isFinite(vmin)) { vmin = 0; vmax = 1; }
     return { kind: 'zonal', type: 'pl', values: zm, vmin, vmax,
-             levels: LEVELS.slice(), name: meta.name, units: meta.units };
+             levels: LEVELS.slice(), name: meta.name, units: meta.units, slice };
+}
+
+/** The time slice getField actually served ({ period, year }), so the panel
+ *  title only names a year / composite when the section really shows it
+ *  (some derived fields fall back to the climatology in year mode). */
+function sliceOf(f) {
+    return { period: f.period ?? 'default', year: f.year ?? null };
 }
 
 /** Sample the cross-section heatmap data at fractional panel coordinates. Used
@@ -196,7 +206,7 @@ function bilinearSample(values, lat, lon) {
  * For pressure-level fields, values is Float32Array(nlev × nSamples).
  * For single-level fields, values is Float32Array(nSamples).
  */
-export function computeArcCrossSection(fieldName, month, arc, { seasonal = false } = {}) {
+export function computeArcCrossSection(fieldName, month, arc, { seasonal = false, year = null, customRange = null } = {}) {
     const meta = FIELDS[fieldName];
     const nSamples = arc.length;
     if (nSamples < 2) return null;
@@ -206,7 +216,7 @@ export function computeArcCrossSection(fieldName, month, arc, { seasonal = false
     const distanceKm = arcPathLengthKm(arc);
 
     if (meta.type === 'sl') {
-        const f = getField(fieldName, { month, seasonal });
+        const f = getField(fieldName, { month, seasonal, year, customRange });
         const values = new Float32Array(nSamples);
         let vmin = Infinity, vmax = -Infinity;
         for (let j = 0; j < nSamples; j++) {
@@ -219,14 +229,17 @@ export function computeArcCrossSection(fieldName, month, arc, { seasonal = false
         }
         if (!Number.isFinite(vmin)) { vmin = 0; vmax = 1; }
         return { kind: 'arc', type: 'sl', values, vmin, vmax,
-                 nSamples, arc, distanceKm, name: meta.name, units: meta.units };
+                 nSamples, arc, distanceKm, name: meta.name, units: meta.units,
+                 slice: f.isReal ? sliceOf(f) : null };
     }
 
     const nlev = LEVELS.length;
     const values = new Float32Array(nlev * nSamples);
     let vmin = Infinity, vmax = -Infinity;
+    let slice = null;
     for (let k = 0; k < nlev; k++) {
-        const f = getField(fieldName, { month, level: LEVELS[k], seasonal });
+        const f = getField(fieldName, { month, level: LEVELS[k], seasonal, year, customRange });
+        if (f.isReal) slice ??= sliceOf(f);
         for (let j = 0; j < nSamples; j++) {
             const v = bilinearSample(f.values, arc[j].lat, arc[j].lon);
             values[k * nSamples + j] = v;
@@ -239,7 +252,7 @@ export function computeArcCrossSection(fieldName, month, arc, { seasonal = false
     if (!Number.isFinite(vmin)) { vmin = 0; vmax = 1; }
     return { kind: 'arc', type: 'pl', values, vmin, vmax,
              nSamples, arc, distanceKm, levels: LEVELS.slice(),
-             name: meta.name, units: meta.units };
+             name: meta.name, units: meta.units, slice };
 }
 
 export function renderCrossSection(canvas, zm, cmap) {

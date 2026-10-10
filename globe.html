@@ -827,6 +827,9 @@
             font-weight: 600;
         }
         .xs-header #xs-title { font-weight: 600; }
+        /* Titles that name a year / composite wrap at the canvas width
+           instead of stretching the panel past it. */
+        #xsection-panel:not(.expanded) .xs-header { max-width: 380px; gap: 8px; }
         .xs-close {
             background: none;
             border: none;
@@ -1094,6 +1097,19 @@
             cursor: pointer;
         }
         #xs-diag-select:focus { outline: 1px solid var(--emerald); }
+        .xs-anom {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            font-size: 0.7rem;
+            color: var(--sage);
+            font-family: 'JetBrains Mono', monospace;
+            white-space: nowrap;
+            cursor: pointer;
+        }
+        .xs-anom[hidden] { display: none; }
+        .xs-anom input { accent-color: var(--emerald); margin: 0; cursor: pointer; }
+        .xs-anom:has(input:checked) { color: var(--paper); }
         .field-help {
             font-size: 0.72rem;
             line-height: 1.45;
@@ -2383,7 +2399,7 @@ C(P_M→K_M) = -(R/g) ∫ [ω][T] / p dp
                 </g>
             </svg>
             <div class="xs-footer">
-                <span>Reservoirs: MJ m⁻²  ·  Conversions: W m⁻²  ·  Stationary eddies only</span>
+                <span>Reservoirs: MJ m⁻²  ·  Conversions: W m⁻²  ·  Stationary eddies only<span id="lorenz-foot-note"></span></span>
             </div>
         </div>
 
@@ -2430,6 +2446,10 @@ C(P_M→K_M) = -(R/g) ∫ [ω][T] / p dp
                     <option value="qbudget">Moisture budget</option>
                     <option value="hbudget">Energy budget (MSE)</option>
                 </select>
+                <label class="xs-anom" id="xs-anom-row" hidden
+                       title="Show the selected year / composite minus the active climatology">
+                    <input type="checkbox" id="xs-anom-toggle"><span>− climatology</span>
+                </label>
             </div>
             <div class="mb-controls" id="mb-controls" hidden>
                 <div class="mb-row">

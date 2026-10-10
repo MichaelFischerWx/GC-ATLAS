@@ -25,7 +25,7 @@
 // cached, additional lines appear for LH+SH (turbulent), net column radiation,
 // and total surface+TOA atmospheric heating that should equal -[transport].
 
-import { cachedMonth } from './era5.js';
+import { sourceMonth } from './diag_source.js';
 import { LEVELS, GRID } from './data.js';
 
 const A_EARTH = 6.371e6;
@@ -82,18 +82,18 @@ function composeMSETile(t, z, q) {
     return out;
 }
 
-function computeHBudgetTerms(month, seasonal = false) {
+function computeHBudgetTerms(month, seasonal = false, srcSlice = null) {
     const { nlat, nlon } = GRID;
     const N = LEVELS.length;
 
     const U = [], V = [], W = [], H = [];
     for (let k = 0; k < N; k++) {
-        const u = cachedMonth('u', month, LEVELS[k], 'mean', 'default', null, seasonal);
-        const v = cachedMonth('v', month, LEVELS[k], 'mean', 'default', null, seasonal);
-        const w = cachedMonth('w', month, LEVELS[k], 'mean', 'default', null, seasonal);
-        const t = cachedMonth('t', month, LEVELS[k], 'mean', 'default', null, seasonal);
-        const z = cachedMonth('z', month, LEVELS[k], 'mean', 'default', null, seasonal);
-        const q = cachedMonth('q', month, LEVELS[k], 'mean', 'default', null, seasonal);
+        const u = sourceMonth('u', month, LEVELS[k], srcSlice, seasonal);
+        const v = sourceMonth('v', month, LEVELS[k], srcSlice, seasonal);
+        const w = sourceMonth('w', month, LEVELS[k], srcSlice, seasonal);
+        const t = sourceMonth('t', month, LEVELS[k], srcSlice, seasonal);
+        const z = sourceMonth('z', month, LEVELS[k], srcSlice, seasonal);
+        const q = sourceMonth('q', month, LEVELS[k], srcSlice, seasonal);
         if (!u || !v || !w || !t || !z || !q) return null;
         U.push(u); V.push(v); W.push(w);
         H.push(composeMSETile(t, z, q));
@@ -196,7 +196,7 @@ function computeHBudgetTerms(month, seasonal = false) {
     smoothLev(total,  N, nlat);
     smoothLev(source, N, nlat);
 
-    return { meanY, meanP, eddyY, eddyP, total, source, N, nlat, cosphi, _month: month, _seasonal: seasonal };
+    return { meanY, meanP, eddyY, eddyP, total, source, N, nlat, cosphi, _month: month, _seasonal: seasonal, _source: srcSlice };
 }
 
 const TERM_LABELS = {
@@ -223,14 +223,14 @@ const SERIES_COLORS = {
 /** Atmospheric heating components per latitude in W/m² (column integrated).
  *  Sign convention: positive = atmosphere gains energy. ERA5 surface fluxes
  *  are positive DOWNWARD (into surface), so atmospheric uptake = negation. */
-function surfaceHeatingProfiles(month, seasonal = false) {
+function surfaceHeatingProfiles(month, seasonal = false, srcSlice = null) {
     const { nlat, nlon } = GRID;
-    const slhf = cachedMonth('slhf', month, null, 'mean', 'default', null, seasonal);
-    const sshf = cachedMonth('sshf', month, null, 'mean', 'default', null, seasonal);
-    const ssr  = cachedMonth('ssr',  month, null, 'mean', 'default', null, seasonal);
-    const str  = cachedMonth('str',  month, null, 'mean', 'default', null, seasonal);
-    const tisr = cachedMonth('tisr', month, null, 'mean', 'default', null, seasonal);
-    const ttr  = cachedMonth('ttr',  month, null, 'mean', 'default', null, seasonal);
+    const slhf = sourceMonth('slhf', month, null, srcSlice, seasonal);
+    const sshf = sourceMonth('sshf', month, null, srcSlice, seasonal);
+    const ssr  = sourceMonth('ssr',  month, null, srcSlice, seasonal);
+    const str  = sourceMonth('str',  month, null, srcSlice, seasonal);
+    const tisr = sourceMonth('tisr', month, null, srcSlice, seasonal);
+    const ttr  = sourceMonth('ttr',  month, null, srcSlice, seasonal);
     if (!slhf || !sshf || !ssr || !str || !tisr || !ttr) return null;
 
     const slhfZ = zonalMean(slhf, nlat, nlon);
@@ -263,7 +263,7 @@ export function buildHBudgetView(month, opts = {}) {
     const mode = opts.mode || '2d';
     const seasonal = !!opts.seasonal;
 
-    const t = computeHBudgetTerms(month, seasonal);
+    const t = computeHBudgetTerms(month, seasonal, opts.source ?? null);
     if (!t) return null;
     const { N, nlat, cosphi } = t;
 
@@ -365,6 +365,7 @@ function buildAllTermsProfile(terms, form, agg) {
     const { N, nlat, cosphi } = terms;
     const month = terms._month;
     const seasonal = !!terms._seasonal;
+    const srcSlice = terms._source ?? null;
     const p_s = LEVELS[N - 1] * 100;
 
     const seriesKeys = ['meanY', 'meanP', 'eddyY', 'eddyP', 'total'];
@@ -397,7 +398,7 @@ function buildAllTermsProfile(terms, form, agg) {
     }
 
     // Surface heating overlays (W/m² intrinsic).
-    const surf = month ? surfaceHeatingProfiles(month, seasonal) : null;
+    const surf = month ? surfaceHeatingProfiles(month, seasonal, srcSlice) : null;
     const surfaceLines = [];
     if (surf) {
         const conv = (wm2) => {
