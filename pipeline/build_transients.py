@@ -1035,16 +1035,18 @@ def _bench_one(url: str, threads: int, i0: int, steps: int) -> tuple[int, float]
 def cmd_bench(args) -> int:
     steps = args.days * STEPS_PER_DAY
     base = tindex(month_start(2000, 1))
-    t0 = time.time()
+    # Time the reads only (not process start-up or opening the store): the
+    # slowest worker's read time over everyone's bytes ≈ the sustained rate.
     if args.workers <= 1:
-        nbytes, _ = _bench_one(args.url, args.threads, base, steps)
+        results = [_bench_one(args.url, args.threads, base, steps)]
     else:
         ctx = mp.get_context("spawn")
         with ProcessPoolExecutor(args.workers, mp_context=ctx) as ex:
             futs = [ex.submit(_bench_one, args.url, args.threads, base + 40 * w * STEPS_PER_DAY, steps)
                     for w in range(args.workers)]
-            nbytes = sum(f.result()[0] for f in futs)
-    dt = time.time() - t0
+            results = [f.result() for f in futs]
+    nbytes = sum(r[0] for r in results)
+    dt = max(r[1] for r in results)
     rate = nbytes / dt
     LOG.info("bench  %d worker(s) × %d days × %d arrays: %.2f GB in %.1f s → %.0f MB/s  "
              "(at this rate: 1991–2020 ≈ %.1f h, 1961–2022 ≈ %.1f h of reads)",
