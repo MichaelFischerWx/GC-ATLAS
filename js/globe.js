@@ -8,7 +8,7 @@ import { Line2 } from 'three/addons/lines/Line2.js';
 import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 import { fillRGBA, fillColorbar, COLORMAPS, meanLuminance } from './colormap.js';
-import { getField, FIELDS, LEVELS, THETA_LEVELS, MONTHS, GRID, invalidateIsentropicCache, isThetaOnly, customRangeYears, fieldHasStdTiles, expectedTilesForView, hasCachedIngredients, slDerivedIngredients, fieldTilesMissing } from './data.js';
+import { getField, FIELDS, LEVELS, THETA_LEVELS, MONTHS, GRID, invalidateIsentropicCache, isThetaOnly, customRangeYears, fieldHasStdTiles, expectedTilesForView, hasCachedIngredients, slDerivedIngredients, fieldIngredients, fieldTilesMissing } from './data.js';
 import { loadIndices, getIndex, eventYears, compositeLabel, lastIndexMonth } from './indices.js';
 import { ParticleField } from './particles.js';
 import { BarbField } from './barbs.js';
@@ -320,6 +320,11 @@ class GlobeApp {
                 .then((ok) => {
                     if (!ok) return;
                     setActivePeriod(s.climatologyPeriod);
+                    // Derived / isentropic caches don't key on the active
+                    // period: drop what the first paint computed from the
+                    // default tree (setState does the same on a switch).
+                    invalidateIsentropicCache();
+                    this.windCache.stale = true;
                     this._refreshFieldPickers();
                     this.updateField();
                     this._refreshDiagPanels();
@@ -378,32 +383,65 @@ class GlobeApp {
                 || (s.year == null && !s.customRange && (
                     period === s.climatologyPeriod ||
                     (!period && s.climatologyPeriod === 'default')));
+            const isenActive  = (s.vCoord === 'theta');
+            // θ-coord rendering needs T at every level (for the θ cube) plus
+            // the chosen field at every level. PV additionally needs u, v.
+            const isenNeedsName = isenActive &&
+                (name === 't' || name === s.field ||
+                 (s.field === 'wspd' && (name === 'u' || name === 'v')) ||
+                 (s.field === 'pv'   && name === 'pv') ||
+                 (s.field === 'mse'  && (name === 'z' || name === 'q')));
+            const feedsCurrentField =
+                (name === s.field) ||
+                (s.field === 'wspd' && (name === 'u' || name === 'v')) ||
+                (s.field === 'pv'   && (name === 't' || name === 'pv')) ||
+                (s.field === 'mse'  && (name === 't' || name === 'z' || name === 'q')) ||
+                (s.field === 'dls'  && (name === 'u' || name === 'v')) ||
+                !!slDerivedIngredients(s.field)?.includes(name) ||
+                isenNeedsName;
+
+            // PV and θ-coord fields span every pressure level, so don't
+            // require level to match — any ingredient arrival could complete
+            // the cache. DLS reads u / v at fixed 200 + 850 hPa regardless
+            // of the dropdown level, so its ingredient tiles match too.
+            const needsLevelMatch = !(
+                isenNeedsName ||
+                (s.field === 'pv' && (name === 't' || name === 'pv')) ||
+                (s.field === 'dls' && (name === 'u' || name === 'v'))
+            );
+            // The tile is an ingredient of the displayed field at the
+            // displayed level / θ surface — for a derived field (wspd, mse,
+            // dls, OLR …) that's one of its components, never the field's
+            // own name.
+            const feedsDisplay = feedsCurrentField && (!needsLevelMatch || levelMatches);
+            const anomalyView = s.decompose === 'anomaly' || s.decompose === 'zscore';
             if (period && !isActivePeriod) {
+                // Anomaly reference tiles: the reference period's, or in year
+                // / composite mode the climatology's (same-month reference).
+                const refTree = this._anomalyRefTree();
                 // θ climate-change / year-vs-refPeriod anomaly needs T (for
                 // the θ cube) + the field (for interpolation) + pv (when
                 // field is pv) at every level from the reference period.
                 // Any of those tiles landing should trigger a re-render so
                 // the θ interpolation can progress. name === s.field alone
                 // isn't enough on θ.
-                const thetaAnomalyWaiting = s.vCoord === 'theta'
-                    && s.decompose === 'anomaly'
-                    && s.referencePeriod === period
-                    && (name === s.field || name === 't' || name === 'pv');
-                const isRefForAnomaly = s.referencePeriod === period
-                                     && s.decompose === 'anomaly'
+                const thetaAnomalyWaiting = isenActive && anomalyView
+                    && refTree === period && feedsCurrentField;
+                const isRefForAnomaly = refTree === period
+                                     && anomalyView
                                      && (thetaAnomalyWaiting ||
-                                         (name === s.field && monthMatches));
+                                         (feedsDisplay && monthMatches));
                 const isRefForCompare = s.compareMode
                                      && s.referencePeriod === period
                                      && s.compareYear == null
-                                     && name === s.field && monthMatches;
+                                     && feedsDisplay && monthMatches;
                 // Year-tile arrivals also drive the swipe right-half when
                 // the user has compareYear set (year-vs-* compare mode).
                 const isYearForCompare = s.compareMode
                                       && s.compareYear != null
                                       && period === 'per_year'
                                       && (year == null || year === s.compareYear)
-                                      && name === s.field && monthMatches;
+                                      && feedsDisplay && monthMatches;
                 if (isRefForAnomaly || isRefForCompare || isYearForCompare) {
                     // Pressure tiles for θ interpolation change the θ cube
                     // / isentropic caches for the reference period — bust
@@ -430,8 +468,8 @@ class GlobeApp {
                     /^(19|20)\d{2}-(19|20)\d{2}$/.test(period || '');
                 const isSlidingClimoTile = s.slidingClimo
                     && s.customRange && s.year == null
-                    && s.decompose === 'anomaly'
-                    && name === s.field && monthMatches && levelMatches
+                    && anomalyView
+                    && feedsDisplay && monthMatches
                     && slidingClimoWindow;
                 if (isSlidingClimoTile) this.updateField();
                 // Best-match reference: a single-year or year-vs-year
@@ -440,8 +478,8 @@ class GlobeApp {
                 // Same re-render trigger as composite sliding.
                 const isBestMatchTile = s.referencePeriod === 'best-match'
                     && (s.year != null || s.compareYear != null)
-                    && s.decompose === 'anomaly'
-                    && name === s.field && monthMatches && levelMatches
+                    && anomalyView
+                    && feedsDisplay && monthMatches
                     && slidingClimoWindow;
                 if (isBestMatchTile) this.updateField();
                 // Timeseries panel feeds from per-year tiles that aren't
@@ -471,35 +509,9 @@ class GlobeApp {
                 }
                 return;   // don't trigger any of the active-period logic
             }
-            const isenActive  = (s.vCoord === 'theta');
-            // θ-coord rendering needs T at every level (for the θ cube) plus
-            // the chosen field at every level. PV additionally needs u, v.
-            const isenNeedsName = isenActive &&
-                (name === 't' || name === s.field ||
-                 (s.field === 'wspd' && (name === 'u' || name === 'v')) ||
-                 (s.field === 'pv'   && name === 'pv') ||
-                 (s.field === 'mse'  && (name === 'z' || name === 'q')));
-            const feedsCurrentField =
-                (name === s.field) ||
-                (s.field === 'wspd' && (name === 'u' || name === 'v')) ||
-                (s.field === 'pv'   && (name === 't' || name === 'pv')) ||
-                (s.field === 'mse'  && (name === 't' || name === 'z' || name === 'q')) ||
-                (s.field === 'dls'  && (name === 'u' || name === 'v')) ||
-                !!slDerivedIngredients(s.field)?.includes(name) ||
-                isenNeedsName;
-
-            // PV and θ-coord fields span every pressure level, so don't
-            // require level to match — any ingredient arrival could complete
-            // the cache. DLS reads u / v at fixed 200 + 850 hPa regardless
-            // of the dropdown level, so its ingredient tiles match too.
-            const needsLevelMatch = !(
-                isenNeedsName ||
-                (s.field === 'pv' && (name === 't' || name === 'pv')) ||
-                (s.field === 'dls' && (name === 'u' || name === 'v'))
-            );
             // MSE in pressure-coord is single-level (only the chosen level matters).
-            // In θ-coord it gets caught by isenNeedsName below.
-            if (feedsCurrentField && monthMatches && (!needsLevelMatch || levelMatches)) {
+            // In θ-coord it gets caught by isenNeedsName above.
+            if (feedsDisplay && monthMatches) {
                 if (s.field === 'pv' || isenActive) invalidateIsentropicCache();
                 this.updateField();
             }
@@ -2408,12 +2420,24 @@ class GlobeApp {
                     }
                 }
             }
-            // Single-level derived fields (OLR, net TOA, albedo, CRE, IVT):
-            // their raw tiles for every month, so the pooled colorbar is
-            // stable, and for the selected year.
-            for (const n of slDerivedIngredients(this.state.field) || []) {
-                prefetchField(n, {});
-                if (this.state.year != null) prefetchField(n, { period: 'per_year', year: this.state.year });
+            // Derived fields (wspd, mse, dls, OLR, net TOA, …) have no tiles
+            // of their own, so the calls above fetch nothing for them: fetch
+            // their components for every month — climatology, reference
+            // period, year and compare year — so the pooled colorbar is
+            // stable and the anomaly reference arrives with the field.
+            if (FIELDS[this.state.field]?.derived && !isen) {
+                const s = this.state;
+                const slices = [{}];
+                if (s.referencePeriod !== 'default' && s.referencePeriod !== 'best-match') {
+                    slices.push({ period: s.referencePeriod });
+                }
+                if (s.year != null) slices.push({ period: 'per_year', year: s.year });
+                if (s.compareMode && s.compareYear != null) {
+                    slices.push({ period: 'per_year', year: s.compareYear });
+                }
+                for (const { name, level } of fieldIngredients(s.field, s.level)) {
+                    for (const slice of slices) prefetchField(name, { level, ...slice });
+                }
             }
             // PV and any θ-coord rendering require T at every pressure level
             // (for the θ cube) plus the chosen field at every level — kick
@@ -3549,6 +3573,16 @@ class GlobeApp {
         }
     }
 
+    /** Tile tree the anomaly / σ-anom reference reads, as tile-arrival
+     *  events name it: the chosen reference period, the best-match window
+     *  of the displayed year, else the active climatology. (Composite
+     *  sliding-climatology windows are matched separately.) */
+    _anomalyRefTree() {
+        const { referencePeriod: rp, year } = this.state;
+        if (rp === 'best-match') return year != null ? bestClimoFor(year).id : getActivePeriod();
+        return rp === 'default' ? getActivePeriod() : rp;
+    }
+
     applyDecomposition(f, mode) {
         if (mode === 'total' || !mode) {
             // Honour the cross-month aggregated vmin/vmax that getField
@@ -3745,10 +3779,12 @@ class GlobeApp {
                 };
                 annualMean = refForMonth(this.state.month);
                 annualMeanForAgg = refForMonth;
-            } else if (refPeriod !== 'default' && !meta.derived) {
+            } else if (refPeriod !== 'default') {
                 // Climate-change anomaly: same month from reference period.
                 // `kind` is propagated so when Display=±1σ we fetch the ref
                 // period's std tile (giving Δσ) instead of its mean tile.
+                // Derived fields (wspd, mse, dls) are computed from the
+                // reference period's own component tiles.
                 const refField = getField(this.state.field, {
                     month: this.state.month,
                     level: this.state.level,
@@ -4965,22 +5001,36 @@ class GlobeApp {
         const totalN = years.length;
         const N = GRID.nlat * GRID.nlon;
         const out = new Float32Array(N);
+        let missing = false;
+        // Visit every window (no early return) so all of them load in
+        // parallel rather than one window per repaint.
         for (const { window, years: ys } of groups.values()) {
-            // Kick a manifest load for any window we haven't seen yet —
-            // first call is async; subsequent renders find the tile.
-            if (window.id !== '1991-2020' && window.id !== '1961-1990') {
-                loadManifest(window.id);   // fire-and-forget
+            // A window's tiles can't be requested before its manifest is
+            // in: load it once, and repaint when it lands (nothing else
+            // would — a shared composite link sat on the fixed-climo
+            // fallback until some unrelated tile arrived).
+            if (!era5Ready(window.id)) {
+                this._climoManifestLoads ??= new Set();
+                if (!this._climoManifestLoads.has(window.id)) {
+                    this._climoManifestLoads.add(window.id);
+                    loadManifest(window.id).then((ok) => {
+                        this._climoManifestLoads.delete(window.id);
+                        if (ok) this.updateField();
+                    });
+                }
+                missing = true;
+                continue;
             }
             const climo = getField(field, {
                 month, level, coord, theta,
                 kind: 'mean', period: window.id,
             });
-            if (!climo.isReal) return null;
+            if (!climo.isReal) { missing = true; continue; }
             const w = ys.length / totalN;
             const cv = climo.values;
             for (let i = 0; i < N; i++) out[i] += w * cv[i];
         }
-        return out;
+        return missing ? null : out;
     }
 
     // ── area-mean time series ─────────────────────────────────────────

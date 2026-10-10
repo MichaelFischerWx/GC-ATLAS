@@ -92,12 +92,15 @@ function tilePathFor(meta, group, name, level, month, kind, period, year) {
     return `${base}/${group}/${name}/${stdPrefix}${pad(month)}${ext}`;
 }
 
-// Per-tile metadata key (matches the pipeline's tile basename).
-function tileMetaKey(meta, level, month, period, year) {
+// Per-tile metadata key (matches the pipeline's tile basename, so σ tiles
+// carry the std_ prefix — without it a σ tile was dequantized with its
+// mean tile's range, e.g. Jan t2m σ came out as 230–307 K).
+function tileMetaKey(meta, level, month, kind, period, year) {
     if (period === 'per_year' && year != null) {
         return meta.levels ? `${level}_${year}_${pad(month)}` : `${year}_${pad(month)}`;
     }
-    return meta.levels ? `${level}_${pad(month)}` : `${pad(month)}`;
+    const stdPrefix = kind === 'std' ? 'std_' : '';
+    return meta.levels ? `${stdPrefix}${level}_${pad(month)}` : `${stdPrefix}${pad(month)}`;
 }
 
 /** Load the manifest for a period (default or a reference). Returns true if found. */
@@ -326,7 +329,7 @@ async function fetchTile(name, group, meta, month, level, kind = 'mean', period 
             const decompressed = resp.body.pipeThrough(new DecompressionStream('gzip'));
             const buf = await new Response(decompressed).arrayBuffer();
             const u16 = new Uint16Array(buf);
-            const tk = tileMetaKey(meta, level, month, period, year);
+            const tk = tileMetaKey(meta, level, month, kind, period, year);
             const t = (await tilesMeta)?.[tk];
             if (!t) throw new Error(`no per-tile metadata for ${tk}`);
             const range = (t.vmax - t.vmin) / 65534;

@@ -70,8 +70,7 @@ export function computeZonalMean(fieldName, month, { seasonal = false, year = nu
 }
 
 /** The time slice getField actually served ({ period, year }), so the panel
- *  title only names a year / composite when the section really shows it
- *  (some derived fields fall back to the climatology in year mode). */
+ *  title only names a year / composite when the section really shows it. */
 function sliceOf(f) {
     return { period: f.period ?? 'default', year: f.year ?? null };
 }

@@ -16,7 +16,9 @@ import { requestField as requestEra5, availableLevels, cachedMonth, getManifest,
 // tiles built by pipeline/build_derived_std.py are pushed to GCS — older
 // trees without those tiles keep falling back to mean.
 function derivedHasPipelineStd(name, period) {
-    const m = getManifest(period === 'default' ? 'default' : period);
+    // 'default' is the ACTIVE climatology (era5.js resolvePeriod), which
+    // needn't be the 1991-2020 tree.
+    const m = getManifest(period === 'default' ? getActivePeriod() : period);
     if (!m) return false;
     for (const g of Object.values(m.groups)) {
         const v = g[name];
@@ -262,6 +264,19 @@ const SL_DERIVED = {
 /** Raw tiles a single-level derived field is computed from, or null. */
 export function slDerivedIngredients(name) { return SL_DERIVED[name]?.from || null; }
 
+/** The raw tiles `name` reads at pressure `level` in pressure coordinates,
+ *  as [{ name, level }] (level null for single-level tiles): the field
+ *  itself, or a derived field's components. */
+export function fieldIngredients(name, level) {
+    const meta = FIELDS[name];
+    if (!meta) return [];
+    if (SL_DERIVED[name]) return SL_DERIVED[name].from.map((n) => ({ name: n, level: null }));
+    if (name === 'wspd') return [{ name: 'u', level }, { name: 'v', level }];
+    if (name === 'mse')  return ['t', 'z', 'q'].map((n) => ({ name: n, level }));
+    if (name === 'dls')  return [200, 850].flatMap((L) => [{ name: 'u', level: L }, { name: 'v', level: L }]);
+    return [{ name, level: meta.type === 'pl' ? level : null }];
+}
+
 /** Raw tiles `name` needs that the manifest for `period` doesn't list — the
  *  energy-transport fields in a tree built before them, say — so the globe
  *  can say so instead of waiting forever. [] while the manifest loads, and
@@ -424,15 +439,18 @@ function _derivedYearEval(name, opts, year) {
  *  miss the θ surface in some columns still contribute elsewhere. */
 function composeDerivedComposite(name, opts, years) {
     const grids = [];
+    let pending = false;
     for (const y of years) {
         // Months ERA5 hasn't published yet (or outside the archive) can
         // never load — average over the event years that exist.
         if (!perYearHasMonth(y, opts.month)) continue;
+        // Evaluate every year even after a pending one, so each year's
+        // ingredient fetches start now rather than one year per repaint.
         const e = _derivedYearEval(name, opts, y);
-        if (!e || !e.values) return null;   // pending → caller re-tries
+        if (!e || !e.values) { pending = true; continue; }
         grids.push(e.values);
     }
-    if (grids.length === 0) return null;
+    if (pending || grids.length === 0) return null;   // caller re-tries
     const N = grids[0].length;
     const out = new Float32Array(N);
     const cnt = new Uint16Array(N);
@@ -585,18 +603,13 @@ export function getField(name, { month = 1, level = 500, coord = 'pressure', the
     // pressure field (PV-on-θ, T-on-θ, etc.). The plain customRange
     // engine above can't help because it averages tile values directly,
     // and these fields need the per-year COMPUTED grid to be averaged.
-    // Compute per-year, then mean across event years (NaN-skipping).
-    // Without this branch, derived/θ composites silently returned the
-    // climatology, which made the anomaly view paint zero everywhere.
-    // Single-level derived fields are cheap per year (2–4 tiles), so they
-    // also compose over contiguous ranges, not just event-year lists.
-    const derivedYears = !customRange ? []
-        : meta.slDerived ? customRangeYears(customRange)
-        : (Array.isArray(customRange.years) ? customRange.years : []);
-    if (derivedYears.length
-        && (meta.derived || (coord === 'theta' && meta.type === 'pl'))) {
+    // Compute per-year, then mean across the years (NaN-skipping) — for
+    // event-year lists and contiguous ranges alike. Without this branch,
+    // derived/θ composites and ranges silently returned the climatology,
+    // which made the anomaly view paint zero everywhere.
+    if (customRange && (meta.derived || (coord === 'theta' && meta.type === 'pl'))) {
         const composed = composeDerivedComposite(
-            name, { month, level, coord, theta }, derivedYears);
+            name, { month, level, coord, theta }, customRangeYears(customRange));
         if (composed) {
             const r = symmetricRange(composed.vmin, composed.vmax, meta);
             return {
@@ -637,30 +650,22 @@ export function getField(name, { month = 1, level = 500, coord = 'pressure', the
     const stdUnsupported = kind === 'std' && (isenMode ||
                                               (meta.derived && !derivedStdAvailable));
     const effKind = stdUnsupported ? 'mean' : kind;
-    // Reference-period (non-default) is supported for raw fields (direct tile
-    // fetch) AND for isentropic mode (the θ cube + interpolation machinery
-    // thread `refPeriod` through — fetches 1961-1990 pressure tiles, builds
-    // 1961-1990 θ cube, interpolates). Only pressure-coord *non-derived*
-    // fields used the per-period path before; now isenMode gets it too.
-    // Derived non-θ-only fields in pressure mode still fall back to default
-    // period (they'd need more plumbing to compose).
-    const periodUnsupported = period !== 'default'
-        && meta.derived
-        && !meta.thetaOnly
-        && !meta.slDerived
-        && !isenMode;
-    const effPeriod = periodUnsupported ? 'default' : period;
-    const effYear = (year != null && meta.derived && !meta.thetaOnly && !meta.slDerived) ? null : year;
-
+    // Every field honours the time slice. A reference period (e.g.
+    // 1961-1990) reaches raw tiles directly, and the θ cube and the derived
+    // fields (computeDerived) through `refPeriodArg`; a year selects the
+    // per-year tree everywhere. (Derived fields used to drop both and serve
+    // the active climatology, so their year / reference-period anomalies
+    // subtracted the field from itself.)
+    //
     // Derived fields (e.g. wind speed, PV) — compute from component tiles.
-    // refPeriod (e.g. 1961-1990) is only propagated when year is null, since
-    // year takes precedence as the tile-source selector.
-    const refPeriodArg = (effYear == null && effPeriod !== 'default') ? effPeriod : null;
+    // refPeriod is only propagated when year is null, since year takes
+    // precedence as the tile-source selector.
+    const refPeriodArg = (year == null && period !== 'default') ? period : null;
     // Derived σ: pipeline-materialised tiles (build_derived_std.py) live
     // alongside the raw σ tiles and load the same way. No per-year variant
     // for derived σ — σ is climatology-only by construction.
-    if (meta.derived && derivedStdAvailable && effKind === 'std' && effYear == null) {
-        const era = requestEra5(name, { month, level, kind: 'std', period: effPeriod });
+    if (meta.derived && derivedStdAvailable && effKind === 'std' && year == null) {
+        const era = requestEra5(name, { month, level, kind: 'std', period });
         if (era) {
             return {
                 values: era.values, vmin: era.vmin, vmax: era.vmax,
@@ -671,7 +676,7 @@ export function getField(name, { month = 1, level = 500, coord = 'pressure', the
                 units: meta.units,
                 isReal: true,
                 kind: 'std',
-                period: effPeriod,
+                period,
                 year: null,
             };
         }
@@ -682,11 +687,11 @@ export function getField(name, { month = 1, level = 500, coord = 'pressure', the
             lats: LATS, lons: LONS,
             ...meta,
             isReal: false, kind: 'std',
-            period: effPeriod,
+            period,
         };
     }
     if (meta.derived) {
-        const d = computeDerived(name, month, level, coord, theta, effYear, refPeriodArg);
+        const d = computeDerived(name, month, level, coord, theta, year, refPeriodArg);
         if (d) {
             const r = symmetricRange(d.vmin, d.vmax, meta);
             return {
@@ -697,14 +702,14 @@ export function getField(name, { month = 1, level = 500, coord = 'pressure', the
                 isReal: d.isReal,
                 kind: 'mean',
                 stdUnavailable: stdUnsupported,
-                year: effYear,
+                year,
                 // Name the tree the values came from (cross_section.js
                 // labels a year only when getField really served one).
-                period: effYear != null ? 'per_year' : effPeriod,
+                period: year != null ? 'per_year' : period,
             };
         }
     } else if (isenMode) {
-        const d = fieldOnIsentrope(name, month, theta, effYear, refPeriodArg);
+        const d = fieldOnIsentrope(name, month, theta, year, refPeriodArg);
         if (d) {
             const r = symmetricRange(d.vmin, d.vmax, meta);
             return {
@@ -717,21 +722,21 @@ export function getField(name, { month = 1, level = 500, coord = 'pressure', the
                 isReal: true,
                 kind: 'mean',
                 stdUnavailable: stdUnsupported,
-                year: effYear,
-                period: effPeriod,
+                year,
+                period: year != null ? 'per_year' : period,
             };
         }
     } else {
         // When `year` is set we use the per-year tile tree; route via the
         // 'per_year' period sentinel so era5.js picks the right base URL +
         // file naming. Falls back to the regular climatology path otherwise.
-        const usePerYear = effYear != null;
-        const requestPeriod = usePerYear ? 'per_year' : effPeriod;
+        const usePerYear = year != null;
+        const requestPeriod = usePerYear ? 'per_year' : period;
         const era = requestEra5(name, {
             month, level,
             kind: usePerYear ? 'mean' : effKind,    // per-year tiles have no std
             period: requestPeriod,
-            year: effYear,
+            year,
         });
         if (era) {
             // Skip symmetric forcing for std tiles — they're non-negative by
@@ -754,7 +759,7 @@ export function getField(name, { month = 1, level = 500, coord = 'pressure', the
                 isReal: true,
                 kind: effKind,
                 period: requestPeriod,
-                year: effYear,
+                year,
             };
         }
     }
@@ -766,7 +771,7 @@ export function getField(name, { month = 1, level = 500, coord = 'pressure', the
         ...meta,
         isReal: false,
         kind: effKind,
-        period: effPeriod,
+        period,
     };
 }
 
