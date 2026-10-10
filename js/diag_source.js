@@ -18,7 +18,7 @@
 // computed from the climatological-mean fields — the "stationary" eddies are
 // departures of the composite-mean flow from its zonal mean.
 
-import { cachedMonth, perYearHasMonth, windowMonths, windowMean, rememberWindowMean } from './era5.js';
+import { cachedMonth, perYearHasMonth, windowSlots, windowMean, rememberWindowMean } from './era5.js';
 import { customRangeYears } from './data.js';
 
 /** Source descriptor for the globe's current time selection. */
@@ -53,31 +53,52 @@ export function sourceHasMonth(src, month, name = null) {
     return sourceYears(src, month, name).length > 0;
 }
 
-/** Months of the window (see era5.js windowMonths) that `src` can supply —
- *  all of them for the climatology; a year's or composite's published months
- *  otherwise, so an annual mean of the current year averages what exists. */
+/** `src` moved `offset` calendar years — every year of a composite alike.
+ *  The climatology has no years to move. */
+export function shiftSource(src, offset) {
+    if (!src || !offset) return src;
+    if (src.year != null) return { year: src.year + offset };
+    return { years: (src.years || []).map(y => y + offset) };
+}
+
+/** The months of the window centred on `month` (era5.js windowSlots) that
+ *  `src` can supply, each with the source to read it from: [{ month, src }].
+ *  A year's or composite's 3-month season crosses the calendar year — DJF
+ *  1998 reads Dec 1997, a composite's DJF the December before each of its
+ *  years. Every month for the climatology; a year's or composite's months in
+ *  the per-year archive otherwise, so an annual mean of the current year
+ *  averages what exists and DJF 1961 (no Dec 1960) its Jan and Feb. */
+export function sourceWindow(src, month, seasonal = false, name = null) {
+    const out = [];
+    for (const { month: m, offset } of windowSlots(month, seasonal)) {
+        const s = shiftSource(src, offset);
+        if (sourceHasMonth(s, m, name)) out.push({ month: m, src: s });
+    }
+    return out;
+}
+
+/** Months of the window that `src` can supply (see sourceWindow). */
 export function sourceWindowMonths(src, month, seasonal = false, name = null) {
-    const months = windowMonths(month, seasonal);
-    return src ? months.filter(m => sourceHasMonth(src, m, name)) : months;
+    return sourceWindow(src, month, seasonal, name).map(w => w.month);
 }
 
 /** Cached tile for (name, month, level) from `src`. `seasonal` averages the
  *  three months centred on `month`, or all twelve with 'annual' (NaN-safe).
- *  Per-year sources pair the months within the same calendar year, like the
- *  globe's seasonal view, and skip months outside the archive rather than
- *  waiting on them. */
+ *  Per-year sources take each month from its own calendar year, like the
+ *  globe's seasonal view (sourceWindow: DJF 1998 = Dec 1997 + Jan + Feb
+ *  1998), and skip months outside the archive rather than waiting on them. */
 export function sourceMonth(name, month, level, src, seasonal = false) {
     if (!src) return cachedMonth(name, month, level, 'mean', 'default', null, seasonal);
     if (seasonal) {
-        const months = windowMonths(month, seasonal).filter(m => sourceYears(src, m, name).length);
+        const win = sourceWindow(src, month, seasonal, name);
         // Computed once per window (era5.js window-mean cache): the panels
         // redraw on every tile arrival.
-        const key = `src|${name}|${level}|${sourceKey(src)}|${months.join(',')}`;
+        const key = `src|${name}|${level}|${win.map(w => `${sourceKey(w.src)}:${w.month}`).join(',')}`;
         const hit = windowMean(key);
         if (hit) return hit;
         const tiles = [];
-        for (const m of months) {
-            const t = sourceMonth(name, m, level, src, false);
+        for (const { month: m, src: s } of win) {
+            const t = sourceMonth(name, m, level, s, false);
             if (!t) return null;
             tiles.push(t);
         }

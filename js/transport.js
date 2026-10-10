@@ -41,9 +41,9 @@
 // transient term stays sub-monthly: the seasonal cycle of the Hadley cells
 // belongs to the MMC, not to "transients".
 
-import { cachedMonth, getManifest, getActivePeriod, activePeriodLabel } from './era5.js';
+import { cachedMonth, getManifest, getActivePeriod, activePeriodLabel, windowSlots } from './era5.js';
 import { LEVELS, GRID } from './data.js';
-import { sourceMonth, sourceKey, sourceHasMonth } from './diag_source.js';
+import { sourceMonth, sourceKey, sourceWindow } from './diag_source.js';
 
 const A_EARTH = 6.371e6;
 const G       = 9.80665;
@@ -310,11 +310,13 @@ export function transportTilesMissing(src = null) {
     return NEW_SL.filter((n) => !have.has(n));
 }
 
-/** Months a view averages over. */
-export function transportMonths(month, { average = 'month', seasonal = false } = {}) {
-    if (average === 'annual') return [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
-    if (seasonal) return [((month + 10) % 12) + 1, month, (month % 12) + 1];
-    return [month];
+/** The averaging window (era5.js windowMonths' `seasonal` option) of a view. */
+const transportWindow = (average, seasonal) => (average === 'annual' ? 'annual' : seasonal);
+
+/** Months a view averages over, each with its calendar-year offset
+ *  (era5.js windowSlots): a year's DJF takes the December before it. */
+export function transportSlots(month, { average = 'month', seasonal = false } = {}) {
+    return windowSlots(month, transportWindow(average, seasonal));
 }
 
 const COLORS = {
@@ -364,12 +366,15 @@ export function buildTransportView(month, { quantity = 'energy', average = 'mont
     if (average === 'annual' && source && source.year == null) {
         return { unavailable: 'Annual means are not offered for composites (12 months × every event year of tiles). Pick a month or a season.' };
     }
-    const months = transportMonths(month, { average, seasonal })
-        .filter((m) => sourceHasMonth(source, m));
+    // Each averaged month with the slice to read it from — a year's DJF
+    // reads the December before (diag_source.js sourceWindow) — leaving out
+    // months the year / composite can't supply.
+    const win = sourceWindow(source, month, transportWindow(average, seasonal));
+    const months = win.map((w) => w.month);
     if (!months.length) return { unavailable: 'No published months for this selection yet.' };
     const terms = [];
-    for (const m of months) {
-        const t = monthTerms(m, source);
+    for (const { month: m, src } of win) {
+        const t = monthTerms(m, src);
         if (!t) return null;
         terms.push(t);
     }

@@ -236,20 +236,53 @@ export function windowMonths(month, seasonal = false) {
     return [month];
 }
 
+/** windowMonths, each with its calendar-year offset from the displayed
+ *  month: [{ month, offset }]. A year's 3-month season crosses the calendar
+ *  year — DJF of Y is Dec Y−1 + Jan + Feb Y, NDJ centred on Dec Y is Nov +
+ *  Dec Y + Jan Y+1 — while an annual mean stays Jan–Dec of Y. Every per-year
+ *  reader (cachedMonth, data.js getField, diag_source.js sourceWindow, the
+ *  transport panel, the globe's prefetch) shifts its year(s) by the offset;
+ *  a composite shifts each of its years. */
+export function windowSlots(month, seasonal = false) {
+    const season = !!seasonal && seasonal !== 'annual' && !Array.isArray(seasonal);
+    return windowMonths(month, seasonal).map((m) => ({
+        month: m,
+        offset: !season ? 0 : m - month > 6 ? -1 : month - m > 6 ? 1 : 0,
+    }));
+}
+
+/** The calendar years `year`'s window spans, for labels: "1998", or
+ *  "1997–98" for a season across the year boundary (DJF 1998 is Dec 1997 –
+ *  Feb 1998; NDJ 1999 → "1999–2000"). */
+export function windowYearsLabel(year, month, seasonal = false) {
+    const offs = windowSlots(month, seasonal).map((s) => s.offset);
+    const a = year + Math.min(...offs), b = year + Math.max(...offs);
+    if (a === b) return String(year);
+    return `${a}–${Math.floor(a / 100) === Math.floor(b / 100) ? String(b).slice(2) : b}`;
+}
+
 /** Cached-only lookup — no fetch side-effect. Returns Float32Array | null.
  *  `seasonal: true` returns the NaN-safe pointwise mean of the three tiles
  *  centered on `month` (wrapping at Dec); `seasonal: 'annual'` the mean of
- *  all twelve. If any of them is missing, returns null — caller should treat
- *  that as "not ready yet" and retry on the next tile-loaded event. */
+ *  all twelve. A single year's window takes each month from its own calendar
+ *  year (windowSlots: DJF 1998 reads Dec 1997) and leaves out months outside
+ *  the per-year archive, which never load (Dec 1960 for DJF 1961, months not
+ *  yet published). If any of the rest is missing, returns null — caller
+ *  should treat that as "not ready yet" and retry on the next tile-loaded
+ *  event. */
 export function cachedMonth(name, month, level = null, kind = 'mean', period = 'default', year = null, seasonal = false) {
     if (seasonal) {
-        const months = windowMonths(month, seasonal);
-        const key = `${resolvePeriod(period)}|${name}|${level}|${kind}|${year ?? '_'}|${months.join(',')}`;
+        const slots = windowSlots(month, seasonal)
+            .map(({ month: m, offset }) => ({ m, y: year == null ? null : year + offset }))
+            .filter(({ m, y }) => y == null || perYearHasMonth(y, m, name));
+        if (!slots.length) return null;
+        const key = `${resolvePeriod(period)}|${name}|${level}|${kind}|`
+            + slots.map(({ m, y }) => `${y ?? '_'}-${m}`).join(',');
         const hit = windowMeans.get(key);
         if (hit) return hit;
         const tiles = [];
-        for (const m of months) {
-            const t = cachedMonth(name, m, level, kind, period, year, false);
+        for (const { m, y } of slots) {
+            const t = cachedMonth(name, m, level, kind, period, y, false);
             if (!t) return null;
             tiles.push(t);
         }

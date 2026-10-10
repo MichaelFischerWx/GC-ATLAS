@@ -18,7 +18,7 @@ import { SunLight } from './sun.js';
 import { OrbitScene, ORBIT_RADIUS } from './orbit.js';
 import { computeZonalMean, computeArcCrossSection, renderCrossSection, samplePanel, sampleSeries } from './cross_section.js';
 import { greatCircleArc, linearLatLonArc, latLonToVec3, gcDistanceKm, greatCircleMidpoint, linearLatLonMidpoint, threePointArc } from './arc.js';
-import { loadManifest, onFieldLoaded, onTileProgress, isReady as era5Ready, prefetchField, cachedMonth, registerClamps, setActivePeriod, getActivePeriod, getManifest, perYearHasMonth, latestPerYearMonth, activePeriodLabel, windowMonths } from './era5.js';
+import { loadManifest, onFieldLoaded, onTileProgress, isReady as era5Ready, prefetchField, cachedMonth, registerClamps, setActivePeriod, getActivePeriod, getManifest, perYearHasMonth, latestPerYearMonth, activePeriodLabel, windowMonths, windowSlots, windowYearsLabel } from './era5.js';
 import { decompose, annualMeanFrom, aggregatedDecompositionRange } from './decompose.js';
 import { HoverProbe } from './hover.js';
 import { computeMassStreamfunction, computeAngularMomentum, computeBruntVaisala, computeGeostrophicWind } from './diagnostics.js';
@@ -27,8 +27,8 @@ import { computeLorenzCycle } from './lorenz.js';
 import { buildMBudgetView } from './m_budget.js';
 import { buildQBudgetView } from './q_budget.js';
 import { buildHBudgetView } from './h_budget.js';
-import { buildTransportView, transportMonths, transportTilesMissing, TRANSPORT_INGREDIENTS } from './transport.js';
-import { sourceFromState, sourceKey, sourceYears, sourceHasMonth, sourceMonth } from './diag_source.js';
+import { buildTransportView, transportSlots, transportTilesMissing, TRANSPORT_INGREDIENTS } from './transport.js';
+import { sourceFromState, sourceKey, sourceYears, sourceMonth, shiftSource, sourceWindow } from './diag_source.js';
 import { ParcelField } from './parcels.js';
 import { GifExporter, downloadBlob } from './gif_export.js';
 import { encodeStateToHash, decodeHashToPatch, writeHashDebounced } from './url_state.js';
@@ -354,6 +354,7 @@ class GlobeApp {
                 if (!ok) return;
                 this.populateYearSelect();
                 this._syncAnnualUI();   // the year's published months are known now
+                this._refreshSeasonalLabel();   // … and the months its season averages
                 if (needsPerYear) {
                     this.updateField();
                     // Panels drawn before this manifest landed couldn't
@@ -374,17 +375,20 @@ class GlobeApp {
             // Per-year tile arrivals are the active source whenever the user
             // has a year selected. Treat them like any active-period arrival
             // so updateField fires when the displayed (field, month, level)
-            // match.
+            // match — the year before / after's too when the 3-month season
+            // reaches into it (Dec 1997 for DJF 1998).
             const perYearActive = s.year != null
-                && period === 'per_year' && (year == null || year === s.year);
+                && period === 'per_year' && (year == null || year === s.year
+                    || this._windowReadsYear([s.year], year, month));
             // Custom-range composite: any per-year tile that feeds the
             // mean should trigger a repaint attempt. Handles both the
             // contiguous { start, end } range and the explicit
             // { years: [...] } list form used by the composite builder.
+            const crYears = s.customRange ? customRangeYears(s.customRange) : [];
             const customRangeActive = s.customRange
                 && period === 'per_year'
                 && year != null
-                && customRangeYears(s.customRange).includes(year);
+                && (crYears.includes(year) || this._windowReadsYear(crYears, year, month));
             // Tile arrival from a non-active period is useful for either
             // the climate-change-anomaly view OR the swipe-compare overlay
             // (both subtract / draw the same-month tile from a reference
@@ -458,11 +462,13 @@ class GlobeApp {
                                      && s.compareYear == null
                                      && feedsDisplay && dispMonth;
                 // Year-tile arrivals also drive the swipe right-half when
-                // the user has compareYear set (year-vs-* compare mode).
+                // the user has compareYear set (year-vs-* compare mode) —
+                // with the season's December from the year before.
                 const isYearForCompare = s.compareMode
                                       && s.compareYear != null
                                       && period === 'per_year'
-                                      && (year == null || year === s.compareYear)
+                                      && (year == null || year === s.compareYear
+                                          || this._windowReadsYear([s.compareYear], year, month))
                                       && feedsDisplay && dispMonth;
                 if (isRefForAnomaly || isRefForCompare || isYearForCompare) {
                     // Pressure tiles for θ interpolation change the θ cube
@@ -1458,15 +1464,21 @@ class GlobeApp {
     // Populates the label element so the user can see which three
     // months the averaging is covering, even without exporting. Shows
     // only when seasonal is on — hides otherwise to keep the UI quiet.
+    // A single year's season across the calendar year names both years
+    // ("DJF 1997–98": its December is from the year before).
     _refreshSeasonalLabel() {
         const el = document.getElementById('seasonal-label');
         if (!el) return;
-        if (!this.state.seasonal || this.state.annual) { el.textContent = ''; return; }
-        const M = ['J','F','M','A','M','J','J','A','S','O','N','D'];
-        const m  = this.state.month;
-        const p  = (m + 10) % 12;
-        const n  =  m       % 12;
-        el.textContent = `· ${M[p]}${M[m-1]}${M[n]}`;
+        if (!this.state.seasonal || this.state.annual) { el.textContent = ''; el.title = ''; return; }
+        const season = this._diagMonthLabel();
+        const src = this._diagSource();
+        const crosses = this._diagSlots().some(s => s.offset);
+        el.textContent = src?.year != null && crosses
+            ? `· ${season} ${this._windowYears(src.year)}` : `· ${season}`;
+        el.title = src?.year != null ? `${this._windowSpanText(src.year)} mean`
+            : src && crosses ? `Each year's ${season} takes ${this.state.month === 1
+                ? 'the December before it' : 'the January after it'}`
+            : '';
     }
 
     // ── reference-period dropdown labels ─────────────────────────────
@@ -2096,7 +2108,8 @@ class GlobeApp {
             this.updateField();
         }
         if ('showSun' in patch || 'viewMode' in patch)    this.applySunVisibility();
-        if ('month' in patch || 'seasonal' in patch || 'annual' in patch) this._refreshSeasonalLabel();
+        if ('month' in patch || 'seasonal' in patch || 'annual' in patch
+            || 'year' in patch || 'customRange' in patch) this._refreshSeasonalLabel();
         if ('annual' in patch) {
             this._syncAnnualUI();
             // σ tiles are monthly — nothing standardizes an annual mean.
@@ -2630,11 +2643,14 @@ class GlobeApp {
     }
 
     /** Months the transport panel averages (the displayed month or season,
-     *  or all twelve for the annual mean). */
-    _transportMonths() {
-        return transportMonths(this.state.month,
+     *  or all twelve for the annual mean), each with its calendar-year
+     *  offset: a year's DJF reads the December before (era5.js windowSlots). */
+    _transportSlots() {
+        return transportSlots(this.state.month,
             { average: this._transportAverage(), seasonal: this.state.seasonal });
     }
+
+    _transportMonths() { return this._transportSlots().map(s => s.month); }
 
     /** Does a tile for `month` feed the transport panel? The averaged
      *  months, plus their neighbours for the storage tendencies. */
@@ -2651,10 +2667,9 @@ class GlobeApp {
         // The panel doesn't offer annual means of composites (transport.js);
         // don't fetch 12 months × every event year for a notice.
         if (this._transportAverage() === 'annual' && this._diagSource()?.years) return;
-        const monthsFn = () => this._transportMonths();
-        this._prefetchIngredients(TRANSPORT_INGREDIENTS, false, monthsFn);
+        this._prefetchIngredients(TRANSPORT_INGREDIENTS, false, () => this._transportSlots());
         const around = new Set();
-        for (const m of monthsFn()) {
+        for (const m of this._transportMonths()) {
             around.add(m); around.add((m % 12) + 1); around.add(((m + 10) % 12) + 1);
         }
         for (const name of ['sp', 'tcwv']) prefetchField(name, { months: [...around] });
@@ -2665,22 +2680,25 @@ class GlobeApp {
      *  seasonal mean) first, then the rest of the year so month scrubbing
      *  stays smooth. Year / composite: the displayed month(s) of each year
      *  only — a composite month of the MSE budget is already ~80 tiles per
-     *  event year. `withClimo` adds the climatology for those months (the
-     *  ψ / EP-flux anomaly baseline). */
-    _prefetchIngredients(ing, withClimo = false, monthsFn = () => this._diagMonths()) {
+     *  event year — with a season's December from the year before (DJF
+     *  1998 reads Dec 1997). `slotsFn` gives the months as era5.js
+     *  windowSlots does. `withClimo` adds the climatology for those months
+     *  (the ψ / EP-flux anomaly baseline). */
+    _prefetchIngredients(ing, withClimo = false, slotsFn = () => this._diagSlots()) {
         // An annual mean over too many years shows a notice instead; don't
         // pull its tiles behind it.
         if (this._annualBudgetNotice((ing.pl || []).length * LEVELS.length + (ing.sl || []).length)) return;
         const src = this._diagSource();
-        if (!src) { this._prefetchClimoIngredients(ing, true, monthsFn()); return; }
-        if (withClimo) this._prefetchClimoIngredients(ing, false, monthsFn());
+        const monthsOf = () => slotsFn().map(s => s.month);
+        if (!src) { this._prefetchClimoIngredients(ing, true, monthsOf()); return; }
+        if (withClimo) this._prefetchClimoIngredients(ing, false, monthsOf());
         // Per-year fan-out is debounced on the slice: the year slider fires
         // on every step of a drag, and only the year it stops on should
         // pull a full level stack. Repeat requests for the same slice (tile
         // arrivals re-render the panel) join the pending batch instead of
         // postponing it.
-        const months = monthsFn();
-        const sliceKey = () => `${sourceKey(this._diagSource())}|${monthsFn().join(',')}`;
+        const slots = slotsFn();
+        const sliceKey = () => `${sourceKey(this._diagSource())}|${monthsOf().join(',')}`;
         const key = sliceKey();
         // One pending batch per slice key: panels averaging different months
         // (the transport panel's annual mean next to the Lorenz panel's
@@ -2697,8 +2715,8 @@ class GlobeApp {
         batch.timer = setTimeout(() => {
             pending.delete(key);
             if (sliceKey() !== key) return;   // the user moved on
-            for (const m of months) {
-                for (const year of sourceYears(src, m)) {
+            for (const { month: m, offset } of slots) {
+                for (const year of sourceYears(shiftSource(src, offset), m)) {
                     for (const L of LEVELS) {
                         for (const name of batch.pl) {
                             prefetchField(name, { level: L, months: [m], period: 'per_year', year });
@@ -3378,6 +3396,45 @@ class GlobeApp {
 
     _diagMonthMatches(month) { return this._diagMonths().includes(month); }
 
+    /** _diagMonths, each with its calendar-year offset (era5.js windowSlots):
+     *  a year's or composite's 3-month season crosses the calendar year, so
+     *  DJF 1998 reads Dec 1997 and NDJ 1998 reads Jan 1999. */
+    _diagSlots() { return windowSlots(this.state.month, this._avgWindow()); }
+
+    /** Does the per-year tile (year, month) feed the displayed window of the
+     *  base year(s) `years` — the December before a DJF, the January after
+     *  an NDJ included? */
+    _windowReadsYear(years, year, month) {
+        return this._diagSlots().some(s => s.month === month && years.includes(year - s.offset));
+    }
+
+    /** The calendar years the displayed window of `year` spans: "1998", or
+     *  "1997–98" for a season across the year boundary (DJF 1998 is Dec 1997
+     *  – Feb 1998, NDJ 1998 is Nov 1998 – Jan 1999). */
+    _windowYears(year) { return windowYearsLabel(year, this.state.month, this._avgWindow()); }
+
+    /** " (Jan–Feb only)" when a single year's 3-month season reaches outside
+     *  the per-year archive (DJF 1961: no Dec 1960; a season not yet fully
+     *  published) and averages the months that exist; '' otherwise. */
+    _seasonCoverage() {
+        const s = this.state;
+        const src = this._diagSource();
+        if (!s.seasonal || s.annual || src?.year == null) return '';
+        const have = sourceWindow(src, s.month, true);
+        if (!have.length || have.length === 3) return '';
+        return ` (${have.map(w => MONTHS[w.month - 1]).join('–')} only)`;
+    }
+
+    /** "Dec 1997 – Feb 1998": the first and last month a single year's
+     *  window averages ('' if it has none). */
+    _windowSpanText(year) {
+        const win = sourceWindow({ year }, this.state.month, this._avgWindow());
+        if (!win.length) return '';
+        const [a, b] = [win[0], win[win.length - 1]];
+        return a === b ? `${MONTHS[a.month - 1]} ${a.src.year}`
+            : `${MONTHS[a.month - 1]} ${a.src.year} – ${MONTHS[b.month - 1]} ${b.src.year}`;
+    }
+
     /** "Jan", "DJF" with the seasonal mean on, "annual mean". */
     _diagMonthLabel() {
         const s = this.state;
@@ -3431,8 +3488,9 @@ class GlobeApp {
     }
 
     /** Title suffix naming the time slice: '' for the climatology (titles as
-     *  before), " · Jan 1998", " · Jan · RONI ≥ +1.0 composite, 8 yr",
-     *  " · Jan · 1991–2000 mean"; the anomaly view appends " − 1991–2020". */
+     *  before), " · Jan 1998", " · DJF 1997–98", " · Jan · RONI ≥ +1.0
+     *  composite, 8 yr", " · Jan · 1991–2000 mean"; the anomaly view appends
+     *  " − 1991–2020". */
     _diagSourceSuffix({ anomaly = false } = {}) {
         const src = this._diagSource();
         // The climatology's titles name no month, but an annual mean says so.
@@ -3441,7 +3499,8 @@ class GlobeApp {
         const annual = this.state.annual;
         let label;
         if (src.year != null) {
-            label = annual ? `${src.year} annual mean${this._annualCoverage()}` : `${mon} ${src.year}`;
+            label = annual ? `${src.year} annual mean${this._annualCoverage()}`
+                : `${mon} ${this._windowYears(src.year)}${this._seasonCoverage()}`;
         } else {
             const cr = this.state.customRange;
             const n = annual
@@ -3492,7 +3551,8 @@ class GlobeApp {
                 (ing.pl || []).length * LEVELS.length + (ing.sl || []).length);
             if (budget) return budget;
         }
-        if (this._diagMonths().some(m => sourceHasMonth(src, m))) return null;
+        // Any month of the window, each from its own calendar year.
+        if (sourceWindow(src, this.state.month, this._avgWindow()).length) return null;
         if (this.state.annual) {
             return src.year == null ? 'No composite year is in the per-year archive'
                  : `No month of ${src.year} is in the per-year archive`;
@@ -4201,7 +4261,16 @@ class GlobeApp {
             const cr = s.customRange;
             const nYears = cr ? customRangeYears(cr).length : 0;
             let head, body;
-            if (s.year != null) {
+            if (s.year != null && s.annual) {
+                head = `ERA5 · ${s.year} annual mean${this._annualCoverage()}`;
+                body = "Mean of the year's monthly means at 1° grid.";
+            } else if (s.year != null && s.seasonal) {
+                // The season's December can be the year before's.
+                head = `ERA5 · ${this._diagMonthLabel()} ${this._windowYears(s.year)}`;
+                body = this._seasonCoverage()
+                    ? `Mean of ${this._windowSpanText(s.year)}, the season's months in the archive, at 1° grid.`
+                    : `3-month mean, ${this._windowSpanText(s.year)}, at 1° grid.`;
+            } else if (s.year != null) {
                 head = `ERA5 · ${MONTHS[s.month - 1]} ${s.year}`;
                 body = 'Single-month mean at 1° grid.';
             } else if (cr && cr.id) {
@@ -6168,7 +6237,11 @@ class GlobeApp {
         let periodSuffix = '';
         const cr = this.state.customRange;
         if (this.state.year != null) {
-            periodSuffix = ` · ${this.state.year}`;
+            // A year's season names the years it spans (DJF 1997–98) and
+            // the months it lacks (JAS 2026 before September is out).
+            periodSuffix = this.state.seasonal && !this.state.annual
+                ? ` · ${this._diagMonthLabel()} ${this._windowYears(this.state.year)}${this._seasonCoverage()}`
+                : ` · ${this.state.year}`;
         } else if (cr && cr.label) {
             periodSuffix = ` · ${cr.label} · ${cr.years.length} events`;
         } else if (cr && Number.isFinite(cr.start) && Number.isFinite(cr.end)) {

@@ -14,6 +14,7 @@
 
 import { GIFEncoder, quantize, applyPalette } from 'https://unpkg.com/gifenc@1.0.3/dist/gifenc.esm.js';
 import { FIELDS } from './data.js';
+import { windowYearsLabel } from './era5.js';
 
 const DEFAULT_FPS = 15;
 // Target render width for captured frames. Bumped from 900 → 1280 for
@@ -64,10 +65,13 @@ export class GifExporter {
             : s.seasonal ? seasonLabel(s.month) : MONTHS[s.month - 1];
         const subParts = [timeLabel];
         const cr = s.customRange;
+        // A year's season across the calendar year names both years
+        // ("DJF · 1997–98": its December is the year before's).
+        const yearLabel = (y) => windowYearsLabel(y, s.month, !s.annual && s.seasonal);
         // Describe what's painted on the left half (the "active" view).
         let leftLabel;
         if (s.year != null) {
-            leftLabel = String(s.year);
+            leftLabel = yearLabel(s.year);
         } else if (cr && cr.label) {
             const n = Array.isArray(cr.years) ? cr.years.length : 0;
             leftLabel = `${cr.label}${n ? ` · ${n} events` : ''}`;
@@ -84,7 +88,7 @@ export class GifExporter {
         if (s.compareMode) {
             let rightLabel = null;
             if (s.compareYear != null) {
-                rightLabel = String(s.compareYear);
+                rightLabel = yearLabel(s.compareYear);
             } else if (s.referencePeriod && s.referencePeriod !== 'default'
                        && s.referencePeriod !== s.climatologyPeriod) {
                 rightLabel = s.referencePeriod;

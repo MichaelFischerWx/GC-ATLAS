@@ -9,7 +9,7 @@
 // jets, Hadley return, stationary waves, subtropical highs). They exist so
 // the renderer works offline / before real tiles are staged.
 
-import { requestField as requestEra5, availableLevels, cachedMonth, getManifest, perYearHasMonth, getActivePeriod, windowMonths } from './era5.js';
+import { requestField as requestEra5, availableLevels, cachedMonth, getManifest, perYearHasMonth, getActivePeriod, windowSlots } from './era5.js';
 
 // Does the manifest for `period` carry pipeline-materialised std tiles for
 // this derived field? Used to un-gate σ-anom on wspd / mse / dls once the
@@ -341,6 +341,21 @@ export function customRangeYears(spec) {
     return [];
 }
 
+/** The range / composite `offset` years later — the year before each of
+ *  its years (−1) for the December of a DJF season. */
+function shiftedRange(spec, offset) {
+    return Array.isArray(spec.years)
+        ? { ...spec, years: spec.years.map((y) => y + offset) }
+        : { ...spec, start: spec.start + offset, end: spec.end + offset };
+}
+
+/** Can any year of the range / composite supply `month` from the per-year
+ *  archive? True while a composite's years are still resolving. */
+function rangeHasMonth(spec, month, name) {
+    const years = customRangeYears(spec);
+    return !years.length || years.some((y) => perYearHasMonth(y, month, name));
+}
+
 /** Stable cache-key suffix for a range/list spec. Separating the
  *  contiguous form ("2010-2024") from the explicit-year form
  *  ("y=1983,1998,2016,2024") avoids collisions. */
@@ -556,18 +571,28 @@ export function getField(name, { month = 1, level = 500, coord = 'pressure', the
     if (seasonal) {
         // 'annual', or the explicit month list of a partial year's annual mean.
         const annual = seasonal === 'annual' || Array.isArray(seasonal);
-        // A single year's window can reach past the latest published month
-        // (JAS while October is out, or the current year's annual mean), and
-        // those tiles never load: average the months that exist, as the
-        // diagnostic panels do (diag_source.js).
-        const months = windowMonths(month, seasonal).filter((m) =>
-            (m === month && !annual) || year == null || perYearHasMonth(year, m, name));
-        if (!months.length) months.push(month);   // nothing published: the notice path
-        const fs = months.map(m => getField(name, {
-            month: m, level, coord, theta, kind, period, year, customRange,
-            seasonal: false,
+        // Each month comes from its own calendar year: a year's DJF is Dec
+        // Y−1 + Jan + Feb Y, and a range's or composite's takes the December
+        // before each of its years (era5.js windowSlots). A window can reach
+        // outside the per-year archive (Dec 1960 for DJF 1961, JAS while
+        // October is out, the current year's annual mean), and those tiles
+        // never load: average the months that exist, as the diagnostic
+        // panels do (diag_source.js). The centre month always stays, so an
+        // unpublished one still reaches the notice path.
+        const slots = [];
+        for (const { month: m, offset } of windowSlots(month, seasonal)) {
+            const y = year != null ? year + offset : null;
+            const cr = customRange && offset ? shiftedRange(customRange, offset) : customRange;
+            const exists = y != null ? perYearHasMonth(y, m, name)
+                : !cr || rangeHasMonth(cr, m, name);
+            if ((m === month && !annual) || exists) slots.push({ month: m, year: y, customRange: cr });
+        }
+        if (!slots.length) slots.push({ month, year, customRange });   // nothing published: the notice path
+        const fs = slots.map(sl => getField(name, {
+            month: sl.month, level, coord, theta, kind, period,
+            year: sl.year, customRange: sl.customRange, seasonal: false,
         }));
-        const center = annual ? fs[0] : fs[months.indexOf(month)];
+        const center = annual ? fs[0] : fs[slots.findIndex(sl => sl.month === month)];
         if (!fs.every(f => f.isReal)) return annual ? fs.find(f => !f.isReal) : center;
         const N = center.values.length;
         const out = new Float32Array(N);
@@ -598,7 +623,8 @@ export function getField(name, { month = 1, level = 500, coord = 'pressure', the
             }
             if (kind !== 'std') ({ vmin, vmax } = symmetricRange(vmin, vmax, meta));
         }
-        return { ...center, values: out, vmin, vmax, seasonal: annual ? 'annual' : true, seasonalMonths: months };
+        return { ...center, values: out, vmin, vmax, seasonal: annual ? 'annual' : true,
+                 seasonalMonths: slots.map(sl => sl.month) };
     }
 
     // Custom-range composite: browser-side mean of per-year tiles over an
