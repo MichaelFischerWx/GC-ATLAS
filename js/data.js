@@ -180,7 +180,9 @@ export const FIELDS = {
     chi:  { type: 'pl', group: 'Dynamics',           name: 'Velocity potential (χ)',   units: '10⁶ m² s⁻¹', cmap: 'RdBu_r', defaultLevel: 200, contour: 2, symmetric: true },
     q:    { type: 'pl', group: 'Moisture',           name: 'Specific humidity',        units: 'g kg⁻¹',  cmap: 'thalo',   defaultLevel: 850, contour: 2, clamp: { lo: 0.0, hi: 0.99 } },
     r:    { type: 'pl', group: 'Moisture',           name: 'Relative humidity',        units: '%',       cmap: 'thalo',   defaultLevel: 700, contour: 10, clamp: { lo: 0.0, hi: 0.995 } },
-    pv:   { type: 'pl', group: 'Derived & PV',       name: 'Ertel PV',                 units: 'PVU',     cmap: 'RdBu_r',  defaultLevel: 330, contour: 1, derived: true, thetaOnly: true, symmetric: true },
+    // displayCap: stratospheric PV reaches hundreds of PVU; ±10 keeps the
+    // tropospheric ribbon and the 2-PVU tropopause readable (globe + sections).
+    pv:   { type: 'pl', group: 'Derived & PV',       name: 'Ertel PV',                 units: 'PVU',     cmap: 'RdBu_r',  defaultLevel: 330, contour: 1, derived: true, thetaOnly: true, symmetric: true, displayCap: 10 },
     mse:  { type: 'pl', group: 'Derived & PV',       name: 'Moist static energy (h/c_p)', units: 'K',    cmap: 'magma',   defaultLevel: 850, contour: 5, derived: true, clamp: { lo: 0.005, hi: 0.995 } },
     t2m:  { type: 'sl', group: 'Surface',            name: '2-m temperature',          units: 'K',       cmap: 'turbo',   contour: 5 },
     d2m:  { type: 'sl', group: 'Surface',            name: '2-m dewpoint',             units: 'K',       cmap: 'turbo',   contour: 5 },
@@ -527,8 +529,16 @@ function applyClampToEntry(entry, meta) {
  * upper stratosphere near high θ return NaN where θ₀ is out of range.
  */
 export function getField(name, { month = 1, level = 500, coord = 'pressure', theta = 330, kind = 'mean', period = 'default', year = null, customRange = null, seasonal = false } = {}) {
-    const meta = FIELDS[name];
-    if (!meta) throw new Error(`unknown field: ${name}`);
+    const fieldMeta = FIELDS[name];
+    if (!fieldMeta) throw new Error(`unknown field: ${name}`);
+    // PV off the θ surfaces is ERA5's own pressure-level PV — the raw `pv`
+    // tiles that isentropic PV is interpolated from — and loads like any raw
+    // field. The globe always shows PV on θ; the cross-section panel and
+    // contour overlays read it on pressure levels. (Routed through the
+    // derived path it came back as the 330-K map at every level.)
+    const meta = (fieldMeta.thetaOnly && coord !== 'theta')
+        ? { ...fieldMeta, derived: false }
+        : fieldMeta;
 
     // Seasonal 3-month centered mean — short-circuit at the top so all the
     // per-month branching below (derived, isenMode, per-year, composites,
@@ -1116,10 +1126,13 @@ function buildThetaCube(month, year = null, refPeriod = null) {
         : (refPeriod ? { period: refPeriod } : {});
     const { nlat, nlon } = GRID;
     const N = nlat * nlon;
+    // Request every level before giving up, so a cold cube fetches its 12
+    // T tiles at once instead of one per repaint (a fresh θ link).
+    const tTiles = LEVELS.map((L) => requestEra5('t', { month, level: L, ...tReq }));
+    if (tTiles.some((t) => !t)) return null;
     const thetas = [];
     for (let k = 0; k < LEVELS.length; k++) {
-        const tT = requestEra5('t', { month, level: LEVELS[k], ...tReq });
-        if (!tT) return null;
+        const tT = tTiles[k];
         const pFactor = Math.pow(1000 / LEVELS[k], KAPPA);
         const theta = new Float32Array(N);
         for (let i = 0; i < N; i++) theta[i] = tT.values[i] * pFactor;
@@ -1204,14 +1217,11 @@ function fieldOnIsentrope(name, month, theta0, year = null, refPeriod = null) {
     const key = `${name}:${month}:${theta0}:${srcSfx}`;
     let entry = _isenFieldCache.get(key);
     if (!entry) {
+        // The T cube and the field's level stack load in parallel.
         const thetas = buildThetaCube(month, year, refPeriod);
-        if (!thetas) return null;
-        const valsByLev = [];
-        for (let k = 0; k < LEVELS.length; k++) {
-            const tile = requestEra5(name, { month, level: LEVELS[k], ...reqBase });
-            if (!tile) return null;
-            valsByLev.push(tile.values);
-        }
+        const tiles = LEVELS.map((L) => requestEra5(name, { month, level: L, ...reqBase }));
+        if (!thetas || tiles.some((t) => !t)) return null;
+        const valsByLev = tiles.map((t) => t.values);
         entry = interpolateColumnToIsentrope(valsByLev, thetas, theta0);
         _isenFieldCache.set(key, entry);
     }
@@ -1293,10 +1303,8 @@ function computePVOnIsentrope(month, theta0, year = null, refPeriod = null) {
  *  required tile is missing. */
 function _pvComputeRaw(month, theta0, year = null, refPeriod = null) {
     const thetas = buildThetaCube(month, year, refPeriod);
-    if (!thetas) return null;
 
     const { nlat, nlon } = GRID;
-    const nlev = LEVELS.length;
     const pvReq = year != null
         ? { period: 'per_year', year }
         : (refPeriod ? { period: refPeriod } : {});
@@ -1305,18 +1313,16 @@ function _pvComputeRaw(month, theta0, year = null, refPeriod = null) {
     // No need to compute ζ from u, v or to apply the ∂θ/∂p approximation
     // ourselves — ECMWF's spectral computation is more accurate (full Ertel
     // form including density-weighting and 3-D vorticity components).
-    const pvLevs = new Array(nlev);
-    for (let k = 0; k < nlev; k++) {
-        const tPV = requestEra5('pv', { month, level: LEVELS[k], ...pvReq });
-        if (!tPV) return null;
-        pvLevs[k] = tPV.values;
-    }
+    // Requested alongside the T cube, every level at once.
+    const pvTiles = LEVELS.map((L) => requestEra5('pv', { month, level: L, ...pvReq }));
+    if (!thetas || pvTiles.some((t) => !t)) return null;
+    const pvLevs = pvTiles.map((t) => t.values);
 
     const interp = interpolateColumnToIsentrope(pvLevs, thetas, theta0);
 
     // Clamp display range — stratospheric intrusions reach hundreds of PVU;
     // ±10 keeps the tropospheric ribbon (where the dynamic story lives) crisp.
-    const DISPLAY_CAP = 10;
+    const DISPLAY_CAP = FIELDS.pv.displayCap;
     const result = {
         values: interp.values,
         vmin: Math.max(interp.vmin, -DISPLAY_CAP),

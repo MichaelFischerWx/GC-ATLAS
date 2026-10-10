@@ -12,12 +12,74 @@ import { gcDistanceKm, arcPathLengthKm } from './arc.js';
 const LAT_TICKS = [-90, -60, -30, 0, 30, 60, 90];
 const P_TICKS   = [1000, 500, 200, 100, 50, 10];
 
+const KAPPA = 0.2854;   // R / c_p, as in data.js's θ cube
+
+/** Zonal mean of a (nlat × nlon) grid, NaN-aware — Float32Array(nlat). */
+function zonalMeanRow(values) {
+    const { nlat, nlon } = GRID;
+    const out = new Float32Array(nlat);
+    for (let i = 0; i < nlat; i++) {
+        let s = 0, n = 0;
+        for (let j = 0; j < nlon; j++) {
+            const v = values[i * nlon + j];
+            if (Number.isFinite(v)) { s += v; n += 1; }
+        }
+        out[i] = n > 0 ? s / n : NaN;
+    }
+    return out;
+}
+
+/** Symmetric ±displayCap colour range for fields that declare one (PV:
+ *  stratospheric values reach hundreds of PVU). */
+function capRange(zm, meta) {
+    if (!meta.displayCap) return zm;
+    const a = Math.min(meta.displayCap, Math.max(Math.abs(zm.vmin), Math.abs(zm.vmax)));
+    zm.vmin = -a;
+    zm.vmax = a;
+    return zm;
+}
+
+/** Isentropes for a pressure section in θ coordinates: for each θ in
+ *  `thetas`, the pressure where the section's θ = T (1000/p)^κ crosses it in
+ *  every column (NaN where the surface is below 1000 hPa or above 10 hPa).
+ *  `tempAt(k)` returns the column temperatures at LEVELS[k] — zonal means,
+ *  or samples along the arc — or null while T is loading (no overlay yet).
+ *  Linear in θ between levels, like the globe's isentropic interpolation. */
+function isentropeOverlay(thetas, mark, tempAt) {
+    const th = [];
+    for (let k = 0; k < LEVELS.length; k++) {
+        const T = tempAt(k);
+        if (!T) return null;
+        const f = Math.pow(1000 / LEVELS[k], KAPPA);
+        th.push(T.map((v) => v * f));
+    }
+    const nCols = th[0].length;
+    const lines = thetas.map((theta) => {
+        const p = new Float32Array(nCols).fill(NaN);
+        for (let j = 0; j < nCols; j++) {
+            // LEVELS run 10 → 1000 hPa, so θ falls with k.
+            for (let k = 0; k < LEVELS.length - 1; k++) {
+                const a = th[k][j], b = th[k + 1][j];
+                if (Number.isFinite(a) && Number.isFinite(b) && a >= theta && theta > b) {
+                    const f = (a - theta) / (a - b);
+                    p[j] = Math.exp(Math.log(LEVELS[k]) + f * Math.log(LEVELS[k + 1] / LEVELS[k]));
+                    break;
+                }
+            }
+        }
+        return { theta, p };
+    });
+    return { mark, lines };
+}
+
 /**
  * Zonal mean — NaN-aware average at each latitude.
  * Returns { kind:'zonal', type, values, vmin, vmax, ... }.
  * `year` / `customRange` select the same time slice as the globe (getField).
+ * `isentropes` (θ values, K) adds those isentropes of the same slice, with
+ * `markTheta` — the globe's θ surface — drawn bold.
  */
-export function computeZonalMean(fieldName, month, { seasonal = false, year = null, customRange = null } = {}) {
+export function computeZonalMean(fieldName, month, { seasonal = false, year = null, customRange = null, isentropes = null, markTheta = null } = {}) {
     const meta = FIELDS[fieldName];
     const { nlat, nlon } = GRID;
 
@@ -65,8 +127,15 @@ export function computeZonalMean(fieldName, month, { seasonal = false, year = nu
         }
     }
     if (!Number.isFinite(vmin)) { vmin = 0; vmax = 1; }
-    return { kind: 'zonal', type: 'pl', values: zm, vmin, vmax,
-             levels: LEVELS.slice(), name: meta.name, units: meta.units, slice };
+    const out = capRange({ kind: 'zonal', type: 'pl', values: zm, vmin, vmax,
+                           levels: LEVELS.slice(), name: meta.name, units: meta.units, slice }, meta);
+    if (isentropes) {
+        out.isentropes = isentropeOverlay(isentropes, markTheta, (k) => {
+            const t = getField('t', { month, level: LEVELS[k], seasonal, year, customRange });
+            return t.isReal ? zonalMeanRow(t.values) : null;
+        });
+    }
+    return out;
 }
 
 /** The time slice getField actually served ({ period, year }), so the panel
@@ -214,7 +283,7 @@ function bilinearSample(values, lat, lon) {
  * For pressure-level fields, values is Float32Array(nlev × nSamples).
  * For single-level fields, values is Float32Array(nSamples).
  */
-export function computeArcCrossSection(fieldName, month, arc, { seasonal = false, year = null, customRange = null } = {}) {
+export function computeArcCrossSection(fieldName, month, arc, { seasonal = false, year = null, customRange = null, isentropes = null, markTheta = null } = {}) {
     const meta = FIELDS[fieldName];
     const nSamples = arc.length;
     if (nSamples < 2) return null;
@@ -258,9 +327,16 @@ export function computeArcCrossSection(fieldName, month, arc, { seasonal = false
         }
     }
     if (!Number.isFinite(vmin)) { vmin = 0; vmax = 1; }
-    return { kind: 'arc', type: 'pl', values, vmin, vmax,
-             nSamples, arc, distanceKm, levels: LEVELS.slice(),
-             name: meta.name, units: meta.units, slice };
+    const out = capRange({ kind: 'arc', type: 'pl', values, vmin, vmax,
+                           nSamples, arc, distanceKm, levels: LEVELS.slice(),
+                           name: meta.name, units: meta.units, slice }, meta);
+    if (isentropes) {
+        out.isentropes = isentropeOverlay(isentropes, markTheta, (k) => {
+            const t = getField('t', { month, level: LEVELS[k], seasonal, year, customRange });
+            return t.isReal ? Float32Array.from(arc, (pt) => bilinearSample(t.values, pt.lat, pt.lon)) : null;
+        });
+    }
+    return out;
 }
 
 export function renderCrossSection(canvas, zm, cmap) {
@@ -297,6 +373,85 @@ export function renderCrossSection(canvas, zm, cmap) {
         // EP-flux mode overlays vector arrows on top of the ∇·F shading.
         if (zm.arrows) drawEPArrows(ctx, padL, padT, plotW, plotH, zm);
     }
+    if (zm.isentropes) drawIsentropes(ctx, padL, padT, plotW, plotH, zm);
+}
+
+/** Isentropes over a pressure section (θ coordinates): a thin line per θ
+ *  level, the globe's surface (zm.isentropes.mark) bold, each labelled at
+ *  its right-hand end. */
+function drawIsentropes(ctx, x0, y0, w, h, zm) {
+    const { lines, mark } = zm.isentropes;
+    const dpr = zm._dpr || 1;
+    const n = lines[0]?.p.length || 0;
+    if (n < 2) return;
+    const pMin = zm.levels[0], pMax = zm.levels[zm.levels.length - 1];
+    const logSpan = Math.log(pMax / pMin);
+    // Zonal columns are latitudes 90 − j (north on the right); arc columns
+    // run start → end.
+    const xAt = zm.kind === 'arc'
+        ? (j) => x0 + (j / (n - 1)) * w
+        : (j) => x0 + ((180 - j) / 180) * w;
+    const yAt = (p) => y0 + h * (Math.log(p / pMin) / logSpan);
+    const trace = (p) => {
+        ctx.beginPath();
+        let on = false;
+        for (let j = 0; j < n; j++) {
+            if (!Number.isFinite(p[j])) { on = false; continue; }
+            if (on) ctx.lineTo(xAt(j), yAt(p[j]));
+            else { ctx.moveTo(xAt(j), yAt(p[j])); on = true; }
+        }
+        ctx.stroke();
+    };
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(x0, y0, w, h);
+    ctx.clip();
+    ctx.lineJoin = 'round';
+    for (const { theta, p } of lines) {
+        if (theta === mark) continue;
+        ctx.strokeStyle = 'rgba(10, 18, 14, 0.55)';
+        ctx.lineWidth = Math.max(1, dpr);
+        trace(p);
+    }
+    const sel = lines.find((l) => l.theta === mark);
+    if (sel) {
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.9)';
+        ctx.lineWidth = 4.5 * dpr;
+        trace(sel.p);
+        ctx.strokeStyle = 'rgba(10, 18, 14, 0.95)';
+        ctx.lineWidth = 2 * dpr;
+        trace(sel.p);
+    }
+    // Labels at the right-most point of each line, haloed for legibility.
+    // The bold surface is labelled first; a thin label that would overlap
+    // one already placed is dropped (isentropes bunch where the
+    // stratification is strong, e.g. over the winter pole).
+    ctx.textAlign = 'right';
+    ctx.lineJoin = 'round';
+    const placed = [];
+    const ordered = [...lines].sort((a, b) => (b.theta === mark) - (a.theta === mark));
+    for (const { theta, p } of ordered) {
+        let j = -1;
+        if (zm.kind === 'arc') { for (let k = n - 1; k >= 0; k--) if (Number.isFinite(p[k])) { j = k; break; } }
+        else { for (let k = 0; k < n; k++) if (Number.isFinite(p[k])) { j = k; break; } }
+        if (j < 0) continue;
+        const bold = theta === mark;
+        const yLine = yAt(p[j]);
+        if (!bold && placed.some((yp) => Math.abs(yp - yLine) < 10 * dpr)) continue;
+        placed.push(yLine);
+        ctx.font = `${bold ? 600 : 400} ${(bold ? 10 : 9) * dpr}px 'JetBrains Mono', monospace`;
+        const x = Math.min(xAt(j), x0 + w) - 3 * dpr;
+        let y = yLine - 2 * dpr;
+        ctx.textBaseline = 'bottom';
+        if (y - 10 * dpr < y0) { ctx.textBaseline = 'top'; y += 4 * dpr; }
+        const text = bold ? `${theta} K` : `${theta}`;
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.85)';
+        ctx.lineWidth = 3 * dpr;
+        ctx.strokeText(text, x, y);
+        ctx.fillStyle = 'rgba(10, 18, 14, 0.95)';
+        ctx.fillText(text, x, y);
+    }
+    ctx.restore();
 }
 
 function drawArcHeatmap(ctx, x0, y0, w, h, zm, cmap) {

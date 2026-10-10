@@ -324,7 +324,7 @@ class GlobeApp {
                     // period: drop what the first paint computed from the
                     // default tree (setState does the same on a switch).
                     invalidateIsentropicCache();
-                    this.windCache.stale = true;
+                    this._invalidateWind();
                     this._refreshFieldPickers();
                     this.updateField();
                     this._refreshDiagPanels();
@@ -415,6 +415,11 @@ class GlobeApp {
             // own name.
             const feedsDisplay = feedsCurrentField && (!needsLevelMatch || levelMatches);
             const anomalyView = s.decompose === 'anomaly' || s.decompose === 'zscore';
+            // The wind overlay reads the climatology's u, v (u10, v10 under a
+            // single-level field; T too on θ surfaces) whatever the time
+            // slice, so let it retry before the branch below returns.
+            if (name === 'u' || name === 'v' || name === 'u10' || name === 'v10' ||
+                (isenActive && name === 't')) this._invalidateWind();
             if (period && !isActivePeriod) {
                 // Anomaly reference tiles: the reference period's, or in year
                 // / composite mode the climatology's (same-month reference).
@@ -531,9 +536,6 @@ class GlobeApp {
                 && monthMatches) {
                 this.updateField();
             }
-
-            if (name === 'u' || name === 'v' || name === 'u10' || name === 'v10' ||
-                (isenActive && name === 't')) this.windCache.stale = true;
 
             // Barbs are drawn ONCE from the wind cache at rebuild time, so
             // they don't self-heal the way particles do (particles resample
@@ -1889,8 +1891,23 @@ class GlobeApp {
         this.windCache.stale = false;
     }
 
+    /** The wind overlay's source changed (or one of its tiles landed):
+     *  rebuild the cache on the next sample. */
+    _invalidateWind() {
+        this.windCache.stale = true;
+        this.windCache.tried = false;
+    }
+
     sampleWind(lat, lon) {
-        if (this.windCache.stale) this.refreshWindCache();
+        // One rebuild attempt per invalidation, not one per particle: while
+        // the wind tiles load, each attempt re-derives a partial θ cube, and
+        // particles sample thousands of times a frame — a fresh θ-coordinate
+        // link (the PV gallery tile) froze the page for minutes. Tile
+        // arrivals invalidate again, so the cache still fills as they land.
+        if (this.windCache.stale && !this.windCache.tried) {
+            this.windCache.tried = true;
+            this.refreshWindCache();
+        }
         const { u, v, nlat, nlon } = this.windCache;
         if (!u || !v) return null;
         // Grid row 0 = lat +90, col 0 = lon −180.
@@ -2203,7 +2220,7 @@ class GlobeApp {
             this._prefetchTimeseriesTiles();
             this._scheduleTimeseriesRender();
         }
-        if ('level' in patch || 'month' in patch || 'vCoord' in patch || 'theta' in patch || 'field' in patch) this.windCache.stale = true;
+        if ('level' in patch || 'month' in patch || 'vCoord' in patch || 'theta' in patch || 'field' in patch) this._invalidateWind();
         if ('month' in patch && this.parcels) this.parcels.invalidateCube();
         if ('vCoord' in patch || 'theta' in patch) invalidateIsentropicCache();
         if ('year' in patch || 'customRange' in patch) {
@@ -2211,7 +2228,7 @@ class GlobeApp {
             // isentropic caches (their keys don't include those) and the
             // wind cache; trigger a re-render.
             invalidateIsentropicCache();
-            this.windCache.stale = true;
+            this._invalidateWind();
             if (this.parcels) this.parcels.invalidateCube();
             // Climatology-period control is meaningless when viewing a
             // single year OR a custom-range composite — grey it out.
@@ -2247,7 +2264,7 @@ class GlobeApp {
             setActivePeriod(patch.climatologyPeriod);
             this._refreshFieldPickers();
             invalidateIsentropicCache();
-            this.windCache.stale = true;
+            this._invalidateWind();
             if (this.parcels) this.parcels.invalidateCube();
             // Disable the climate-change-anomaly option when comparing the
             // active period against itself would yield zero — keeps the UI
@@ -2725,7 +2742,12 @@ class GlobeApp {
         const source = this._diagSource();
         const anomaly = this._xsAnomActive();
         const xsOpts = { seasonal, source, anomaly };
-        const fieldOpts = { seasonal, year, customRange };
+        // Field sections stay on pressure levels in θ coordinates (PV from
+        // ERA5's pressure-level PV) and add the isentropes of the same time
+        // slice, the globe's θ surface in bold.
+        const isen = this.state.vCoord === 'theta';
+        const fieldOpts = { seasonal, year, customRange,
+                            ...(isen ? { isentropes: THETA_LEVELS, markTheta: this.state.theta } : {}) };
         const anomRow = document.getElementById('xs-anom-row');
         if (anomRow) anomRow.hidden = !((xsDiag === 'psi' || xsDiag === 'epflux') && source);
         this._syncTransportControls();
@@ -2873,6 +2895,8 @@ class GlobeApp {
             // actually served it (zm.slice).
             const fieldSlice = ['per_year', 'custom_range'].includes(zm.slice?.period)
                 ? this._diagSourceSuffix() : '';
+            // θ coordinates: name the isentrope drawn bold.
+            const isenTag = zm.isentropes ? ` · θ = ${zm.isentropes.mark} K marked` : '';
             if (zm.transport) {
                 title.textContent = `${zm.name}  (${zm.units})${this._transportTitleSuffix()}`;
             } else if (zm.isDiagnostic) {
@@ -2880,10 +2904,10 @@ class GlobeApp {
             } else if (zm.kind === 'arc') {
                 const km = Math.round(zm.distanceKm).toLocaleString();
                 const suffix = zm.type === 'pl' ? '' : `  (${zm.units})`;
-                title.textContent = `Arc · ${zm.name} · ${km} km${suffix}${fieldSlice}`;
+                title.textContent = `Arc · ${zm.name} · ${km} km${suffix}${isenTag}${fieldSlice}`;
             } else {
                 const suffix = zm.type === 'pl' ? '' : `  (${zm.units})`;
-                title.textContent = `Zonal mean · ${zm.name}${suffix}${fieldSlice}`;
+                title.textContent = `Zonal mean · ${zm.name}${suffix}${isenTag}${fieldSlice}`;
             }
         }
         if (hint) {
@@ -2907,10 +2931,14 @@ class GlobeApp {
                 }[xsDiag] || 'Zonal-mean diagnostic';
                 const eddyDiag = ['epflux', 'mbudget', 'qbudget', 'hbudget', 'transport'].includes(xsDiag);
                 hint.innerHTML = desc + (eddyDiag ? this._diagEddyNote() : '');
-            } else if (zm.kind === 'arc') {
-                hint.innerHTML = '<span class="xs-kbd">⇧</span> + drag to redraw';
             } else {
-                hint.innerHTML = '<span class="xs-kbd">⇧</span> + drag globe to draw an arc';
+                const lines = zm.isentropes
+                    ? `Lines: isentropes ${THETA_LEVELS[0]}–${THETA_LEVELS[THETA_LEVELS.length - 1]} K, `
+                      + `the globe's ${zm.isentropes.mark} K bold · `
+                    : '';
+                hint.innerHTML = lines + (zm.kind === 'arc'
+                    ? '<span class="xs-kbd">⇧</span> + drag to redraw'
+                    : '<span class="xs-kbd">⇧</span> + drag globe to draw an arc');
             }
         }
         if (reset) reset.hidden = zm.kind !== 'arc';
