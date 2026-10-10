@@ -17,7 +17,7 @@ function tileBaseFor(period) {
         return IS_LOCAL ? 'data/tiles' : 'https://storage.googleapis.com/gc-atlas-era5/tiles';
     }
     if (period === 'per_year') {
-        // The per-year tree spans the merged 1991 → present span (raw +
+        // The per-year tree spans 1961 → present (raw_1961_1990 + raw +
         // raw_2021_*) and is keyed by both year and month. Tiles are
         // float16+gzip per pipeline/compress_tiles.py.
         return IS_LOCAL ? 'data/tiles_per_year' : 'https://storage.googleapis.com/gc-atlas-era5/tiles_per_year';
@@ -133,6 +133,50 @@ export async function loadManifest(period = 'default') {
 
 export function isReady(period = 'default') { return !!manifests.get(period); }
 
+// (year, month) pairs present in the per-year tree, as Sets of y*100+m,
+// built lazily from each var's `year_months`. Requests for months ERA5
+// hasn't published yet (or years outside the archive) are never fired —
+// they used to 404 on every re-render and leave the globe on an endless
+// "Loading" spinner (e.g. Single year → 2026 with the month set to Oct).
+const _perYearMonths = new Map();   // var name | '*' → Set
+function perYearMonthSet(name) {
+    const m = manifests.get('per_year');
+    if (!m) return null;
+    const key = name || '*';
+    if (_perYearMonths.has(key)) return _perYearMonths.get(key);
+    let ym = null;
+    if (name) ym = resolveField(name, 'per_year')?.meta.year_months || null;
+    if (!ym) {
+        // Derived fields (wspd, mse, …) have no per-year entry of their own;
+        // every per-year var comes out of the same pipeline run, so the
+        // first var's list stands for the tree.
+        for (const vars_ of Object.values(m.groups)) {
+            for (const meta of Object.values(vars_)) {
+                if (Array.isArray(meta.year_months) && meta.year_months.length) { ym = meta.year_months; break; }
+            }
+            if (ym) break;
+        }
+    }
+    const set = ym ? new Set(ym.map(([y, mo]) => y * 100 + mo)) : null;
+    _perYearMonths.set(key, set);
+    return set;
+}
+
+/** Is (year, month) in the per-year archive (for `name`, if given)?
+ *  Optimistic (true) until the per-year manifest has loaded. */
+export function perYearHasMonth(year, month, name = null) {
+    const set = perYearMonthSet(name);
+    return !set || set.has(year * 100 + month);
+}
+
+/** Latest { year, month } in the per-year archive, or null. */
+export function latestPerYearMonth() {
+    const set = perYearMonthSet(null);
+    if (!set || !set.size) return null;
+    const k = Math.max(...set);
+    return { year: Math.floor(k / 100), month: k % 100 };
+}
+
 /** Read-only view of a loaded manifest (or null). For UI code that wants to
  *  enumerate available years / levels / vars without round-tripping fetch. */
 export function getManifest(period = 'default') { return manifests.get(period) || null; }
@@ -203,6 +247,7 @@ export function requestField(name, { month, level, kind = 'mean', period = 'defa
     const eff = resolvePeriod(period);
     const r = resolveField(name, eff);
     if (!r) return null;
+    if (eff === 'per_year' && year != null && !perYearHasMonth(year, month, name)) return null;
     const useLevel = r.meta.levels ? level : null;
     const key = keyOf(name, month, useLevel, kind, eff, year);
     const hit = cache.get(key);
@@ -233,6 +278,32 @@ export function requestField(name, { month, level, kind = 'mean', period = 'defa
     return null;
 }
 
+// Per-tile dequantization ranges (meta.tiles) used to ride along in the
+// root manifest, which made the per-year manifest 10-20 MB. A slim
+// manifest (compress_tiles.py --slim-manifest) leaves them out; they're
+// then fetched once per variable from <group>/<var>/meta.json, which the
+// pipeline already publishes next to the tiles. Fat manifests still work.
+const tileMetaLoads = new Map();   // `${period}|${group}|${name}` → Promise
+function ensureTileMeta(group, name, meta, period) {
+    if (meta.tiles) return Promise.resolve(meta.tiles);
+    const key = `${period}|${group}|${name}`;
+    if (!tileMetaLoads.has(key)) {
+        tileMetaLoads.set(key, (async () => {
+            try {
+                const resp = await fetch(`${tileBaseFor(period)}/${group}/${name}/meta.json`, { cache: 'no-cache' });
+                if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                const full = await resp.json();
+                meta.tiles = full.tiles || {};
+            } catch (err) {
+                console.warn(`[era5] per-tile metadata failed for ${group}/${name}:`, err);
+                tileMetaLoads.delete(key);   // let a later request retry
+            }
+            return meta.tiles || null;
+        })());
+    }
+    return tileMetaLoads.get(key);
+}
+
 async function fetchTile(name, group, meta, month, level, kind = 'mean', period = 'default', year = null) {
     const key = keyOf(name, month, level, kind, period, year);
     cache.set(key, 'pending');
@@ -243,6 +314,9 @@ async function fetchTile(name, group, meta, month, level, kind = 'mean', period 
     tilesInBatch += 1;
     notifyProgress();
     try {
+        // Start the per-tile metadata load (a no-op with a fat manifest)
+        // alongside the tile itself.
+        const tilesMeta = meta.encoding === 'f16-gz' ? ensureTileMeta(group, name, meta, period) : null;
         const resp = await fetch(url);
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         let values;
@@ -253,7 +327,7 @@ async function fetchTile(name, group, meta, month, level, kind = 'mean', period 
             const buf = await new Response(decompressed).arrayBuffer();
             const u16 = new Uint16Array(buf);
             const tk = tileMetaKey(meta, level, month, period, year);
-            const t = meta.tiles?.[tk];
+            const t = (await tilesMeta)?.[tk];
             if (!t) throw new Error(`no per-tile metadata for ${tk}`);
             const range = (t.vmax - t.vmin) / 65534;
             values = new Float32Array(u16.length);
@@ -359,6 +433,7 @@ export function prefetchField(name, { level = null, months = [1,2,3,4,5,6,7,8,9,
     if (kind === 'mean' && r.meta.has_mean === false) return;
     const useLevel = r.meta.levels ? level : null;
     for (const m of months) {
+        if (eff === 'per_year' && year != null && !perYearHasMonth(year, m, name)) continue;
         const key = keyOf(name, m, useLevel, kind, eff, year);
         if (!cache.has(key)) fetchTile(name, r.group, r.meta, m, useLevel, kind, eff, year);
     }

@@ -1470,6 +1470,17 @@
             animation: gc-spin 0.9s linear infinite;
         }
         @keyframes gc-spin { to { transform: rotate(360deg); } }
+        /* Notice variant: the requested month isn't in the archive (not
+           yet published, or before the per-year tree starts). No spinner —
+           nothing is loading. */
+        .globe-loading-card.is-notice {
+            border-radius: 14px;
+            max-width: min(420px, calc(100% - 32px));
+            line-height: 1.45;
+            letter-spacing: 0.02em;
+        }
+        .globe-loading-card.is-notice .globe-loading-spinner,
+        .globe-loading-card.is-notice .globe-loading-progress { display: none; }
 
         /* ── GIF export modal ─────────────────────────────── */
         .gif-modal {
@@ -1951,14 +1962,30 @@
                     <label class="field-label" for="composite-index">Index</label>
                     <select id="composite-index"
                             title="Which monthly climate index to threshold on. RONI is the ENSO signal with the global warming trend removed — recommended for spanning the full 1950–2026 period.">
-                        <option value="roni" selected>RONI — ENSO (detrended)</option>
-                        <option value="oni">ONI — ENSO (traditional)</option>
-                        <option value="pna">PNA — Pacific/North American</option>
-                        <option value="pdo">PDO — Pacific Decadal Oscillation</option>
-                        <option value="nao">NAO — North Atlantic Oscillation</option>
-                        <option value="ao">AO — Arctic Oscillation</option>
-                        <option value="amm">AMM — Atlantic Meridional Mode</option>
-                        <option value="pmm">PMM — Pacific Meridional Mode</option>
+                        <optgroup label="ENSO">
+                            <option value="roni" selected>RONI — ENSO (detrended)</option>
+                            <option value="oni">ONI — ENSO (traditional)</option>
+                            <option value="tni">TNI — Trans-Niño (ENSO flavor)</option>
+                        </optgroup>
+                        <optgroup label="Pacific">
+                            <option value="pna">PNA — Pacific/North American</option>
+                            <option value="pdo">PDO — Pacific Decadal Oscillation</option>
+                            <option value="npgo">NPGO — North Pacific Gyre Oscillation</option>
+                            <option value="pmm">PMM — Pacific Meridional Mode</option>
+                        </optgroup>
+                        <optgroup label="Atlantic">
+                            <option value="nao">NAO — North Atlantic Oscillation</option>
+                            <option value="amm">AMM — Atlantic Meridional Mode</option>
+                            <option value="amo">AMO — Atlantic Multidecadal Oscillation</option>
+                        </optgroup>
+                        <optgroup label="Annular modes">
+                            <option value="ao">AO — Arctic Oscillation (NAM)</option>
+                            <option value="sam">SAM — Southern Annular Mode</option>
+                        </optgroup>
+                        <optgroup label="Tropics &amp; stratosphere">
+                            <option value="qbo">QBO — Quasi-Biennial Oscillation (30 hPa)</option>
+                            <option value="iod">IOD — Indian Ocean Dipole</option>
+                        </optgroup>
                     </select>
                     <p class="field-help" id="composite-index-desc" style="margin-top:4px;"></p>
                     <div class="composite-thresh-row">
@@ -1970,7 +1997,7 @@
                             </select>
                             <input id="composite-threshold" type="number" step="0.1"
                                    class="range-input" value="1.0"
-                                   title="Threshold value in the index's native units (standardized for PNA/NAO/AO, °C for ONI/RONI).">
+                                   title="Threshold value in the index's native units (°C for ONI/RONI, m/s for QBO, standardized for most others).">
                         </div>
                     </div>
                     <p class="field-help" style="margin-top:6px;">

@@ -9,7 +9,7 @@
 // jets, Hadley return, stationary waves, subtropical highs). They exist so
 // the renderer works offline / before real tiles are staged.
 
-import { requestField as requestEra5, availableLevels, cachedMonth, getManifest } from './era5.js';
+import { requestField as requestEra5, availableLevels, cachedMonth, getManifest, perYearHasMonth } from './era5.js';
 
 // Does the manifest for `period` carry pipeline-materialised std tiles for
 // this derived field? Used to un-gate σ-anom on wspd / mse / dls once the
@@ -284,6 +284,10 @@ function composeCustomRangeMean(name, month, level, spec) {
     const count = new Uint16Array(N);
     let anyMissing = false;
     for (const y of years) {
+        // Skip months that aren't in the per-year archive (e.g. a range
+        // ending in the current year): they would never arrive, and the
+        // mean would wait on them forever.
+        if (!perYearHasMonth(y, month, name)) continue;
         const tile = requestEra5(name, {
             month, level, period: 'per_year', year: y, kind: 'mean',
         });
@@ -351,6 +355,9 @@ function _derivedYearEval(name, opts, year) {
 function composeDerivedComposite(name, opts, years) {
     const grids = [];
     for (const y of years) {
+        // Months ERA5 hasn't published yet (or outside the archive) can
+        // never load — average over the event years that exist.
+        if (!perYearHasMonth(y, opts.month)) continue;
         const e = _derivedYearEval(name, opts, y);
         if (!e || !e.values) return null;   // pending → caller re-tries
         grids.push(e.values);

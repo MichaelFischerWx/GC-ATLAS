@@ -9,7 +9,7 @@ import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 import { fillRGBA, fillColorbar, COLORMAPS, meanLuminance } from './colormap.js';
 import { getField, FIELDS, LEVELS, THETA_LEVELS, MONTHS, GRID, invalidateIsentropicCache, isThetaOnly, customRangeYears, fieldHasStdTiles, expectedTilesForView, hasCachedIngredients } from './data.js';
-import { loadIndices, getIndex, eventYears, compositeLabel } from './indices.js';
+import { loadIndices, getIndex, eventYears, compositeLabel, lastIndexMonth } from './indices.js';
 import { ParticleField } from './particles.js';
 import { BarbField } from './barbs.js';
 import { ContourField } from './contours.js';
@@ -18,7 +18,7 @@ import { SunLight } from './sun.js';
 import { OrbitScene, ORBIT_RADIUS } from './orbit.js';
 import { computeZonalMean, computeArcCrossSection, renderCrossSection, samplePanel } from './cross_section.js';
 import { greatCircleArc, linearLatLonArc, latLonToVec3, gcDistanceKm, greatCircleMidpoint, linearLatLonMidpoint, threePointArc } from './arc.js';
-import { loadManifest, onFieldLoaded, onTileProgress, isReady as era5Ready, prefetchField, cachedMonth, registerClamps, setActivePeriod, getManifest } from './era5.js';
+import { loadManifest, onFieldLoaded, onTileProgress, isReady as era5Ready, prefetchField, cachedMonth, registerClamps, setActivePeriod, getManifest, perYearHasMonth, latestPerYearMonth, activePeriodLabel } from './era5.js';
 import { decompose, annualMeanFrom, aggregatedDecompositionRange } from './decompose.js';
 import { HoverProbe } from './hover.js';
 import { computeMassStreamfunction, computeAngularMomentum, computeBruntVaisala, computeGeostrophicWind } from './diagnostics.js';
@@ -53,6 +53,25 @@ const DEFAULT_VIEW = { lat: 35, lon: -95, distance: 3.35 };
 // Equirectangular map dimensions (width 4, height 2 → lon spans [-2, 2], lat spans [-1, 1]).
 const MAP_W = 4;
 const MAP_H = 2;
+
+// Tiles each cross-section diagnostic reads: pressure-level fields sampled
+// at every level in LEVELS, plus single-level fields some overlay (surface
+// fluxes, friction / mountain torque). One table drives both the prefetch
+// and the "re-render when an ingredient lands" check.
+const XS_DIAG_INGREDIENTS = {
+    psi:     { pl: ['v'] },
+    M:       { pl: ['u'] },
+    ug:      { pl: ['z'] },
+    N2:      { pl: ['t'] },
+    epflux:  { pl: ['u', 'v', 'w', 't'] },
+    mbudget: { pl: ['u', 'v', 'w'],                sl: ['ews', 'oro', 'sp'] },
+    qbudget: { pl: ['u', 'v', 'w', 'q'],           sl: ['slhf', 'tp'] },
+    hbudget: { pl: ['u', 'v', 'w', 't', 'z', 'q'], sl: ['slhf', 'sshf', 'ssr', 'str', 'tisr', 'ttr'] },
+};
+function xsDiagUses(diag, name) {
+    const ing = XS_DIAG_INGREDIENTS[diag];
+    return !!ing && ((ing.pl || []).includes(name) || (ing.sl || []).includes(name));
+}
 
 // Split a polyline at points where consecutive x-coords jump by more than
 // `maxJump` (i.e., the line crosses the equirectangular map's seam when the
@@ -225,6 +244,11 @@ class GlobeApp {
         // get colorbars based on their bulk distribution rather than isolated
         // topographic / convective extremes.
         registerClamps(FIELDS);
+        // A URL-restored diagnostic panel otherwise waits for the main
+        // field's tile before its first draw — which never comes when the
+        // main view is an unpublished month. Draw (and prefetch) it now.
+        if (this.state.showXSection && this.state.xsDiag !== 'field') this.updateXSection();
+        if (this.state.showLorenz) this.updateLorenz();
         // Load the climate-index table used by the composite builder. Fires
         // the UI refresh once it lands so the event list populates. A
         // shared URL may carry a composite spec ("cr=c:roni:ge:1.0:1")
@@ -237,7 +261,7 @@ class GlobeApp {
                 // Wait for per-year manifest so the availability clip
                 // doesn't fall back to "no clip" and re-introduce 404s.
                 loadManifest('per_year').then(() => {
-                    const { kept: years } = this._clipToAvailableYears(raw);
+                    const { kept: years } = this._clipToAvailableYears(raw, cr.month);
                     if (!years.length) return;
                     const label = compositeLabel(cr.id, cr.month, cr.cmp, cr.threshold);
                     this.setState({
@@ -407,6 +431,16 @@ class GlobeApp {
                     && period === 'per_year') {
                     this._scheduleTimeseriesRender();
                 }
+                // The cross-section diagnostics and the Lorenz panel always
+                // read the active climatology, even while the globe shows a
+                // single year or a composite — keep them refreshing as their
+                // tiles land (they used to stall on "Loading" here).
+                const isActiveClimo = period === s.climatologyPeriod
+                    || (period === 'default' && s.climatologyPeriod === 'default');
+                if (isActiveClimo && monthMatches) {
+                    if (s.showXSection && xsDiagUses(s.xsDiag, name)) this.updateXSection();
+                    if (s.showLorenz && ['u', 'v', 'w', 't'].includes(name)) this.updateLorenz();
+                }
                 return;   // don't trigger any of the active-period logic
             }
             const isenActive  = (s.vCoord === 'theta');
@@ -478,14 +512,7 @@ class GlobeApp {
             // ψ needs v at every level; M needs u at every level; N² needs T;
             // EP flux needs u, v, w, t. Refresh the panel whenever a relevant
             // tile lands so the diagnostic sharpens as the cache warms up.
-            const diagNeeds = (s.xsDiag === 'psi'    && name === 'v')
-                           || (s.xsDiag === 'M'      && name === 'u')
-                           || (s.xsDiag === 'ug'     && name === 'z')
-                           || (s.xsDiag === 'N2'     && name === 't')
-                           || (s.xsDiag === 'epflux' && (name === 'u' || name === 'v' || name === 'w' || name === 't'))
-                           || (s.xsDiag === 'mbudget' && (name === 'u' || name === 'v' || name === 'w'))
-                           || (s.xsDiag === 'qbudget' && (name === 'u' || name === 'v' || name === 'w' || name === 'q'))
-                           || (s.xsDiag === 'hbudget' && (name === 'u' || name === 'v' || name === 'w' || name === 't' || name === 'z' || name === 'q'));
+            const diagNeeds = xsDiagUses(s.xsDiag, name);
             if (s.showXSection && diagNeeds && monthMatches) {
                 this.updateXSection();
             }
@@ -2027,49 +2054,7 @@ class GlobeApp {
             // Diagnostics sample a specific component field at every
             // pressure level — prefetch them all so the panel fills in
             // quickly when the user switches mode.
-            if (patch.xsDiag === 'psi') {
-                for (const L of LEVELS) prefetchField('v', { level: L });
-            } else if (patch.xsDiag === 'M') {
-                for (const L of LEVELS) prefetchField('u', { level: L });
-            } else if (patch.xsDiag === 'ug') {
-                for (const L of LEVELS) prefetchField('z', { level: L });
-            } else if (patch.xsDiag === 'N2') {
-                for (const L of LEVELS) prefetchField('t', { level: L });
-            } else if (patch.xsDiag === 'epflux') {
-                for (const L of LEVELS) {
-                    prefetchField('u', { level: L });
-                    prefetchField('v', { level: L });
-                    prefetchField('w', { level: L });
-                    prefetchField('t', { level: L });
-                }
-            } else if (patch.xsDiag === 'mbudget') {
-                for (const L of LEVELS) {
-                    prefetchField('u', { level: L });
-                    prefetchField('v', { level: L });
-                    prefetchField('w', { level: L });
-                }
-            } else if (patch.xsDiag === 'qbudget') {
-                for (const L of LEVELS) {
-                    prefetchField('u', { level: L });
-                    prefetchField('v', { level: L });
-                    prefetchField('w', { level: L });
-                    prefetchField('q', { level: L });
-                }
-                // Surface E-P overlay needs slhf + tp (single-level).
-                prefetchField('slhf', {});
-                prefetchField('tp',   {});
-            } else if (patch.xsDiag === 'hbudget') {
-                for (const L of LEVELS) {
-                    prefetchField('u', { level: L });
-                    prefetchField('v', { level: L });
-                    prefetchField('w', { level: L });
-                    prefetchField('t', { level: L });
-                    prefetchField('z', { level: L });
-                    prefetchField('q', { level: L });
-                }
-                // Surface heating overlay: turbulent fluxes + radiation.
-                for (const sl of ['slhf','sshf','ssr','str','tisr','ttr']) prefetchField(sl, {});
-            }
+            this.prefetchXsDiag(patch.xsDiag);
             // Show / hide the budget sub-controls. Same panel UI is shared
             // across all three budgets — the term labels are generic enough.
             const isBudget = ['mbudget','qbudget','hbudget'].includes(patch.xsDiag);
@@ -2460,7 +2445,13 @@ class GlobeApp {
             const mj = val / 1e6;
             setText(id, mj >= 100 ? mj.toFixed(0) : mj.toFixed(1));
         };
+        const title = document.getElementById('lorenz-title');
+        if (title) title.textContent = 'Lorenz energy cycle · stationary eddies' + this._climoOnlySuffix();
         if (!cycle) {
+            // Ingredients not cached yet — e.g. a shared link that opens the
+            // panel (URL restore skips setState's prefetch). Fetch them;
+            // onFieldLoaded re-runs this as they land.
+            this._prefetchIngredients({ pl: ['u', 'v', 'w', 't'] });
             setText('lz-PM','…'); setText('lz-PE','…'); setText('lz-KM','…'); setText('lz-KE','…');
             return;
         }
@@ -2488,6 +2479,68 @@ class GlobeApp {
         setArrow('lz-arrow-PMKM', cycle.conversions.C_PM_KM);
     }
 
+    /** Prefetch every tile a cross-section diagnostic reads. The displayed
+     *  month (± one when the 3-month seasonal mean is on) goes first so the
+     *  panel fills in quickly; the rest of the year follows so month
+     *  scrubbing stays smooth. Idempotent: cached / in-flight tiles are
+     *  skipped. */
+    prefetchXsDiag(diag) {
+        const ing = XS_DIAG_INGREDIENTS[diag];
+        if (ing) this._prefetchIngredients(ing);
+    }
+
+    /** Prefetch { pl: [...], sl: [...] } ingredient tiles (see
+     *  prefetchXsDiag for the ordering). */
+    _prefetchIngredients(ing) {
+        const m = this.state.month;
+        const first = this.state.seasonal ? [((m + 10) % 12) + 1, m, (m % 12) + 1] : [m];
+        for (const months of [first, undefined]) {
+            for (const L of LEVELS) {
+                for (const name of ing.pl || []) prefetchField(name, { level: L, months });
+            }
+            for (const name of ing.sl || []) prefetchField(name, { months });
+        }
+    }
+
+    /** True when every pressure-level tile the diagnostic needs for this
+     *  month is cached (single-level overlays are optional). */
+    _xsDiagReady(diag) {
+        const ing = XS_DIAG_INGREDIENTS[diag];
+        if (!ing) return true;
+        const { month, seasonal } = this.state;
+        return LEVELS.every(L => (ing.pl || []).every(name =>
+            cachedMonth(name, month, L, 'mean', 'default', null, seasonal)));
+    }
+
+    /** The diagnostic couldn't be drawn. Usually its ingredient tiles aren't
+     *  cached yet: start the fetches and say so in the panel, instead of
+     *  drawing the plain field section under a ψ / EP-flux label (which is
+     *  what a shared link to a diagnostic used to show, since URL restore
+     *  bypasses setState and its prefetch). onFieldLoaded re-runs
+     *  updateXSection as tiles land. If the tiles are all there, the
+     *  selection itself isn't drawable (e.g. the all-terms overlay in 2-D). */
+    _xsDiagPending(canvas, diag) {
+        const ready = this._xsDiagReady(diag);
+        if (!ready) this.prefetchXsDiag(diag);
+        const opt = document.querySelector(`#xs-diag-select option[value="${diag}"]`);
+        const label = opt ? opt.textContent.trim() : diag;
+        const DPR = Math.min(window.devicePixelRatio || 1, 2);
+        canvas.width  = (canvas.clientWidth  || 380) * DPR;
+        canvas.height = (canvas.clientHeight || 200) * DPR;
+        const ctx = canvas.getContext('2d');
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = '#AEC3B6';
+        ctx.font = `${11 * DPR}px 'JetBrains Mono', monospace`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(ready ? 'Not available for this term / aggregation'
+                           : `Loading tiles for ${label}…`,
+                     canvas.width / 2, canvas.height / 2);
+        const title = document.getElementById('xs-title');
+        if (title) title.textContent = label;
+        this._xsLastZm = null;
+    }
+
     updateXSection() {
         const canvas = document.getElementById('xs-canvas');
         if (!canvas) return;
@@ -2502,7 +2555,7 @@ class GlobeApp {
         if (xsDiag === 'psi') {
             zm = computeMassStreamfunction(month, xsOpts);
             if (!zm) {
-                zm = computeZonalMean(field, month, xsOpts);
+                return this._xsDiagPending(canvas, xsDiag);
             } else {
                 effCmap = 'RdBu_r';
                 zm.contourInterval = 20;             // 10⁹ kg/s
@@ -2510,7 +2563,7 @@ class GlobeApp {
         } else if (xsDiag === 'M') {
             zm = computeAngularMomentum(month, xsOpts);
             if (!zm) {
-                zm = computeZonalMean(field, month, xsOpts);
+                return this._xsDiagPending(canvas, xsDiag);
             } else {
                 effCmap = 'viridis';
                 zm.contourInterval = 0.5;            // 10⁹ m²/s
@@ -2518,7 +2571,7 @@ class GlobeApp {
         } else if (xsDiag === 'ug') {
             zm = computeGeostrophicWind(month, xsOpts);
             if (!zm) {
-                zm = computeZonalMean(field, month, xsOpts);
+                return this._xsDiagPending(canvas, xsDiag);
             } else {
                 effCmap = 'RdBu_r';                  // signed: westerly + / easterly −
                 zm.contourInterval = 10;             // m/s, matches u contour
@@ -2526,7 +2579,7 @@ class GlobeApp {
         } else if (xsDiag === 'N2') {
             zm = computeBruntVaisala(month, xsOpts);
             if (!zm) {
-                zm = computeZonalMean(field, month, xsOpts);
+                return this._xsDiagPending(canvas, xsDiag);
             } else {
                 effCmap = 'magma';
                 zm.contourInterval = 1;              // 10⁻⁴ s⁻²
@@ -2534,7 +2587,7 @@ class GlobeApp {
         } else if (xsDiag === 'epflux') {
             zm = computeEPFlux(month, xsOpts);
             if (!zm) {
-                zm = computeZonalMean(field, month, xsOpts);
+                return this._xsDiagPending(canvas, xsDiag);
             } else {
                 effCmap = 'RdBu_r';                  // ∇·F shading: westerly + / easterly −
                 zm.contourInterval = 2;              // m s⁻¹ day⁻¹
@@ -2547,7 +2600,7 @@ class GlobeApp {
                 seasonal,
             });
             if (!zm) {
-                zm = computeZonalMean(field, month, xsOpts);
+                return this._xsDiagPending(canvas, xsDiag);
             } else {
                 effCmap = 'RdBu_r';
                 zm.suppressContours = true;
@@ -2560,7 +2613,7 @@ class GlobeApp {
                 seasonal,
             });
             if (!zm) {
-                zm = computeZonalMean(field, month, xsOpts);
+                return this._xsDiagPending(canvas, xsDiag);
             } else {
                 effCmap = 'RdBu_r';
                 zm.suppressContours = true;
@@ -2573,7 +2626,7 @@ class GlobeApp {
                 seasonal,
             });
             if (!zm) {
-                zm = computeZonalMean(field, month, xsOpts);
+                return this._xsDiagPending(canvas, xsDiag);
             } else {
                 effCmap = 'RdBu_r';
                 zm.suppressContours = true;
@@ -2623,7 +2676,7 @@ class GlobeApp {
         const reset = document.getElementById('xs-reset');
         if (title) {
             if (zm.isDiagnostic) {
-                title.textContent = `${zm.name}  (${zm.units})`;
+                title.textContent = `${zm.name}  (${zm.units})${this._climoOnlySuffix()}`;
             } else if (zm.kind === 'arc') {
                 const km = Math.round(zm.distanceKm).toLocaleString();
                 const suffix = zm.type === 'pl' ? '' : `  (${zm.units})`;
@@ -2752,7 +2805,8 @@ class GlobeApp {
             customRange: this.state.customRange,
             seasonal,
         });
-        this.setLoadingOverlay(!f.isReal);
+        this.setLoadingOverlay(!f.isReal,
+            f.isReal || this.state.customRange ? null : this._perYearNotice(this.state.year, month));
         // Stash the expected-tiles-for-first-paint snapshot for the overlay
         // progress counter. Computed once per updateField call; stays stable
         // while the tiles stream in. Only needs to be refreshed on pending
@@ -2946,7 +3000,9 @@ class GlobeApp {
         this.emit('field-updated', { field: fDecorated });
     }
 
-    setLoadingOverlay(visible) {
+    /** Show / hide the loading overlay. With `notice`, the card shows that
+     *  text instead of the spinner (nothing is loading). */
+    setLoadingOverlay(visible, notice = null) {
         let el = document.getElementById('globe-loading');
         if (!el) {
             el = document.createElement('div');
@@ -2958,7 +3014,33 @@ class GlobeApp {
                 + '</div>';
             this.mount.appendChild(el);
         }
+        el.querySelector('.globe-loading-card')?.classList.toggle('is-notice', !!notice);
+        const text = el.querySelector('.globe-loading-text');
+        if (text) text.textContent = notice || 'Loading ERA5 tiles…';
         el.classList.toggle('visible', !!visible);
+    }
+
+    /** The cross-section diagnostics and the Lorenz panel are computed
+     *  from the active climatology only. When the globe is showing a single
+     *  year or a composite, say so — otherwise e.g. "ψ for Jan 1998" is
+     *  really the 1991–2020 January ψ. */
+    _climoOnlySuffix() {
+        const s = this.state;
+        if (s.year == null && !s.customRange) return '';
+        return ` · ${activePeriodLabel()} climatology`;
+    }
+
+    /** Notice text when single-year mode asks for a month the per-year
+     *  archive doesn't have, or null if it does. */
+    _perYearNotice(year, month) {
+        if (year == null || perYearHasMonth(year, month)) return null;
+        const latest = latestPerYearMonth();
+        const asked = `${MONTHS[month - 1]} ${year}`;
+        if (latest && year * 100 + month > latest.year * 100 + latest.month) {
+            return `${asked} isn't published yet — ERA5 monthly means appear about a week `
+                 + `after each month ends. Latest available: ${MONTHS[latest.month - 1]} ${latest.year}.`;
+        }
+        return `${asked} is outside the per-year archive.`;
     }
 
     /** "X of Y tiles loaded" progress for the loading overlay.
@@ -3397,8 +3479,27 @@ class GlobeApp {
         const el = document.getElementById('sidebar-status');
         if (!el) return;
         if (f.isReal) {
-            el.innerHTML = '<strong>ERA5 · 1991–2020</strong>' +
-                'Monthly-mean climatology at 1° grid, served from <code>gs://gc-atlas-era5</code>.';
+            // Describe what's on screen, not just the default climatology.
+            const s = this.state;
+            const cr = s.customRange;
+            const nYears = cr ? customRangeYears(cr).length : 0;
+            let head, body;
+            if (s.year != null) {
+                head = `ERA5 · ${MONTHS[s.month - 1]} ${s.year}`;
+                body = 'Single-month mean at 1° grid.';
+            } else if (cr && cr.id) {
+                head = `ERA5 · ${cr.label || 'Composite'}`;
+                body = `Composite mean of ${nYears} event year${nYears === 1 ? '' : 's'} at 1° grid.`;
+            } else if (cr) {
+                head = `ERA5 · ${cr.start}–${cr.end} mean`;
+                body = 'Multi-year mean of single-year tiles at 1° grid.';
+            } else {
+                head = `ERA5 · ${activePeriodLabel()}`;
+                body = 'Monthly-mean climatology at 1° grid.';
+            }
+            const strong = document.createElement('strong');
+            strong.textContent = head;
+            el.replaceChildren(strong, body);
         } else {
             el.innerHTML = '<strong>Loading…</strong>' +
                 'Fetching the ERA5 tile for this field. It should render in a moment.';
@@ -3684,7 +3785,16 @@ class GlobeApp {
                     if (Object.keys(patch).length) this.setState(patch);
                 } else if (mode === 'year') {
                     const patch = { customRange: null };
-                    const y = yearSlider ? Number(yearSlider.value) : null;
+                    let y = yearSlider ? Number(yearSlider.value) : null;
+                    // The slider defaults to the newest year, which usually
+                    // lacks the displayed month (October, browsed in
+                    // October). Start on the most recent year that has it.
+                    const latest = latestPerYearMonth();
+                    if (Number.isFinite(y) && latest && !perYearHasMonth(y, this.state.month)) {
+                        y = latest.month >= this.state.month ? latest.year : latest.year - 1;
+                        if (yearSlider) yearSlider.value = String(y);
+                        if (yearDisplay) yearDisplay.textContent = String(y);
+                    }
                     if (Number.isFinite(y) && y !== this.state.year) patch.year = y;
                     this.setState(patch);
                 } else if (mode === 'range') {
@@ -4174,7 +4284,21 @@ class GlobeApp {
         const slidCB  = document.getElementById('toggle-sliding-climo');
         if (!sel || !btn) return;
         const refresh = () => this.refreshCompositeUI();
-        sel    .addEventListener('change', refresh);
+        // QBO is in m/s; every other index is standardized or in °C, where
+        // ±1 is a sensible cut. Swap the threshold scale when crossing that
+        // boundary so "QBO ≥ +1" (≈ every westerly month) isn't the default.
+        let prevId = sel.value;
+        sel.addEventListener('change', () => {
+            const t = thresh ? Number(thresh.value) : NaN;
+            if (thresh && Number.isFinite(t)) {
+                const toQbo = sel.value === 'qbo' && prevId !== 'qbo';
+                const fromQbo = prevId === 'qbo' && sel.value !== 'qbo';
+                if (toQbo && Math.abs(t) < 5) thresh.value = String(Math.sign(t || 1) * 10);
+                if (fromQbo && Math.abs(t) >= 5) thresh.value = String(Math.sign(t) * 1);
+            }
+            prevId = sel.value;
+            refresh();
+        });
         cmpSel ?.addEventListener('change', refresh);
         thresh ?.addEventListener('input',  refresh);
         btn.addEventListener('click', () => {
@@ -4198,20 +4322,18 @@ class GlobeApp {
     // index tables reach back to 1948/1950 but the per-year tile tree
     // starts at 1961 — requesting earlier years would 404 on every
     // fetch, so the UI silently drops them (and notes the clip).
-    _clipToAvailableYears(years) {
-        const mfst = getManifest('per_year');
-        let available = null;
-        for (const grp of Object.values(mfst?.groups || {})) {
-            for (const v of Object.values(grp)) {
-                if (Array.isArray(v.years) && v.years.length) { available = v.years; break; }
-            }
-            if (available) break;
-        }
-        if (!available) return { kept: years, dropped: [] };
+    _clipToAvailableYears(years, month = null) {
+        const available = this._availablePerYears();
+        if (!available.length) return { kept: years, dropped: [], span: null };
         const set = new Set(available);
-        const kept = years.filter(y => set.has(y));
-        const dropped = years.filter(y => !set.has(y));
-        return { kept, dropped };
+        // With a month, also drop years whose month isn't published yet
+        // (an event in the current year can't load until it is).
+        const ok = (y) => set.has(y) && (month == null || perYearHasMonth(y, month));
+        return {
+            kept: years.filter(ok),
+            dropped: years.filter(y => !ok(y)),
+            span: [available[0], available[available.length - 1]],
+        };
     }
 
     refreshCompositeUI() {
@@ -4236,7 +4358,13 @@ class GlobeApp {
             btn.disabled = true;
             return;
         }
-        if (descDiv) descDiv.textContent = ix.description || '';
+        if (descDiv) {
+            // Upstream series end at different times (some providers have
+            // stopped updating), so say how far each one runs.
+            const last = lastIndexMonth(id);
+            descDiv.textContent = (ix.description || '')
+                + (last ? ` Data through ${MONTHS[last.month - 1]} ${last.year}.` : '');
+        }
         if (srcDiv) {
             // Clickable "Source →" link so users can read the provenance
             // of each index (NOAA PSL / CPC pages with methodology notes).
@@ -4256,19 +4384,20 @@ class GlobeApp {
 
         const month = this.state.month;
         const raw   = eventYears(id, month, cmp, threshold);
-        const { kept: years, dropped } = this._clipToAvailableYears(raw);
+        const { kept: years, dropped, span } = this._clipToAvailableYears(raw, month);
         if (years.length === 0) {
             if (eventsDiv) {
                 eventsDiv.textContent = raw.length === 0
                     ? 'No matching years for this threshold.'
-                    : `All ${raw.length} matching year(s) predate the ERA5 per-year tile tree (1961–present).`;
+                    : `None of the ${raw.length} matching year(s) are in the per-year archive`
+                      + (span ? ` (${span[0]}–${span[1]}) for ${MONTHS[month - 1]}.` : '.');
             }
             btn.disabled = true;
             return;
         }
         if (eventsDiv) {
             const note = dropped.length
-                ? `<div style="opacity:0.6; margin-top:4px; font-size:0.62rem;">Dropped ${dropped.length} pre-1961 year${dropped.length === 1 ? '' : 's'}: ${dropped.join(', ')}</div>`
+                ? `<div style="opacity:0.6; margin-top:4px; font-size:0.62rem;">Not in the per-year archive${span ? ` (${span[0]}–${span[1]})` : ''} for ${MONTHS[month - 1]}: ${dropped.join(', ')}</div>`
                 : '';
             eventsDiv.innerHTML =
                 `<strong>${years.length} event${years.length === 1 ? '' : 's'}</strong> · ${years.join(', ')}${note}`;
@@ -4316,10 +4445,10 @@ class GlobeApp {
         const threshold = thresh ? Number(thresh.value) : NaN;
         if (!Number.isFinite(threshold)) return;
         const month = this.state.month;
-        // Clip to years that have per-year tiles (1961–present). Without
-        // this, pre-1961 events fire 404s against the tile bucket.
+        // Clip to years that have per-year tiles for this month. Without
+        // this, events outside the archive fire 404s against the bucket.
         const { kept: years } = this._clipToAvailableYears(
-            eventYears(id, month, cmp, threshold));
+            eventYears(id, month, cmp, threshold), month);
         if (years.length === 0) return;
         // Prefetch per-year ingredient tiles. For raw fields this is just
         // the field tile at the displayed level. For derived (PV, wspd,

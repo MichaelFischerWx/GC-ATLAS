@@ -13,25 +13,49 @@
 let _cache = null;       // resolved JSON payload
 let _pending = null;     // in-flight promise
 
-/** Load data/indices.json exactly once. Resolves to the payload or null
- *  if the file is missing (e.g. user opened the repo without running
+const IS_LOCAL = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+// The monthly refresh (bin/era5-monthly-refresh.sh) republishes indices.json
+// to the tile bucket, so the deployed site picks up new index months
+// without a git push. The copy in the repo is the fallback.
+const SOURCES = IS_LOCAL
+    ? ['data/indices.json']
+    : ['https://storage.googleapis.com/gc-atlas-era5/indices.json', 'data/indices.json'];
+
+/** Load indices.json exactly once. Resolves to the payload (empty if no
+ *  source answered, e.g. the repo was opened without running
  *  pipeline/update_indices.py). */
 export async function loadIndices() {
     if (_cache) return _cache;
     if (_pending) return _pending;
     _pending = (async () => {
-        try {
-            const resp = await fetch('data/indices.json', { cache: 'no-cache' });
-            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-            _cache = await resp.json();
-            return _cache;
-        } catch (err) {
-            console.warn('[indices] load failed:', err);
-            _cache = { updated: null, indices: {} };
-            return _cache;
+        for (const url of SOURCES) {
+            try {
+                const resp = await fetch(url, { cache: 'no-cache' });
+                if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                _cache = await resp.json();
+                return _cache;
+            } catch (err) {
+                console.warn(`[indices] load failed (${url}):`, err);
+            }
         }
+        _cache = { updated: null, indices: {} };
+        return _cache;
     })();
     return _pending;
+}
+
+/** Last { year, month } with a value in the named index, or null. */
+export function lastIndexMonth(id) {
+    const ix = getIndex(id);
+    if (!ix) return null;
+    const years = Object.keys(ix.values).map(Number).filter(Number.isFinite).sort((a, b) => b - a);
+    for (const y of years) {
+        const row = ix.values[String(y)] || [];
+        for (let m = 12; m >= 1; m--) {
+            if (row[m - 1] != null && Number.isFinite(row[m - 1])) return { year: y, month: m };
+        }
+    }
+    return null;
 }
 
 export function getIndex(id) {
