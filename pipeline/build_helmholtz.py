@@ -95,9 +95,11 @@ def main() -> int:
             raw_dirs = [ROOT / d.strip() if not Path(d.strip()).is_absolute() else Path(d.strip())
                         for d in args.raw_dirs.split(",") if d.strip()]
         else:
+            # data/raw + every raw_YYYY_YYYY sibling, including raw_1961_1990:
+            # the per-year tree is 1961 → present (see build_tiles.py).
             raw_dirs = [DEFAULT_RAW_DIR]
             for sib in sorted((ROOT / "data").glob("raw_*")):
-                if sib.is_dir() and sib.name != "raw_1961_1990":
+                if sib.is_dir():
                     raw_dirs.append(sib)
         LOG.info("per-year mode → %s", out_dir.parent.name)
         for d in raw_dirs:
@@ -286,6 +288,17 @@ def main() -> int:
             meta["years"] = years
             meta["year_months"] = [[y, m] for (y, m) in ymonths]
             meta["source_dirs"] = [str(d.name) for d in raw_dirs]
+        # Keep per-tile dequantization entries for tiles this run doesn't
+        # rewrite (e.g. add_pressure_levels.py's 400/600 hPa chi/psi);
+        # compress_tiles.py refreshes the rest. Same rule as build_tiles.py.
+        old_meta_path = out_subdir / "meta.json"
+        if old_meta_path.exists():
+            try:
+                old_tiles = json.loads(old_meta_path.read_text()).get("tiles")
+            except (OSError, ValueError):
+                old_tiles = None
+            if old_tiles:
+                meta["tiles"] = old_tiles
         (out_subdir / "meta.json").write_text(json.dumps(meta, indent=2))
         LOG.info("done   %s   range=[%.3g, %.3g]", short, meta["vmin"], meta["vmax"])
 
@@ -300,7 +313,7 @@ def refresh_manifest(tiles_root: Path):
     """Walk a tiles root and regenerate manifest.json — same logic build_tiles.py uses."""
     groups: dict = {}
     for group_dir in sorted(tiles_root.iterdir()):
-        if not group_dir.is_dir():
+        if not group_dir.is_dir() or "__add_" in group_dir.name:
             continue
         vars_: dict = {}
         for var_dir in sorted(group_dir.iterdir()):

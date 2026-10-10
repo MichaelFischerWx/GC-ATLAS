@@ -17,8 +17,8 @@ What it does:
      and recomputes vmin/vmax over the union of old + new tiles.
   5. Re-writes manifest.json so the frontend dropdown picks up the new
      levels automatically (globe.js reads `levels` from the manifest).
-  6. Optionally gzips the new .bin files so they match the existing
-     .bin.gz tile encoding.
+  6. Optionally encodes the new .bin files as f16-gz (via compress_tiles.py)
+     so they match the existing .bin.gz tile encoding + per-tile metadata.
 
 Three modes mirror build_tiles.py:
     --period 1991-2020 (default)         climatology tree → data/tiles/
@@ -39,7 +39,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import gzip
 import json
 import logging
 import re
@@ -192,7 +191,7 @@ def compute_helmholtz_at_levels(u_da: xr.DataArray, v_da: xr.DataArray,
 
 # ── meta.json + manifest update ──────────────────────────────
 def _scan_tile_minmax(var_dir: Path, kind: str = "mean") -> tuple[float, float]:
-    """Walk every .bin / .bin.gz tile in var_dir matching `kind` and return
+    """Walk every uncompressed .bin tile in var_dir matching `kind` and return
     the global (vmin, vmax). kind='mean' picks plain {level?}_{month}.bin;
     kind='std' picks std_{level?}_{month}.bin. Read all → np.fromfile is fine
     for our largest case (~ a few GB across all years), but in practice
@@ -200,19 +199,18 @@ def _scan_tile_minmax(var_dir: Path, kind: str = "mean") -> tuple[float, float]:
     vmin, vmax = np.inf, -np.inf
     for tile in var_dir.iterdir():
         name = tile.name
-        if not name.endswith((".bin", ".bin.gz")):
+        # Only raw float32 .bin tiles can be read directly. Compressed
+        # .bin.gz tiles are f16-quantized and meaningless without their
+        # per-tile vmin/vmax (reading them as float32 produced ±3.4e38 here);
+        # compress_tiles.py recomputes the var-level range from those entries.
+        if not name.endswith(".bin"):
             continue
         is_std = name.startswith("std_")
         if kind == "mean" and is_std:
             continue
         if kind == "std" and not is_std:
             continue
-        if name.endswith(".bin.gz"):
-            with gzip.open(tile, "rb") as f:
-                buf = f.read()
-        else:
-            buf = tile.read_bytes()
-        arr = np.frombuffer(buf, dtype="<f4")
+        arr = np.frombuffer(tile.read_bytes(), dtype="<f4")
         if arr.size == 0:
             continue
         finite = arr[np.isfinite(arr)]
@@ -282,7 +280,7 @@ def write_helmholtz_meta(var_dir: Path, da: xr.DataArray, short: str,
 def rewrite_manifest(out_dir: Path) -> None:
     groups: dict = {}
     for group_dir in sorted(out_dir.iterdir()):
-        if not group_dir.is_dir():
+        if not group_dir.is_dir() or "__add_" in group_dir.name:
             continue
         vars_: dict = {}
         for var_dir in sorted(group_dir.iterdir()):
@@ -297,21 +295,14 @@ def rewrite_manifest(out_dir: Path) -> None:
 
 # ── Compression (mirrors compress_tiles.py) ───────────────────
 def gzip_new_tiles(var_dir: Path, levels: list[int]) -> None:
-    """Gzip the .bin files we just wrote so they match the existing
-    .bin.gz encoding. Removes the .bin afterwards. Skips files that are
-    already .bin.gz (idempotent)."""
-    for tile in list(var_dir.iterdir()):
-        name = tile.name
-        if not name.endswith(".bin"):
-            continue
-        # Only compress tiles for the new levels — leave others alone.
-        if not any(name.startswith(f"{L}_") or name.startswith(f"std_{L}_")
-                   for L in levels):
-            continue
-        gz = tile.with_suffix(".bin.gz")
-        with tile.open("rb") as fin, gzip.open(gz, "wb", compresslevel=6) as fout:
-            fout.write(fin.read())
-        tile.unlink()
+    """Encode the .bin files we just wrote as f16-gz, recording per-tile
+    vmin/vmax in meta.json — the same encoding and bookkeeping as every
+    other tile in the tree. (This used to gzip raw float32, which the
+    frontend's f16 decoder can't read and which never got a meta["tiles"]
+    entry.) compress_var_dir only touches .bin files, so tiles already
+    encoded are left alone and their metadata is kept."""
+    from compress_tiles import compress_var_dir
+    compress_var_dir(var_dir, gzip_level=9, force=True)
 
 
 # ── Driver ────────────────────────────────────────────────────

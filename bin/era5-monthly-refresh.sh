@@ -4,35 +4,42 @@
 #
 # Driven by ~/Library/LaunchAgents/com.fischerwx.era5-monthly-refresh.plist
 # (10th of each month at 9am local). The pipeline is itself idempotent —
-# download_era5.py skips files already on disk, build_tiles.py skips up-to-
-# date var dirs, gsutil rsync only uploads new/changed files. So if there's
-# no new ERA5 data this month, the run finishes in a few minutes with a
-# "no changes" notification and we don't push anything.
+# download_era5.py appends only newly published months, compress_tiles.py
+# leaves byte-identical tiles untouched (so their mtimes don't change), and
+# gsutil rsync then uploads only new/changed tiles. If there's no new ERA5
+# data this month the run finishes with a "no new data" notification.
 #
 # Steps:
-#   1. probe GCS for the latest tiled (year, month) — establishes a baseline
-#   2. download_era5.py             (CDS → data/raw/, data/raw_2021_NNNN/)
-#   3. add_pressure_levels.py       (sidecars for 400 + 600 hPa)
-#   4. build_tiles.py --per-year    (regenerate per-year tiles)
-#   5. build_helmholtz.py --per-year (chi/psi from u, v)
-#   6. build_mpi.py    --per-year   (Bister-Emanuel MPI)
-#   7. compress_tiles.py            (.bin → .bin.gz with f16 quantization)
-#   8. gsutil rsync data/tiles_per_year/ gs://gc-atlas-era5/tiles_per_year/
-#   9. probe GCS again, post a macOS notification with the diff
+#   0. roll the 2021-YYYY raw dir forward at a year boundary (see below)
+#   1. download_era5.py             (CDS → data/raw_2021_YYYY/, incremental)
+#   2. build_tiles.py --per-year    (per-year tiles, 1961 → present)
+#   3. build_helmholtz.py --per-year (chi/psi from u, v)
+#   4. add_pressure_levels.py       (400 + 600 hPa sidecars; MPI needs them)
+#   5. build_mpi.py    --per-year   (Bister-Emanuel MPI)
+#   6. compress_tiles.py            (.bin → .bin.gz, f16 quantization)
+#   7. validate_manifest.py         (refuse to publish a regressed tree)
+#   8. gsutil rsync tiles, then the manifest last (so clients never see a
+#      manifest that points at tiles not uploaded yet)
+#   9. update_indices.py + upload data/indices.json (composite builder)
+#  10. probe GCS again, post a macOS notification with the diff
 #
-# Env: assumes anaconda Python (~/anaconda3) on $PATH and ~/.cdsapirc set up.
+# Env: assumes anaconda Python (/opt/anaconda3) on $PATH and ~/.cdsapirc.
 #
-# Manual extension: era5_variables.yaml's `period` only covers the base
-# 1991-2020 climatology. The rolling 2021-NNNN raw dir's name is hard-
-# coded in build_tiles.py's auto-detect (raw_2021_2026 today). When ERA5
-# lapses into a new year boundary (e.g., into 2027), bump the dir name
-# and re-run this script. Search this file for ROLL_PERIOD to update.
+# Year boundary: recent years live in one rolling dir, data/raw_2021_YYYY,
+# whose name tracks the current year. On the first run of a new year the
+# dir is renamed (raw_2021_2026 → raw_2021_2027) and the incremental
+# download appends the new months. Renaming instead of starting a second
+# dir matters: two overlapping raw_2021_* dirs would both be merged into
+# the per-year tree and break the time axis.
 
 set -euo pipefail
 
-ROLL_PERIOD="2021-2026"   # update annually as ERA5 publishes the next year
+ROLL_START=2021
+ROLL_END=$(date +%Y)
+ROLL_PERIOD="${ROLL_START}-${ROLL_END}"
 ROOT="$HOME/github/Gen_Circ"
 BUCKET="gs://gc-atlas-era5"
+PUBLIC="https://storage.googleapis.com/gc-atlas-era5"
 LOG_DIR="$HOME/Library/Logs"
 LOG="$LOG_DIR/era5-pipeline.log"
 LOCK="/tmp/era5-monthly-refresh.lock"
@@ -55,8 +62,17 @@ notify() {
     /usr/bin/osascript -e "display notification \"$1\" with title \"ERA5 Pipeline\"" 2>/dev/null || true
 }
 
+fail() {
+    log "FAIL: $1"
+    notify "ERA5 refresh failed at $1 — check $LOG"
+    exit 1
+}
+
+# Latest (year-month) in the PUBLISHED per-year manifest. Must go through
+# the public HTTPS endpoint — curl can't fetch gs:// URLs (it used to try,
+# so every notification said "still at unknown").
 probe_gcs_latest() {
-    /usr/bin/curl -sf "$BUCKET/tiles_per_year/manifest.json" 2>/dev/null \
+    /usr/bin/curl -sf --compressed "$PUBLIC/tiles_per_year/manifest.json" 2>/dev/null \
         | python -c "import json,sys; m=json.load(sys.stdin); ym=m['groups']['single_levels']['sst']['year_months']; y,mn=max(ym); print(f'{y}-{mn:02d}')" \
         2>/dev/null || echo "unknown"
 }
@@ -68,74 +84,84 @@ log "era5-monthly-refresh start  (roll period: $ROLL_PERIOD)"
 LATEST_BEFORE=$(probe_gcs_latest)
 log "GCS latest before: $LATEST_BEFORE"
 
+# 0. Roll the rolling raw dir forward at a year boundary.
+ROLL_DIR="data/raw_${ROLL_START}_${ROLL_END}"
+if [ ! -d "$ROLL_DIR" ]; then
+    PREV_DIR=$(ls -d data/raw_${ROLL_START}_[0-9][0-9][0-9][0-9] 2>/dev/null | sort | tail -1 || true)
+    if [ -n "$PREV_DIR" ]; then
+        log "0/9  rename $PREV_DIR → $ROLL_DIR (new year)"
+        mv "$PREV_DIR" "$ROLL_DIR"
+    fi
+fi
+
 # 1. download_era5.py
 # --incremental: for files already on disk, append only newly-published
 # months along the time axis instead of skipping the file outright.
-log "1/8  download_era5.py --period $ROLL_PERIOD --incremental"
-python pipeline/download_era5.py --period "$ROLL_PERIOD" --incremental >> "$LOG" 2>&1 || {
-    log "FAIL: download_era5.py — see log for CDS details"
-    notify "ERA5 download failed — check $LOG"
-    exit 1
-}
+log "1/9  download_era5.py --period $ROLL_PERIOD --incremental"
+python pipeline/download_era5.py --period "$ROLL_PERIOD" --incremental >> "$LOG" 2>&1 \
+    || fail "download_era5.py (CDS) — see log"
 
-# 2. add_pressure_levels.py — add 400/600 hPa sidecar netCDFs and tiles.
-# --incremental applies to the sidecar fetch (same skip-bug as download_era5).
-log "2/8  add_pressure_levels.py --levels 400,600 --per-year --incremental"
-python pipeline/add_pressure_levels.py --levels 400,600 --per-year --incremental >> "$LOG" 2>&1 || {
-    log "FAIL: add_pressure_levels.py"
-    notify "ERA5 add_pressure_levels failed — check $LOG"
-    exit 1
-}
-
-# 3. build_tiles.py --per-year --force — rebuild every (year, month) tile.
+# 2. build_tiles.py --per-year --force — rebuild every (year, month) tile.
 # --force is required: build_tiles otherwise skips any var dir that already
-# exists, so once a tree is on disk it never picks up a new month from the
-# extended raw NetCDFs. Deterministic quantization means rsync still skips
-# unchanged tiles downstream, so the cost is local CPU only.
-log "3/8  build_tiles.py --per-year --force"
-python pipeline/build_tiles.py --per-year --force >> "$LOG" 2>&1 || {
-    log "FAIL: build_tiles.py"
-    notify "ERA5 build_tiles failed — check $LOG"
-    exit 1
-}
+# exists, so it would never pick up a new month from the extended NetCDFs.
+# Unchanged tiles come out byte-identical and are not re-uploaded.
+log "2/9  build_tiles.py --per-year --force"
+python pipeline/build_tiles.py --per-year --force >> "$LOG" 2>&1 || fail "build_tiles.py"
 
-# 4. Helmholtz: chi/psi from u, v. --force for the same reason as build_tiles.
-log "4/8  build_helmholtz.py --per-year --force"
-python pipeline/build_helmholtz.py --per-year --force >> "$LOG" 2>&1 || {
-    log "FAIL: build_helmholtz.py"
-    notify "ERA5 helmholtz failed — check $LOG"
-    exit 1
-}
+# 3. Helmholtz: chi/psi from u, v. --force for the same reason as build_tiles.
+log "3/9  build_helmholtz.py --per-year --force"
+python pipeline/build_helmholtz.py --per-year --force >> "$LOG" 2>&1 || fail "build_helmholtz.py"
+
+# 4. add_pressure_levels.py — 400/600 hPa sidecar netCDFs (+ tiles). Runs
+# after build_tiles so its `levels` update on each meta.json isn't
+# overwritten; MPI (step 5) reads the sidecar netCDFs directly.
+log "4/9  add_pressure_levels.py --levels 400,600 --per-year --incremental"
+python pipeline/add_pressure_levels.py --levels 400,600 --per-year --incremental >> "$LOG" 2>&1 \
+    || fail "add_pressure_levels.py"
 
 # 5. MPI via tcpyPI. --force always rebuilds the MPI tree because it depends
 # on every component tile and the engine doesn't track its own staleness.
-log "5/8  build_mpi.py --per-year --force"
-python pipeline/build_mpi.py --per-year --force >> "$LOG" 2>&1 || {
-    log "FAIL: build_mpi.py"
-    notify "ERA5 build_mpi failed — check $LOG"
-    exit 1
-}
+log "5/9  build_mpi.py --per-year --force"
+python pipeline/build_mpi.py --per-year --force >> "$LOG" 2>&1 || fail "build_mpi.py"
 
-# 6. Compress the new tiles to f16-gz so they have meta.encoding=='f16-gz'
-# and era5.js fetches them at the right URL. --force re-runs through every
-# var dir even if meta already says f16-gz, so the new months actually get
-# encoded and meta.tiles is repopulated with the full set.
-log "6/8  compress_tiles.py --root data/tiles_per_year --force"
-python pipeline/compress_tiles.py --root data/tiles_per_year --force >> "$LOG" 2>&1 || {
-    log "FAIL: compress_tiles.py"
-    notify "ERA5 compress failed — check $LOG"
-    exit 1
-}
+# 6. Compress new .bin tiles to f16-gz. --force walks every var dir; per-tile
+# metadata is merged (not replaced), so tiles not rebuilt this run keep it.
+log "6/9  compress_tiles.py --root data/tiles_per_year --force"
+python pipeline/compress_tiles.py --root data/tiles_per_year --force >> "$LOG" 2>&1 \
+    || fail "compress_tiles.py"
 
-# 7. gsutil rsync — only uploads new / changed files (size + mtime hash).
-log "7/8  gsutil rsync data/tiles_per_year/ → $BUCKET/tiles_per_year/"
-gsutil -m rsync -r data/tiles_per_year/ "$BUCKET/tiles_per_year/" >> "$LOG" 2>&1 || {
-    log "FAIL: gsutil rsync"
-    notify "ERA5 GCS upload failed — check $LOG"
-    exit 1
-}
+# 7. Refuse to publish a tree that lost years, months, or decode metadata.
+NOT_BEFORE_ARGS=()
+if [ "$LATEST_BEFORE" != "unknown" ]; then NOT_BEFORE_ARGS=(--not-before "$LATEST_BEFORE"); fi
+log "7/9  validate_manifest.py"
+python pipeline/validate_manifest.py --root data/tiles_per_year --min-first-year 1961 \
+    "${NOT_BEFORE_ARGS[@]+"${NOT_BEFORE_ARGS[@]}"}" >> "$LOG" 2>&1 \
+    || fail "validate_manifest.py (nothing uploaded)"
 
-# 8. Diff before/after to decide what to tell the user.
+# 8. Upload tiles (new / changed only), then the manifest last. -q keeps
+# per-file progress bars out of the log. The manifest goes up gzip-encoded
+# (-Z: ~6x smaller on the wire, browsers decode transparently) with a short
+# must-revalidate cache so clients pick up new months quickly.
+log "8/9  gsutil rsync data/tiles_per_year/ → $BUCKET/tiles_per_year/"
+gsutil -q -m rsync -r -x '.*__add_.*|manifest\.json$' \
+    data/tiles_per_year/ "$BUCKET/tiles_per_year/" >> "$LOG" 2>&1 || fail "gsutil rsync"
+gsutil -q -h "Cache-Control:public,max-age=300,must-revalidate" \
+    cp -Z data/tiles_per_year/manifest.json "$BUCKET/tiles_per_year/manifest.json" >> "$LOG" 2>&1 \
+    || fail "manifest upload"
+
+# 9. Climate indices for the composite builder. Non-fatal: a provider being
+# down shouldn't block a tile refresh. The frontend reads indices.json from
+# the bucket (falling back to the copy in the repo).
+log "9/9  update_indices.py"
+if python pipeline/update_indices.py >> "$LOG" 2>&1; then
+    gsutil -q -h "Cache-Control:public,max-age=300,must-revalidate" \
+        cp -Z data/indices.json "$BUCKET/indices.json" >> "$LOG" 2>&1 \
+        || log "WARN: indices.json upload failed"
+else
+    log "WARN: update_indices.py failed — indices.json not refreshed"
+fi
+
+# 10. Diff before/after to decide what to tell the user.
 LATEST_AFTER=$(probe_gcs_latest)
 log "GCS latest after:  $LATEST_AFTER"
 

@@ -43,7 +43,7 @@ Usage:
     python pipeline/build_tiles.py --force
     python pipeline/build_tiles.py --period 1961-1990                 # alternate climatology window
     python pipeline/build_tiles.py --per-year \\
-        --raw-dirs data/raw,data/raw_2021_2026                        # merged 1991-2026 per-year tree
+        --raw-dirs data/raw_1961_1990,data/raw,data/raw_2021_2026     # merged 1961-2026 per-year tree
 """
 from __future__ import annotations
 
@@ -96,7 +96,7 @@ def parse_args() -> argparse.Namespace:
                     help="comma-separated list of raw NetCDF directories to merge along time. "
                          "Per-year mode: union of dirs becomes the per-year tree. "
                          "Climatology mode (--period): union of dirs is then subset to the period years. "
-                         "Default per-year: data/raw[,data/raw_2021_2026 if present].")
+                         "Default per-year: data/raw plus every data/raw_YYYY_YYYY sibling (1961 → present).")
     ap.add_argument("--resolution", type=float, default=1.0,
                     help="target grid spacing in degrees (default 1.0; source is 0.5)")
     ap.add_argument("--force", action="store_true", help="rebuild even if output exists")
@@ -295,6 +295,7 @@ def _write_climatology(da: xr.DataArray, group: str, short: str,
         "resolution_deg": res,
         "source_nc": src_name,
     }
+    _carry_over_tile_meta(out_dir / "meta.json", meta)
     (out_dir / "meta.json").write_text(json.dumps(meta, indent=2))
 
     LOG.info("done  %s/%s  %dx%d  levels=%s  range=[%.3g, %.3g]  std-range=[%.3g, %.3g]",
@@ -373,6 +374,7 @@ def _write_per_year(da: xr.DataArray, group: str, short: str,
         "resolution_deg": res,
         "source_dirs": [str(d.name) for d in RAW_DIRS],
     }
+    _carry_over_tile_meta(out_dir / "meta.json", meta)
     (out_dir / "meta.json").write_text(json.dumps(meta, indent=2))
 
     nfiles = len(months_present) * (len(levels) if levels else 1)
@@ -380,10 +382,33 @@ def _write_per_year(da: xr.DataArray, group: str, short: str,
              group, short, nlat, nlon, nfiles, vmin, vmax)
 
 
+def _carry_over_tile_meta(meta_path: Path, meta: dict) -> None:
+    """Keep per-tile dequantization metadata across a meta.json rewrite.
+
+    compress_tiles.py records each .bin.gz tile's vmin/vmax under
+    meta["tiles"], and the frontend can't decode a tile without its entry.
+    Rewriting meta.json from scratch would orphan every compressed tile this
+    run doesn't regenerate (e.g. the 400/600 hPa levels added by
+    add_pressure_levels.py), so carry the old entries forward —
+    compress_tiles.py overwrites the ones it re-encodes and prunes any whose
+    file no longer exists."""
+    if not meta_path.exists():
+        return
+    try:
+        old = json.loads(meta_path.read_text())
+    except (OSError, ValueError):
+        return
+    if old.get("tiles"):
+        meta["tiles"] = old["tiles"]
+
+
 def write_manifest() -> None:
     groups: dict = {}
     for group_dir in sorted(OUT_DIR.iterdir()):
         if not group_dir.is_dir():
+            continue
+        # Stale output from the sidecar-as-variable bug (see main()).
+        if "__add_" in group_dir.name:
             continue
         vars_: dict = {}
         for var_dir in sorted(group_dir.iterdir()):
@@ -433,13 +458,15 @@ def main() -> int:
             RAW_DIRS = [ROOT / d.strip() if not Path(d.strip()).is_absolute() else Path(d.strip())
                         for d in args.raw_dirs.split(",") if d.strip()]
         else:
-            # Auto-detect: data/raw + any data/raw_YYYY_YYYY siblings except the
-            # canonical climate-change reference (raw_1961_1990, kept separate
-            # so a per-year tree doesn't accidentally pool 1961-1990 into the
-            # "modern" climatology).
+            # Auto-detect: data/raw + every data/raw_YYYY_YYYY sibling,
+            # including raw_1961_1990. The per-year tree is 1961 → present;
+            # per-year tiles are never pooled into a climatology, so there's
+            # no reason to hold the 1961-1990 dir back. (Excluding it here
+            # made every monthly refresh rewrite meta.json as 1991+ only,
+            # orphaning the 1961-1990 tiles already on GCS.)
             RAW_DIRS = [DEFAULT_RAW_DIR]
             for sib in sorted((ROOT / "data").glob("raw_*")):
-                if sib.is_dir() and sib.name != "raw_1961_1990":
+                if sib.is_dir():
                     RAW_DIRS.append(sib)
         RAW_DIR = RAW_DIRS[0]
         LOG.info("per-year mode → %s", OUT_DIR.name)
@@ -453,6 +480,12 @@ def main() -> int:
     # were told to merge. Missing files in later dirs are tolerated by
     # _open_var_for_period (it just won't find that file).
     for nc in sorted(RAW_DIR.glob("era5_*.nc")):
+        # Sidecars from add_pressure_levels.py (era5_pressure_levels_u__add_400_600.nc)
+        # hold extra levels for an existing variable, not a variable of their
+        # own. Tiling them here invented groups like "pressure_levels_u__add_400"
+        # with a variable named "600" (~1.6 GB of duplicate tiles per run).
+        if "__add_" in nc.stem:
+            continue
         parts = nc.stem.split("_")
         group = "_".join(parts[1:-1])
         short = parts[-1]
