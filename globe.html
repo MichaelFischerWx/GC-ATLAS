@@ -2308,7 +2308,8 @@ K_E = (1/2g) ∫ ⟨u*² + v*²⟩ dp       (eddy KE)</pre>
                 <p style="font-size: 0.74rem;">where T̂ = [T] − T_ref (zonal-mean departure from reference), T* = T − [T] (stationary-eddy departure from zonal mean), γ(p) = κT_ref/p − ∂T_ref/∂p (static stability), [·] is zonal mean, ⟨·⟩ is global area-mean. Leading factor R/(2g) is the Holton–Hakim / Vallis form (using c_p/2g instead overshoots by ~3.5×).</p>
                 <p><b>Conversions</b> — each has a clean physical reading:</p>
                 <pre>C(P_M→P_E) = -(R/g) ∫ ⟨v*T*⟩/(γp) · ∂[T]/∂y dp
-              -(R/g) ∫ ⟨ω*T*⟩ · p^-κ ∂(p^κ T̂/(γp))/∂p dp
+              -(R/g) ∫ ⟨ω*T*⟩ p^-κ ·
+                 ∂(p^κ T̂/(γp))/∂p dp
    ► baroclinic release — eddy heat flux
      down the mean T gradient
 

@@ -27,11 +27,20 @@
 //
 // Conversions (W/m²):
 //   C(P_M → P_E) = -(R/g) · ∫ ⟨v*T*⟩ / (γ p) · ∂[T]/∂y · dp
-//                  -(R/g) · ∫ ⟨ω*T*⟩ / (γ p) · ∂[T]/∂p · dp
+//                  -(R/g) · ∫ ⟨ω*T*⟩ · p^-κ ∂(p^κ T̂ / (γ p))/∂p · dp
 //   C(P_E → K_E) = -(R/g) · ∫ ⟨ω*T*⟩ / p · dp           (eddy buoyancy flux)
-//   C(K_M → K_E) =  (1/g) · ∫ ⟨u*v*⟩ cosφ · ∂([u]/cosφ)/∂y · dp        (eddy momentum)
+//   C(K_E → K_M) =  (1/g) · ∫ ⟨u*v*⟩ cosφ · ∂([u]/cosφ)/∂y · dp        (eddy momentum)
 //                  +(1/g) · ∫ ⟨u*ω*⟩ · ∂[u]/∂p · dp
 //   C(P_M → K_M) = -(R/g) · ∫ [ω][T] / p · dp           (mean meridional circulation)
+//
+// The vertical term of C(P_M → P_E) is Peixoto & Oort's (1974; 1992 ch. 14)
+// -c_p ∫ p^-κ [ω*T*] ∂(γ_PO p^κ T̂)/∂p dm with c_p γ_PO = R/(γ p): the term
+// P_M's own budget yields, and the one Li et al. (2007) evaluate. It acts on
+// T̂, not on [T]: the eddy heat flux working against the reference lapse rate
+// ∂T_ref/∂p is the eddy buoyancy flux, already in C(P_E → K_E). An earlier
+// version used ∂[T]/∂p, which added ~(∂T_ref/∂p / γ) × C(P_E → K_E) and
+// doubled the climatological C(P_M → P_E). The vertical leg of C(K_E → K_M)
+// has no reference state, so ∂[u]/∂p is right there.
 //
 // Stationary-eddy only — transient terms (covariances of high-frequency
 // departures from the monthly mean) require daily data and are out of scope.
@@ -308,24 +317,35 @@ export function computeLorenzCycle(month, refType = 'lorenz', { seasonal = false
     // Per-(lat) and per-(level) area / zonal aggregates we need.
     // Stationary eddy products: ⟨T*²⟩, ⟨u*²+v*²⟩, ⟨v*T*⟩, ⟨ω*T*⟩, ⟨u*v*⟩, ⟨u*ω*⟩
     // Built level-by-level. T̂ = [T] - T_ref also lives here.
-    const PE_int = new Float32Array(N);    // (cp/2g)·⟨T*²⟩/(γp) per level (vertical integrand, J/m²/Pa weighted by dp later)
+    const PE_int = new Float32Array(N);    // (R/2g)·⟨T*²⟩/(γp) per level (vertical integrand, J/m²/Pa weighted by dp later)
     const KE_int = new Float32Array(N);    // (1/2g)·⟨u*²+v*²⟩ per level
-    const PM_int = new Float32Array(N);    // (cp/2g)·area-mean(T̂²/(γp))
+    const PM_int = new Float32Array(N);    // (R/2g)·area-mean(T̂²/(γp))
     const KM_int = new Float32Array(N);    // (1/2g)·area-mean([u]²+[v]²)
 
     // Conversion integrands (per level, in p):
-    const cPMPE_y = new Float32Array(N);   // -(cp/g)·area-mean(⟨v*T*⟩/(γp) · ∂[T]/∂y)  (per level dp)
-    const cPMPE_p = new Float32Array(N);   // -(cp/g)·area-mean(⟨ω*T*⟩/(γp) · ∂[T]/∂p)
+    const cPMPE_y = new Float32Array(N);   // -(R/g)·area-mean(⟨v*T*⟩/(γp) · ∂[T]/∂y)  (per level dp)
+    const cPMPE_p = new Float32Array(N);   // -(R/g)·area-mean(⟨ω*T*⟩ · p^-κ ∂(p^κ T̂/(γp))/∂p)
     const cPEKE   = new Float32Array(N);   // -(R/g)·area-mean(⟨ω*T*⟩/p)
     const cKMKE_y = new Float32Array(N);   // (1/g)·area-mean(⟨u*v*⟩ · cos·∂([u]/cos)/∂y)
     const cKMKE_p = new Float32Array(N);   // (1/g)·area-mean(⟨u*ω*⟩ · ∂[u]/∂p)
     const cPMKM   = new Float32Array(N);   // -(R/g)·area-mean([ω][T]/p)   — note T̂ form below
 
+    // p^κ T̂/(γp) at every (level, lat), indexed [k * nlat + i] for
+    // dByDp_levels: what the vertical term of C(P_M → P_E) differentiates
+    // (Peixoto-Oort's γ_PO p^κ T̂, up to the constant c_p/R).
+    const ThatScaled = new Float64Array(N * nlat);
+    for (let k = 0; k < N; k++) {
+        const p = LEVELS[k] * 100;
+        const s = Math.pow(p, KAPPA) / Math.max(gamma[k] * p, 1e-9);
+        for (let i = 0; i < nlat; i++) ThatScaled[k * nlat + i] = (Tzm[k][i] - Tref[k]) * s;
+    }
+
     // For the meridional gradient ∂[T]/∂y we need [T] at each level and lat;
-    // for ∂[T]/∂p and ∂[u]/∂p we need vertical neighbours.
+    // for ∂[u]/∂p and ∂(p^κ T̂/(γp))/∂p we need vertical neighbours.
     for (let k = 0; k < N; k++) {
         const p = LEVELS[k] * 100;
         const gp = gamma[k] * p;
+        const pMinusKappa = Math.pow(p, -KAPPA);
         const cosArr = new Float32Array(nlat);
         let cosSum = 0;
         for (let i = 0; i < nlat; i++) {
@@ -355,7 +375,7 @@ export function computeLorenzCycle(month, refType = 'lorenz', { seasonal = false
         let acc_KMKE_y = 0, acc_KMKE_p = 0;
         let acc_PMKM   = 0;
 
-        // (∂[T]/∂p, ∂[u]/∂p computed inline per-lat below.)
+        // (∂[u]/∂p and ∂(p^κ T̂/(γp))/∂p computed per-lat below.)
 
         for (let i = 0; i < nlat; i++) {
             const c = cosArr[i];
@@ -391,21 +411,20 @@ export function computeLorenzCycle(month, refType = 'lorenz', { seasonal = false
             const That = (Number.isFinite(Tbar) ? Tbar : 0) - Tref[k];
             const Kmean_lat = (Ubar * Ubar + Vbar * Vbar);
 
-            // ∂[T]/∂p and ∂[u]/∂p centred-diff at (k, i)
-            let dTbar_dp, dUbar_dp;
+            // ∂[u]/∂p centred-diff at (k, i)
+            let dUbar_dp;
             if (k === 0) {
                 const dp = (LEVELS[1] - LEVELS[0]) * 100;
-                dTbar_dp = (Tzm[1][i] - Tzm[0][i]) / dp;
                 dUbar_dp = (Uzm[1][i] - Uzm[0][i]) / dp;
             } else if (k === N - 1) {
                 const dp = (LEVELS[N - 1] - LEVELS[N - 2]) * 100;
-                dTbar_dp = (Tzm[N - 1][i] - Tzm[N - 2][i]) / dp;
                 dUbar_dp = (Uzm[N - 1][i] - Uzm[N - 2][i]) / dp;
             } else {
                 const dp = (LEVELS[k + 1] - LEVELS[k - 1]) * 100;
-                dTbar_dp = (Tzm[k + 1][i] - Tzm[k - 1][i]) / dp;
                 dUbar_dp = (Uzm[k + 1][i] - Uzm[k - 1][i]) / dp;
             }
+            // p^-κ ∂(p^κ T̂/(γp))/∂p, same stencil.
+            const dThat_dp = pMinusKappa * dByDp_levels(ThatScaled, nlat, k, i);
 
             // Reservoirs at this (k, i): area-weight by c.
             acc_Tstar2 += T2_zon * c;          w_Tstar2 += c;
@@ -417,9 +436,10 @@ export function computeLorenzCycle(month, refType = 'lorenz', { seasonal = false
             // C(P_M → P_E)  -- meridional eddy heat flux acting on the gradient.
             if (Number.isFinite(dTdy[i]) && Number.isFinite(vT_zon))
                 acc_term_y += vT_zon * dTdy[i] * c;
-            // Plus the vertical-eddy-flux term acting on ∂[T]/∂p (small but include).
-            if (Number.isFinite(dTbar_dp) && Number.isFinite(wT_zon))
-                acc_term_p += wT_zon * dTbar_dp * c;
+            // Plus the vertical eddy heat flux acting on the vertical structure
+            // of T̂ (P&O form; small next to the meridional term).
+            if (Number.isFinite(dThat_dp) && Number.isFinite(wT_zon))
+                acc_term_p += wT_zon * dThat_dp * c;
 
             // C(P_E → K_E) — eddy buoyancy flux  -(R/g)·⟨ω*T*⟩/p
             if (Number.isFinite(wT_zon))
@@ -451,7 +471,7 @@ export function computeLorenzCycle(month, refType = 'lorenz', { seasonal = false
 
         // Conversion per-level integrands (units W/m²/Pa, integrate in p later).
         cPMPE_y[k] = -(R_DRY / G) * (acc_term_y / cs) / Math.max(gp, 1e-9);
-        cPMPE_p[k] = -(R_DRY / G) * (acc_term_p / cs) / Math.max(gp, 1e-9);
+        cPMPE_p[k] = -(R_DRY / G) * (acc_term_p / cs);   // 1/(γp) is inside ThatScaled
         cPEKE[k]   = -(R_DRY / G) * (acc_PEKE / cs) / p;
         cKMKE_y[k] = (1 / G) * (acc_KMKE_y / cs);
         cKMKE_p[k] = (1 / G) * (acc_KMKE_p / cs);
