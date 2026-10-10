@@ -547,29 +547,35 @@ export function getField(name, { month = 1, level = 500, coord = 'pressure', the
     //
     // If any of the three tiles is still pending, return the center month
     // so the display keeps painting — the seasonal mean fills in on the
-    // next render tick once the tile arrives (onFieldLoaded → updateField).
+    // next render tick once the tile arrives (onFieldLoaded → updateField,
+    // which listens for all three months).
     if (seasonal) {
         const prev = ((month + 10) % 12) + 1;   // m-1 with Dec wrap
         const next = (month %  12) + 1;         // m+1 with Dec wrap
-        const months = [prev, month, next];
+        // A single year's season can reach past the latest published month
+        // (JAS while October is out), and that tile never loads: average the
+        // months that exist, as the diagnostic panels do (diag_source.js).
+        const months = [prev, month, next].filter((m) =>
+            m === month || year == null || perYearHasMonth(year, m, name));
         const fs = months.map(m => getField(name, {
             month: m, level, coord, theta, kind, period, year, customRange,
             seasonal: false,
         }));
-        if (!fs.every(f => f.isReal)) return fs[1];
-        const N = fs[0].values.length;
+        const center = fs[months.indexOf(month)];
+        if (!fs.every(f => f.isReal)) return center;
+        const N = center.values.length;
         const out = new Float32Array(N);
         for (let i = 0; i < N; i++) {
             let s = 0, n = 0;
-            for (let j = 0; j < 3; j++) {
-                const v = fs[j].values[i];
+            for (const f of fs) {
+                const v = f.values[i];
                 if (Number.isFinite(v)) { s += v; n += 1; }
             }
             out[i] = n > 0 ? s / n : NaN;
         }
-        const vmin = Math.min(fs[0].vmin, fs[1].vmin, fs[2].vmin);
-        const vmax = Math.max(fs[0].vmax, fs[1].vmax, fs[2].vmax);
-        return { ...fs[1], values: out, vmin, vmax, seasonal: true, seasonalMonths: months };
+        const vmin = Math.min(...fs.map(f => f.vmin));
+        const vmax = Math.max(...fs.map(f => f.vmax));
+        return { ...center, values: out, vmin, vmax, seasonal: true, seasonalMonths: months };
     }
 
     // Custom-range composite: browser-side mean of per-year tiles over an

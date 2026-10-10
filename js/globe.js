@@ -415,6 +415,12 @@ class GlobeApp {
             // own name.
             const feedsDisplay = feedsCurrentField && (!needsLevelMatch || levelMatches);
             const anomalyView = s.decompose === 'anomaly' || s.decompose === 'zscore';
+            // The displayed month, or any month of the displayed 3-month
+            // season: the seasonal mean (and its anomaly reference) is only
+            // complete once the neighbouring months have landed — matching
+            // the displayed month alone left a fresh sn=1 link on the
+            // centre month for good.
+            const dispMonth = this._diagMonthMatches(month);
             // The wind overlay reads the climatology's u, v (u10, v10 under a
             // single-level field; T too on θ surfaces) whatever the time
             // slice, so let it retry before the branch below returns.
@@ -435,18 +441,18 @@ class GlobeApp {
                 const isRefForAnomaly = refTree === period
                                      && anomalyView
                                      && (thetaAnomalyWaiting ||
-                                         (feedsDisplay && monthMatches));
+                                         (feedsDisplay && dispMonth));
                 const isRefForCompare = s.compareMode
                                      && s.referencePeriod === period
                                      && s.compareYear == null
-                                     && feedsDisplay && monthMatches;
+                                     && feedsDisplay && dispMonth;
                 // Year-tile arrivals also drive the swipe right-half when
                 // the user has compareYear set (year-vs-* compare mode).
                 const isYearForCompare = s.compareMode
                                       && s.compareYear != null
                                       && period === 'per_year'
                                       && (year == null || year === s.compareYear)
-                                      && feedsDisplay && monthMatches;
+                                      && feedsDisplay && dispMonth;
                 if (isRefForAnomaly || isRefForCompare || isYearForCompare) {
                     // Pressure tiles for θ interpolation change the θ cube
                     // / isentropic caches for the reference period — bust
@@ -474,7 +480,7 @@ class GlobeApp {
                 const isSlidingClimoTile = s.slidingClimo
                     && s.customRange && s.year == null
                     && anomalyView
-                    && feedsDisplay && monthMatches
+                    && feedsDisplay && dispMonth
                     && slidingClimoWindow;
                 if (isSlidingClimoTile) this.updateField();
                 // Best-match reference: a single-year or year-vs-year
@@ -484,7 +490,7 @@ class GlobeApp {
                 const isBestMatchTile = s.referencePeriod === 'best-match'
                     && (s.year != null || s.compareYear != null)
                     && anomalyView
-                    && feedsDisplay && monthMatches
+                    && feedsDisplay && dispMonth
                     && slidingClimoWindow;
                 if (isBestMatchTile) this.updateField();
                 // Timeseries panel feeds from per-year tiles that aren't
@@ -516,7 +522,7 @@ class GlobeApp {
             }
             // MSE in pressure-coord is single-level (only the chosen level matters).
             // In θ-coord it gets caught by isenNeedsName above.
-            if (feedsDisplay && monthMatches) {
+            if (feedsDisplay && dispMonth) {
                 if (s.field === 'pv' || isenActive) invalidateIsentropicCache();
                 this.updateField();
             }
@@ -524,7 +530,7 @@ class GlobeApp {
             // Anomaly mode needs all 12 months to compute an accurate annual
             // mean; re-render whenever any month of the current field lands
             // so the anomaly sharpens as tiles come in.
-            if (feedsCurrentField && levelMatches && !monthMatches &&
+            if (feedsCurrentField && levelMatches && !dispMonth &&
                 s.decompose === 'anomaly') {
                 this.updateField();
             }
@@ -3130,7 +3136,7 @@ class GlobeApp {
                         const rightClimoPeriod = bestClimoFor(compareYear).id;
                         const rightClimo = getField(field, {
                             month, level, coord: vCoord, theta,
-                            kind: 'mean', period: rightClimoPeriod,
+                            kind: 'mean', period: rightClimoPeriod, seasonal,
                         });
                         if (rightClimo.isReal) rightAnnualMean = rightClimo.values;
                     }
@@ -3680,8 +3686,12 @@ class GlobeApp {
                     } else {
                         refArgs = { /* active climo — no extras */ };
                     }
+                    // Same months as the displayed field (the 3-month season
+                    // with the seasonal mean on); the colorbar pool below
+                    // stays monthly.
                     const refField = getField(fieldName, {
                         month: this.state.month, coord: 'theta', theta, ...refArgs,
+                        seasonal: this.state.seasonal,
                     });
                     annualMeanTheta = refField.isReal ? refField.values : null;
                     annualMeanForAgg = (m) => {
@@ -3783,12 +3793,15 @@ class GlobeApp {
                     && this.state.year == null
                     && Array.isArray(this.state.customRange.years)
                     && (refPeriod === 'default' || refPeriod === 'best-match');
-                const refForMonth = (m) => {
+                // `seasonal` makes the reference the same 3-month mean as the
+                // displayed field; the colorbar pool (called with just m)
+                // stays monthly.
+                const refForMonth = (m, seasonal = false) => {
                     if (useSliding) {
                         const w = this._weightedClimoForEvents(
                             this.state.field, m, this.state.level,
                             this.state.vCoord, this.state.theta,
-                            this.state.customRange.years,
+                            this.state.customRange.years, seasonal,
                         );
                         if (w) return w;
                         // Fall through to fixed-climo if any sliding tile
@@ -3802,17 +3815,19 @@ class GlobeApp {
                         theta: this.state.theta,
                         kind: 'mean',
                         period: fixedClimoPeriod,
+                        seasonal,
                     });
                     return rf.isReal ? rf.values : null;
                 };
-                annualMean = refForMonth(this.state.month);
-                annualMeanForAgg = refForMonth;
+                annualMean = refForMonth(this.state.month, this.state.seasonal);
+                annualMeanForAgg = (m) => refForMonth(m);
             } else if (refPeriod !== 'default') {
                 // Climate-change anomaly: same month from reference period.
                 // `kind` is propagated so when Display=±1σ we fetch the ref
                 // period's std tile (giving Δσ) instead of its mean tile.
                 // Derived fields (wspd, mse, dls) are computed from the
-                // reference period's own component tiles.
+                // reference period's own component tiles; with the seasonal
+                // mean on, the reference is the same 3-month mean.
                 const refField = getField(this.state.field, {
                     month: this.state.month,
                     level: this.state.level,
@@ -3820,6 +3835,7 @@ class GlobeApp {
                     theta: this.state.theta,
                     kind: this.state.kind,
                     period: refPeriod,
+                    seasonal: this.state.seasonal,
                 });
                 annualMean = refField.isReal ? refField.values : null;
                 // Per-month reference for the aggregator — without this every
@@ -5023,7 +5039,7 @@ class GlobeApp {
     // Returns null if any required climo window's tile hasn't loaded yet
     // (or its manifest doesn't exist on GCS — e.g. a window we haven't
     // built tiles for). Caller falls back to the active fixed period.
-    _weightedClimoForEvents(field, month, level, coord, theta, years) {
+    _weightedClimoForEvents(field, month, level, coord, theta, years, seasonal = false) {
         if (!Array.isArray(years) || years.length === 0) return null;
         const groups = groupEventsByClimo(years);
         const totalN = years.length;
@@ -5051,7 +5067,7 @@ class GlobeApp {
             }
             const climo = getField(field, {
                 month, level, coord, theta,
-                kind: 'mean', period: window.id,
+                kind: 'mean', period: window.id, seasonal,
             });
             if (!climo.isReal) { missing = true; continue; }
             const w = ys.length / totalN;
