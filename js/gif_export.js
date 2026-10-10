@@ -60,7 +60,8 @@ export class GifExporter {
         // Seasonal 3-month centered mean → DJF / JJA / NDJ label instead
         // of the single-month name. Exported images / GIFs need to be
         // self-describing for slides and papers.
-        const timeLabel = s.seasonal ? seasonLabel(s.month) : MONTHS[s.month - 1];
+        const timeLabel = s.annual ? 'Annual mean'
+            : s.seasonal ? seasonLabel(s.month) : MONTHS[s.month - 1];
         const subParts = [timeLabel];
         const cr = s.customRange;
         // Describe what's painted on the left half (the "active" view).
@@ -299,6 +300,7 @@ export class GifExporter {
      *  month. Waits up to 3 s per month for tiles to finish loading. */
     async captureAnnual({ frameDelayMs = 220, onProgress } = {}) {
         const priorMonth = this.app.state.month;
+        const priorAnnual = !!this.app.state.annual;   // stepping months leaves it
         const imgs = [];
         const months = [1,2,3,4,5,6,7,8,9,10,11,12];
         for (let i = 0; i < months.length; i++) {
@@ -315,7 +317,7 @@ export class GifExporter {
             onProgress?.(i + 1, months.length);
         }
         // Restore.
-        this.app.setState({ month: priorMonth });
+        this.app.setState({ month: priorMonth, annual: priorAnnual });
         return this._encode(imgs, frameDelayMs);
     }
 

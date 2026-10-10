@@ -210,28 +210,60 @@ export function availableLevels(name) {
     return r && r.meta.levels ? r.meta.levels.slice() : null;
 }
 
+// Window means (seasonal / annual) of cached tiles. Tiles never change once
+// cached, so a mean is computed once: the panels recompute on every tile
+// arrival, and re-averaging 12 months of each of an annual budget's 72
+// stacks per arrival froze the page. Bounded LRU (~260 KB each).
+const windowMeans = new Map();
+const MAX_WINDOW_MEANS = 160;
+export function rememberWindowMean(key, values) {
+    windowMeans.delete(key);
+    windowMeans.set(key, values);
+    while (windowMeans.size > MAX_WINDOW_MEANS) windowMeans.delete(windowMeans.keys().next().value);
+}
+export function windowMean(key) { return windowMeans.get(key) || null; }
+
+/** The months a view averages: [month]; with `seasonal` true the three
+ *  centred on it (wrapping at Dec); with `seasonal === 'annual'` all twelve,
+ *  or an explicit month list (the published months of a year's annual mean,
+ *  so its climatology reference averages the same months). The same option
+ *  name flows through getField, sourceMonth and the diagnostics, so the
+ *  annual mean rides the seasonal-mean plumbing. */
+export function windowMonths(month, seasonal = false) {
+    if (Array.isArray(seasonal)) return seasonal;
+    if (seasonal === 'annual') return [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+    if (seasonal) return [((month + 10) % 12) + 1, month, (month % 12) + 1];
+    return [month];
+}
+
 /** Cached-only lookup — no fetch side-effect. Returns Float32Array | null.
  *  `seasonal: true` returns the NaN-safe pointwise mean of the three tiles
- *  centered on `month` (wrapping at Dec). If any of the three is missing,
- *  returns null — caller should treat that as "not ready yet" and retry
- *  on the next tile-loaded event. */
+ *  centered on `month` (wrapping at Dec); `seasonal: 'annual'` the mean of
+ *  all twelve. If any of them is missing, returns null — caller should treat
+ *  that as "not ready yet" and retry on the next tile-loaded event. */
 export function cachedMonth(name, month, level = null, kind = 'mean', period = 'default', year = null, seasonal = false) {
     if (seasonal) {
-        const prev = ((month + 10) % 12) + 1;
-        const next = (month %  12) + 1;
-        const a = cachedMonth(name, prev,  level, kind, period, year, false);
-        const b = cachedMonth(name, month, level, kind, period, year, false);
-        const c = cachedMonth(name, next,  level, kind, period, year, false);
-        if (!a || !b || !c) return null;
-        const N = b.length;
+        const months = windowMonths(month, seasonal);
+        const key = `${resolvePeriod(period)}|${name}|${level}|${kind}|${year ?? '_'}|${months.join(',')}`;
+        const hit = windowMeans.get(key);
+        if (hit) return hit;
+        const tiles = [];
+        for (const m of months) {
+            const t = cachedMonth(name, m, level, kind, period, year, false);
+            if (!t) return null;
+            tiles.push(t);
+        }
+        const N = tiles[0].length;
         const out = new Float32Array(N);
         for (let i = 0; i < N; i++) {
             let s = 0, n = 0;
-            if (Number.isFinite(a[i])) { s += a[i]; n += 1; }
-            if (Number.isFinite(b[i])) { s += b[i]; n += 1; }
-            if (Number.isFinite(c[i])) { s += c[i]; n += 1; }
+            for (const t of tiles) {
+                const v = t[i];
+                if (Number.isFinite(v)) { s += v; n += 1; }
+            }
             out[i] = n > 0 ? s / n : NaN;
         }
+        rememberWindowMean(key, out);
         return out;
     }
     const eff = resolvePeriod(period);

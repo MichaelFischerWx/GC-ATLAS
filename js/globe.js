@@ -18,7 +18,7 @@ import { SunLight } from './sun.js';
 import { OrbitScene, ORBIT_RADIUS } from './orbit.js';
 import { computeZonalMean, computeArcCrossSection, renderCrossSection, samplePanel, sampleSeries } from './cross_section.js';
 import { greatCircleArc, linearLatLonArc, latLonToVec3, gcDistanceKm, greatCircleMidpoint, linearLatLonMidpoint, threePointArc } from './arc.js';
-import { loadManifest, onFieldLoaded, onTileProgress, isReady as era5Ready, prefetchField, cachedMonth, registerClamps, setActivePeriod, getActivePeriod, getManifest, perYearHasMonth, latestPerYearMonth, activePeriodLabel } from './era5.js';
+import { loadManifest, onFieldLoaded, onTileProgress, isReady as era5Ready, prefetchField, cachedMonth, registerClamps, setActivePeriod, getActivePeriod, getManifest, perYearHasMonth, latestPerYearMonth, activePeriodLabel, windowMonths } from './era5.js';
 import { decompose, annualMeanFrom, aggregatedDecompositionRange } from './decompose.js';
 import { HoverProbe } from './hover.js';
 import { computeMassStreamfunction, computeAngularMomentum, computeBruntVaisala, computeGeostrophicWind } from './diagnostics.js';
@@ -36,6 +36,11 @@ import { computeSeries as tsComputeSeries, renderSeries as tsRenderSeries, hover
 import { CLIMO_WINDOWS, bestClimoFor, groupEventsByClimo } from './climo_windows.js';
 
 const PLAY_INTERVAL_MS = 900;
+
+// Most tiles an annual mean of a composite / custom range may read
+// (12 months × years × tiles per year-month): ~390 MB decoded, ~120 MB over
+// the wire. Larger annual views show a notice instead of loading.
+const ANNUAL_TILE_BUDGET = 1500;
 
 // Natural Earth 50 m coastline + lakes. Bundled in the repo so the site
 // has zero external dependencies for base geometry — works offline,
@@ -136,6 +141,11 @@ class GlobeApp {
             // through getField (data.js), the cross-section panel (field
             // sections and diagnostics) and the Lorenz panel.
             seasonal: false,
+            // "Annual mean" in the month selector: the 12-month mean (the
+            // published months of a single year) everywhere the seasonal
+            // mean reaches; `month` keeps the month to return to. Picking a
+            // month (selector, slider, play, keys) turns it off.
+            annual: false,
             referencePeriod: 'default',  // 'default' (1991-2020) | '1961-1990' | …
             climatologyPeriod: 'default', // active climatology — drives mean + std + decomp reference
             year: null,              // null = climatology mean; integer (e.g. 2003) = single-year snapshot
@@ -343,6 +353,7 @@ class GlobeApp {
             .then((ok) => {
                 if (!ok) return;
                 this.populateYearSelect();
+                this._syncAnnualUI();   // the year's published months are known now
                 if (needsPerYear) {
                     this.updateField();
                     // Panels drawn before this manifest landed couldn't
@@ -553,7 +564,7 @@ class GlobeApp {
                                  || name === 'u10' || name === 'v10'
                                  || (isenActive && name === 't'));
             if (this.barbs && s.windMode === 'barbs' && isWindForBarbs
-                && levelMatches && monthMatches && isActivePeriod) {
+                && levelMatches && dispMonth && isActivePeriod) {
                 this.barbs.rebuild(s.viewMode);
             }
 
@@ -1450,7 +1461,7 @@ class GlobeApp {
     _refreshSeasonalLabel() {
         const el = document.getElementById('seasonal-label');
         if (!el) return;
-        if (!this.state.seasonal) { el.textContent = ''; return; }
+        if (!this.state.seasonal || this.state.annual) { el.textContent = ''; return; }
         const M = ['J','F','M','A','M','J','J','A','S','O','N','D'];
         const m  = this.state.month;
         const p  = (m + 10) % 12;
@@ -1489,9 +1500,12 @@ class GlobeApp {
                 // Year mode → "Self" subtracts the active climatology mean
                 // for the same month (the year-anomaly path). Climatology
                 // mode → it's the field's 12-month annual self-mean.
+                // The annual mean minus its own 12-month mean is zero.
                 opt.textContent = yearOn
                     ? `vs. ${activeLabel} mean (current climatology)`
-                    : 'Self · 12-month mean';
+                    : (this.state.annual && !this.state.customRange
+                        ? 'Self · 12-month mean (zero for the annual mean)'
+                        : 'Self · 12-month mean');
             } else if (opt.value === '1991-2020') {
                 // Useless when active = 1991-2020 (subtracts itself); useful
                 // when active is 1961-1990 (lets you explicitly ask for the
@@ -1878,12 +1892,14 @@ class GlobeApp {
         // — pedagogically misleading over SST, T2m, MSL, etc.
         const meta = FIELDS[field];
         const useSurface = meta?.type === 'sl';
+        // Same months as the displayed field (3-month or annual mean).
+        const seasonal = this._avgWindow();
         const uF = useSurface
-            ? getField('u10', { month })
-            : getField('u', { month, level, coord: vCoord, theta });
+            ? getField('u10', { month, seasonal })
+            : getField('u', { month, level, coord: vCoord, theta, seasonal });
         const vF = useSurface
-            ? getField('v10', { month })
-            : getField('v', { month, level, coord: vCoord, theta });
+            ? getField('v10', { month, seasonal })
+            : getField('v', { month, level, coord: vCoord, theta, seasonal });
         // If the request came back pending (tiles still loading, especially
         // in θ-coord where we need T + u + v at every pressure level), keep
         // the previous cache so particles keep moving with the last good
@@ -2042,6 +2058,9 @@ class GlobeApp {
                 b.classList.toggle('active', b.id === map[patch.viewMode]));
             delete patch.viewMode;
         }
+        // Choosing a month (selector, slider, play, arrow keys, GIF month
+        // cycle) leaves the annual mean.
+        if ('month' in patch && !('annual' in patch) && this.state.annual) patch.annual = false;
         Object.assign(this.state, patch);
         if ('field' in patch) {
             // Manual colorbar override almost certainly doesn't apply to the
@@ -2077,7 +2096,14 @@ class GlobeApp {
             this.updateField();
         }
         if ('showSun' in patch || 'viewMode' in patch)    this.applySunVisibility();
-        if ('month' in patch || 'seasonal' in patch)      this._refreshSeasonalLabel();
+        if ('month' in patch || 'seasonal' in patch || 'annual' in patch) this._refreshSeasonalLabel();
+        if ('annual' in patch) {
+            this._syncAnnualUI();
+            // σ tiles are monthly — nothing standardizes an annual mean.
+            this._refreshZscoreAvailability?.();
+            // The "Self · 12-month mean" reference reads differently.
+            this.refreshRefPeriodLabels();
+        }
         if ('month' in patch && this.sun)                 this.sun.update(this.state.month);
         if ('month' in patch && this.orbit)               this.orbit.update(this.state.month, this.spinAngle, this.camera);
         if ('windMode' in patch) this.applyWindMode();
@@ -2226,7 +2252,8 @@ class GlobeApp {
             this._prefetchTimeseriesTiles();
             this._scheduleTimeseriesRender();
         }
-        if ('level' in patch || 'month' in patch || 'vCoord' in patch || 'theta' in patch || 'field' in patch) this._invalidateWind();
+        if ('level' in patch || 'month' in patch || 'vCoord' in patch || 'theta' in patch || 'field' in patch
+            || 'seasonal' in patch || 'annual' in patch) this._invalidateWind();
         if ('month' in patch && this.parcels) this.parcels.invalidateCube();
         if ('vCoord' in patch || 'theta' in patch) invalidateIsentropicCache();
         if ('year' in patch || 'customRange' in patch) {
@@ -2246,6 +2273,8 @@ class GlobeApp {
             // anomaly is actually subtracting.
             this.refreshRefPeriodLabels();
             if (this.refreshCompositeUI) this.refreshCompositeUI();
+            // "Annual mean (Jan–Aug only)" follows the year's published months.
+            this._syncAnnualUI();
         }
         if ('month' in patch && this.refreshCompositeUI) {
             // Index threshold is evaluated at the current month, so the
@@ -2527,8 +2556,9 @@ class GlobeApp {
     }
 
     updateLorenz() {
-        const { month, seasonal, lorenzRef } = this.state;
-        const notice = this._diagSourceNotice();
+        const { month, lorenzRef } = this.state;
+        const seasonal = this._avgWindow();
+        const notice = this._diagSourceNotice({ pl: ['u', 'v', 'w', 't'] });
         const cycle = notice ? null
             : computeLorenzCycle(month, lorenzRef, { seasonal, source: this._diagSource() });
         this._lzPending = !cycle && !notice;
@@ -2603,7 +2633,7 @@ class GlobeApp {
      *  or all twelve for the annual mean). */
     _transportMonths() {
         return transportMonths(this.state.month,
-            { average: this.state.trAvg, seasonal: this.state.seasonal });
+            { average: this._transportAverage(), seasonal: this.state.seasonal });
     }
 
     /** Does a tile for `month` feed the transport panel? The averaged
@@ -2618,6 +2648,9 @@ class GlobeApp {
      *  mass and moisture storage tendencies always come from the
      *  climatology). */
     _prefetchTransport() {
+        // The panel doesn't offer annual means of composites (transport.js);
+        // don't fetch 12 months × every event year for a notice.
+        if (this._transportAverage() === 'annual' && this._diagSource()?.years) return;
         const monthsFn = () => this._transportMonths();
         this._prefetchIngredients(TRANSPORT_INGREDIENTS, false, monthsFn);
         const around = new Set();
@@ -2635,6 +2668,9 @@ class GlobeApp {
      *  event year. `withClimo` adds the climatology for those months (the
      *  ψ / EP-flux anomaly baseline). */
     _prefetchIngredients(ing, withClimo = false, monthsFn = () => this._diagMonths()) {
+        // An annual mean over too many years shows a notice instead; don't
+        // pull its tiles behind it.
+        if (this._annualBudgetNotice((ing.pl || []).length * LEVELS.length + (ing.sl || []).length)) return;
         const src = this._diagSource();
         if (!src) { this._prefetchClimoIngredients(ing, true, monthsFn()); return; }
         if (withClimo) this._prefetchClimoIngredients(ing, false, monthsFn());
@@ -2680,7 +2716,7 @@ class GlobeApp {
     /** Active-climatology ingredient tiles: the displayed month(s), then
      *  (allMonths) the rest of the year. */
     _prefetchClimoIngredients(ing, allMonths, first = this._diagMonths()) {
-        for (const months of (allMonths ? [first, undefined] : [first])) {
+        for (const months of (allMonths && first.length < 12 ? [first, undefined] : [first])) {
             for (const L of LEVELS) {
                 for (const name of ing.pl || []) prefetchField(name, { level: L, months });
             }
@@ -2694,7 +2730,8 @@ class GlobeApp {
     _xsDiagReady(diag) {
         const ing = XS_DIAG_INGREDIENTS[diag];
         if (!ing) return true;
-        const { month, seasonal } = this.state;
+        const { month } = this.state;
+        const seasonal = this._avgWindow();
         const sources = [this._diagSource()];
         if (this._xsAnomActive()) sources.push(null);
         return sources.every(src => LEVELS.every(L => (ing.pl || []).every(name =>
@@ -2708,9 +2745,9 @@ class GlobeApp {
      *  bypasses setState and its prefetch). onFieldLoaded re-runs
      *  updateXSection as tiles land. If the tiles are all there, the
      *  selection itself isn't drawable (e.g. the all-terms overlay in 2-D). */
-    _xsDiagPending(canvas, diag) {
-        // A year / composite that can't supply this month never loads.
-        const notice = this._diagSourceNotice();
+    _xsDiagPending(canvas, diag, notice = this._diagSourceNotice(XS_DIAG_INGREDIENTS[diag])) {
+        // A year / composite that can't supply this month never loads (nor
+        // does an annual mean over too many years).
         const ready = !notice && this._xsDiagReady(diag);
         this._xsPending = !notice && !ready;
         if (this._xsPending) {
@@ -2740,7 +2777,8 @@ class GlobeApp {
     updateXSection() {
         const canvas = document.getElementById('xs-canvas');
         if (!canvas) return;
-        const { field, month, xsArc, cmap, showContours, xsDiag, seasonal, year, customRange } = this.state;
+        const { field, month, xsArc, cmap, showContours, xsDiag, year, customRange } = this.state;
+        const seasonal = this._avgWindow();   // 3-month or annual mean, or neither
         // The panel shows the globe's time slice — climatology, one year or
         // a composite — with the seasonal mean when it's on. Diagnostics read
         // it as a diag_source descriptor (+ the ψ / EP-flux anomaly flag);
@@ -2844,7 +2882,7 @@ class GlobeApp {
         } else if (xsDiag === 'transport') {
             const view = buildTransportView(month, {
                 quantity: this.state.trQty,
-                average: this.state.trAvg,
+                average: this._transportAverage(),
                 seasonal,
                 source,
             });
@@ -2852,6 +2890,8 @@ class GlobeApp {
             zm = view;
             zm.suppressContours = true;
             this._updateTransportCaveat(zm);
+        } else if (this._fieldSectionBudgetNotice()) {
+            return this._xsDiagPending(canvas, 'field', this._fieldSectionBudgetNotice());
         } else if (xsArc) {
             // Map view: straight-line-in-(lat, lon) sampling — reads as a
             // straight line on the equirectangular projection. Globe view:
@@ -2900,7 +2940,8 @@ class GlobeApp {
             // Field sections name the year / composite only when getField
             // actually served it (zm.slice).
             const fieldSlice = ['per_year', 'custom_range'].includes(zm.slice?.period)
-                ? this._diagSourceSuffix() : '';
+                ? this._diagSourceSuffix()
+                : (this.state.annual ? ' · annual mean' : '');
             // θ coordinates: name the isentrope drawn bold.
             const isenTag = zm.isentropes ? ` · θ = ${zm.isentropes.mark} K marked` : '';
             if (zm.transport) {
@@ -3041,7 +3082,10 @@ class GlobeApp {
     }
 
     updateField() {
-        const { field, level, theta, vCoord, month, cmap, decompose: mode, kind, seasonal } = this.state;
+        const { field, level, theta, vCoord, month, cmap, decompose: mode, kind } = this.state;
+        const seasonal = this._avgWindow();   // 3-month or annual mean, or neither
+        const budget = this._annualBudgetNotice(this._globeTilesPerMonth());
+        if (budget) { this.setLoadingOverlay(true, budget); return; }
         const f = getField(field, {
             month, level, coord: vCoord, theta, kind,
             year: this.state.year,
@@ -3271,20 +3315,111 @@ class GlobeApp {
     /** diag_source.js descriptor for the globe's time selection. */
     _diagSource() { return sourceFromState(this.state); }
 
-    /** Months the panels average for the displayed month: the centred three
-     *  with the seasonal mean on. */
-    _diagMonths() {
-        const m = this.state.month;
-        return this.state.seasonal ? [((m + 10) % 12) + 1, m, (m % 12) + 1] : [m];
+    /** The averaging window every getField / sourceMonth / diagnostic call
+     *  takes as its `seasonal` option: false, true (3-month mean) or
+     *  'annual' (12-month mean). */
+    _avgWindow() {
+        if (!this.state.annual) return this.state.seasonal;
+        // A year still being published: its annual mean averages the months
+        // that are out, and so does every climatology reference subtracted
+        // from it (else Jan–Aug minus a 12-month mean is mostly the
+        // seasonal cycle).
+        const year = this.state.year;
+        if (year != null) {
+            const months = windowMonths(1, 'annual').filter(m => perYearHasMonth(year, m));
+            if (months.length && months.length < 12) return months;
+        }
+        return 'annual';
     }
+
+    /** Transport panel averaging: its own month / annual choice, or annual
+     *  while the globe shows the annual mean. */
+    _transportAverage() { return this.state.annual ? 'annual' : this.state.trAvg; }
+
+    /** An annual mean of a composite or range reads 12 months × every year
+     *  of tiles, and the tile cache keeps them all: above ANNUAL_TILE_BUDGET
+     *  the view says so instead of loading (the transport panel refuses
+     *  annual composites outright). `perYearMonth` = tiles one year-month of
+     *  the view reads. Null when within budget, or not an annual
+     *  multi-year view. */
+    _annualBudgetNotice(perYearMonth) {
+        const src = this._diagSource();
+        if (!this.state.annual || !src?.years?.length) return null;
+        const tiles = perYearMonth * 12 * src.years.length;
+        if (tiles <= ANNUAL_TILE_BUDGET) return null;
+        return `An annual mean of this view over ${src.years.length} years reads `
+             + `${tiles.toLocaleString()} tiles — pick a month or season, or fewer years`;
+    }
+
+    /** Tiles per year-month behind the globe's field (θ surfaces add the T
+     *  stack and the field's levels). */
+    _globeTilesPerMonth() {
+        const { field, level, vCoord } = this.state;
+        const ing = fieldIngredients(field, level).length;
+        return vCoord === 'theta' && FIELDS[field]?.type === 'pl'
+            ? LEVELS.length * (1 + (field === 't' ? 0 : field === 'pv' ? 1 : ing))
+            : ing;
+    }
+
+    /** _annualBudgetNotice for the field section: every level of the field
+     *  (plus T for the isentropes in θ coordinates). */
+    _fieldSectionBudgetNotice() {
+        const { field, level, vCoord } = this.state;
+        const ing = fieldIngredients(field, level).length;
+        const perMonth = FIELDS[field]?.type === 'pl'
+            ? LEVELS.length * (ing + (vCoord === 'theta' ? 1 : 0))
+            : ing;
+        return this._annualBudgetNotice(perMonth);
+    }
+
+    /** Months the panels average for the displayed month: the centred three
+     *  with the seasonal mean on, all twelve for the annual mean. */
+    _diagMonths() { return windowMonths(this.state.month, this._avgWindow()); }
 
     _diagMonthMatches(month) { return this._diagMonths().includes(month); }
 
-    /** "Jan", or "DJF" with the seasonal mean on. */
+    /** "Jan", "DJF" with the seasonal mean on, "annual mean". */
     _diagMonthLabel() {
         const s = this.state;
+        if (s.annual) return 'annual mean';
         if (!s.seasonal) return MONTHS[s.month - 1];
         return this._diagMonths().map(m => 'JFMAMJJASOND'[m - 1]).join('');
+    }
+
+    /** Months missing from an annual mean of the globe's time slice: the
+     *  annual mean of a year still being published averages the months
+     *  that are out. " (Jan–Aug only)" for a single year, " (2026: Jan–Aug)"
+     *  for composites / ranges that include one; '' when every year is
+     *  complete (and for the climatology). */
+    _annualCoverage() {
+        const src = this._diagSource();
+        if (!src) return '';
+        const years = src.year != null ? [src.year] : (src.years || []);
+        const partial = [];
+        for (const y of years) {
+            const ms = windowMonths(1, 'annual').filter(m => perYearHasMonth(y, m));
+            if (ms.length && ms.length < 12) {
+                partial.push(`${MONTHS[ms[0] - 1]}–${MONTHS[ms[ms.length - 1] - 1]}`
+                              + (src.year != null ? ' only' : ''));
+                if (src.year == null) partial[partial.length - 1] = `${y}: ${partial[partial.length - 1]}`;
+            }
+        }
+        return partial.length ? ` (${partial.join(', ')})` : '';
+    }
+
+    /** Month selector + seasonal toggle for the annual mean: the selector
+     *  shows "Annual mean" (saying which months a partial year averages) and
+     *  the 3-month toggle, meaningless there, is disabled. */
+    _syncAnnualUI() {
+        const sel = document.getElementById('month-select');
+        const opt = sel?.querySelector('option[value="annual"]');
+        if (opt) opt.textContent = `Annual mean${this._annualCoverage()}`;
+        if (sel) sel.value = this.state.annual ? 'annual' : String(this.state.month);
+        const tog = document.getElementById('toggle-seasonal');
+        if (tog) {
+            tog.disabled = !!this.state.annual;
+            tog.closest('label')?.classList.toggle('is-disabled', !!this.state.annual);
+        }
     }
 
     /** ψ / EP-flux anomaly view: selection − active climatology. Only
@@ -3300,22 +3435,26 @@ class GlobeApp {
      *  " · Jan · 1991–2000 mean"; the anomaly view appends " − 1991–2020". */
     _diagSourceSuffix({ anomaly = false } = {}) {
         const src = this._diagSource();
-        if (!src) return '';
+        // The climatology's titles name no month, but an annual mean says so.
+        if (!src) return this.state.annual ? ' · annual mean' : '';
         const mon = this._diagMonthLabel();
+        const annual = this.state.annual;
         let label;
         if (src.year != null) {
-            label = `${mon} ${src.year}`;
+            label = annual ? `${src.year} annual mean${this._annualCoverage()}` : `${mon} ${src.year}`;
         } else {
             const cr = this.state.customRange;
-            const n = sourceYears(src, this.state.month).length;
-            const count = n ? `, ${n} yr` : '';
+            const n = annual
+                ? (src.years || []).filter(y => this._diagMonths().some(m => perYearHasMonth(y, m))).length
+                : sourceYears(src, this.state.month).length;
+            const count = (n ? `, ${n} yr` : '') + (annual ? this._annualCoverage() : '');
             if (this._diagIsRange()) {
                 label = `${mon} · ${cr.start}–${cr.end} mean${count}`;
             } else {
                 // cr.label reads "RONI ≥ +1.0 · Jan": the event test and the
                 // month it's evaluated in, which needn't be the month shown.
                 const test = (cr.label || 'Event').replace(/ · [A-Z][a-z]{2}$/, '');
-                const evMonth = Number.isFinite(cr.month) && cr.month !== this.state.month
+                const evMonth = Number.isFinite(cr.month) && (annual || cr.month !== this.state.month)
                     ? ` (${MONTHS[cr.month - 1]})` : '';
                 label = `${mon} · ${test}${evMonth} composite${count}`;
             }
@@ -3333,7 +3472,10 @@ class GlobeApp {
      *  are departures of the multi-year-mean flow, not the mean of each
      *  year's eddies. */
     _diagEddyNote() {
-        if (!this._diagSource()?.years) return '';
+        // An annual mean's stationary eddies are departures of the annual-mean
+        // flow (the time-mean definition, Peixoto & Oort 1992), not the mean
+        // of each month's eddies.
+        if (!this._diagSource()?.years) return this.state.annual ? ' · eddies of the annual-mean flow' : '';
         const cr = this.state.customRange;
         return this._diagIsRange()
             ? ` · eddies of the ${cr.start}–${cr.end} mean flow`
@@ -3343,9 +3485,18 @@ class GlobeApp {
     /** Panel notice when the selected year / composite can't supply the
      *  displayed month (not published yet, or outside the per-year
      *  archive) — instead of "Loading" forever. Null otherwise. */
-    _diagSourceNotice() {
+    _diagSourceNotice(ing = null) {
         const src = this._diagSource();
+        if (ing) {
+            const budget = this._annualBudgetNotice(
+                (ing.pl || []).length * LEVELS.length + (ing.sl || []).length);
+            if (budget) return budget;
+        }
         if (this._diagMonths().some(m => sourceHasMonth(src, m))) return null;
+        if (this.state.annual) {
+            return src.year == null ? 'No composite year is in the per-year archive'
+                 : `No month of ${src.year} is in the per-year archive`;
+        }
         const mon = MONTHS[this.state.month - 1];
         if (src.year == null) return `No composite year has ${mon} in the per-year archive`;
         const latest = latestPerYearMonth();
@@ -3444,7 +3595,7 @@ class GlobeApp {
             const cav = document.getElementById('transport-caveat');
             if (cav) cav.hidden = true;
         }
-        for (const [name, v] of [['tr-qty', this.state.trQty], ['tr-avg', this.state.trAvg]]) {
+        for (const [name, v] of [['tr-qty', this.state.trQty], ['tr-avg', this._transportAverage()]]) {
             const r = document.querySelector(`input[name="${name}"][value="${v}"]`);
             if (r && !r.checked) r.checked = true;
         }
@@ -3454,7 +3605,7 @@ class GlobeApp {
      *  year / composite suffix for a single month of a time slice. */
     _transportTitleSuffix() {
         const src = this._diagSource();
-        if (this.state.trAvg === 'annual') {
+        if (this._transportAverage() === 'annual') {
             return src?.year != null ? ` · ${src.year} annual mean` : ' · annual mean';
         }
         return src ? this._diagSourceSuffix() : ` · ${this._diagMonthLabel()}`;
@@ -3566,7 +3717,16 @@ class GlobeApp {
     /** Notice text when single-year mode asks for a month the per-year
      *  archive doesn't have, or null if it does. */
     _perYearNotice(year, month) {
-        if (year == null || perYearHasMonth(year, month)) return null;
+        if (year == null) return null;
+        if (this.state.annual) {
+            // The annual mean averages whatever months of the year are out.
+            if (windowMonths(month, 'annual').some(m => perYearHasMonth(year, m))) return null;
+            const latest = latestPerYearMonth();
+            return latest && year > latest.year
+                ? `No month of ${year} is published yet. Latest available: ${MONTHS[latest.month - 1]} ${latest.year}.`
+                : `${year} is outside the per-year archive.`;
+        }
+        if (perYearHasMonth(year, month)) return null;
         const latest = latestPerYearMonth();
         const asked = `${MONTHS[month - 1]} ${year}`;
         if (latest && year * 100 + month > latest.year * 100 + latest.month) {
@@ -3691,7 +3851,7 @@ class GlobeApp {
                     // stays monthly.
                     const refField = getField(fieldName, {
                         month: this.state.month, coord: 'theta', theta, ...refArgs,
-                        seasonal: this.state.seasonal,
+                        seasonal: this._avgWindow(),
                     });
                     annualMeanTheta = refField.isReal ? refField.values : null;
                     annualMeanForAgg = (m) => {
@@ -3717,7 +3877,8 @@ class GlobeApp {
                 const current = decompose(f.values, GRID.nlat, GRID.nlon, isenMode,
                                           annualMeanTheta, { clamp: fieldClamp });
                 if (!current.empty) {
-                    const range = aggregatedDecompositionRange(
+                    // One annual mean: there are no other months to pool.
+                    const range = this.state.annual ? null : aggregatedDecompositionRange(
                         isenMode,
                         (m) => {
                             // Cache-peek before getField — same rationale as
@@ -3819,7 +3980,7 @@ class GlobeApp {
                     });
                     return rf.isReal ? rf.values : null;
                 };
-                annualMean = refForMonth(this.state.month, this.state.seasonal);
+                annualMean = refForMonth(this.state.month, this._avgWindow());
                 annualMeanForAgg = (m) => refForMonth(m);
             } else if (refPeriod !== 'default') {
                 // Climate-change anomaly: same month from reference period.
@@ -3835,7 +3996,7 @@ class GlobeApp {
                     theta: this.state.theta,
                     kind: this.state.kind,
                     period: refPeriod,
-                    seasonal: this.state.seasonal,
+                    seasonal: this._avgWindow(),
                 });
                 annualMean = refField.isReal ? refField.values : null;
                 // Per-month reference for the aggregator — without this every
@@ -3921,7 +4082,8 @@ class GlobeApp {
         // shifts every time the user scrubs months because the local extrema
         // change. We pull from getField (uses cached tiles for raw fields,
         // existing _wspdCache/_mseCache/_pvCache entries for derived).
-        const range = aggregatedDecompositionRange(
+        // (An annual mean has no other months to pool.)
+        const range = this.state.annual ? null : aggregatedDecompositionRange(
             mode,
             (m) => {
                 // Peek the cache first — if month m's ingredients aren't
@@ -4117,7 +4279,11 @@ class GlobeApp {
             monthSel.appendChild(Object.assign(document.createElement('option'),
                 { value: i + 1, textContent: m }));
         });
-        monthSel.value = this.state.month;
+        // The 12-month mean — globe, sections, diagnostics, years and
+        // composites alike (state.annual; the slider keeps the month).
+        monthSel.appendChild(Object.assign(document.createElement('option'),
+            { value: 'annual', textContent: 'Annual mean' }));
+        monthSel.value = this.state.annual ? 'annual' : this.state.month;
         const monthSlider = document.getElementById('month-slider');
         if (monthSlider) monthSlider.value = this.state.month;
 
@@ -4129,9 +4295,13 @@ class GlobeApp {
 
         monthSel.addEventListener('change', () => {
             this.stopPlay();
+            if (monthSel.value === 'annual') {
+                this.setState({ annual: true });
+                return;
+            }
             const m = +monthSel.value;
             syncMonthUI(m);
-            this.setState({ month: m });
+            this.setState({ month: m });   // leaves the annual mean
         });
         if (monthSlider) {
             monthSlider.addEventListener('input', () => {
@@ -4513,12 +4683,16 @@ class GlobeApp {
         this._refreshZscoreAvailability = () => {
             const btn = document.querySelector('[data-decompose="zscore"]');
             if (!btn) return;
-            const available = fieldHasStdTiles(
+            // σ tiles are the inter-annual σ of monthly means: nothing
+            // standardizes an annual mean.
+            const available = !this.state.annual && fieldHasStdTiles(
                 this.state.field, this.state.climatologyPeriod);
             btn.classList.toggle('is-unavailable', !available);
             btn.title = available
                 ? 'Standardized anomaly: (value − climo mean) ÷ climo σ. Unit-less z-score; |z| > 2 is unusual, > 3 is rare. Makes regions with different absolute variability (tropics vs midlatitudes) directly comparable.'
-                : `σ-anom is unavailable for this field in the ${this.state.climatologyPeriod === 'default' ? '1991–2020' : this.state.climatologyPeriod} climatology — no σ tiles have been published for it yet.`;
+                : this.state.annual
+                    ? 'σ-anom is unavailable for the annual mean — the σ tiles are the inter-annual σ of single months, not of annual means.'
+                    : `σ-anom is unavailable for this field in the ${this.state.climatologyPeriod === 'default' ? '1991–2020' : this.state.climatologyPeriod} climatology — no σ tiles have been published for it yet.`;
             // If the user was on σ-anom and it just became unavailable,
             // fall back to Total rather than painting nothing.
             if (!available && this.state.decompose === 'zscore') {
@@ -5878,7 +6052,7 @@ class GlobeApp {
         // Dropdown selects.
         const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = v; };
         set('field-select',        s.field);
-        set('month-select',        s.month);
+        set('month-select',        s.annual ? 'annual' : s.month);
         set('cmap-select',         s.cmap);
         set('ref-period-select',   s.referencePeriod);
         set('climo-period-select', s.climatologyPeriod);
@@ -5920,6 +6094,7 @@ class GlobeApp {
         // dependent CSS classes (the existing helpers handle this).
         if (this.refreshRefPeriodLabels) this.refreshRefPeriodLabels();
         if (this.applyCompareMode)       this.applyCompareMode();
+        this._syncAnnualUI();
     }
 
     refreshVCoordUI() {
@@ -6001,7 +6176,10 @@ class GlobeApp {
         } else if (this.state.climatologyPeriod !== 'default') {
             periodSuffix = ` · ${this.state.climatologyPeriod}`;
         }
-        set('cb-title', field.name + coordSuffix + periodSuffix + modeSuffix);
+        // The month isn't in the title, but the annual mean is (and which
+        // months a partial year averages).
+        const annualSuffix = this.state.annual ? ` · annual mean${this._annualCoverage()}` : '';
+        set('cb-title', field.name + coordSuffix + periodSuffix + annualSuffix + modeSuffix);
         // Standardized anomaly is unit-less (units of σ); the field's
         // native units don't apply once we've divided.
         set('cb-units', field.decomposeMode === 'zscore' ? 'σ' : field.units);

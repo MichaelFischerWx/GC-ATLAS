@@ -18,7 +18,7 @@
 // computed from the climatological-mean fields — the "stationary" eddies are
 // departures of the composite-mean flow from its zonal mean.
 
-import { cachedMonth, perYearHasMonth } from './era5.js';
+import { cachedMonth, perYearHasMonth, windowMonths, windowMean, rememberWindowMean } from './era5.js';
 import { customRangeYears } from './data.js';
 
 /** Source descriptor for the globe's current time selection. */
@@ -53,18 +53,30 @@ export function sourceHasMonth(src, month, name = null) {
     return sourceYears(src, month, name).length > 0;
 }
 
+/** Months of the window (see era5.js windowMonths) that `src` can supply —
+ *  all of them for the climatology; a year's or composite's published months
+ *  otherwise, so an annual mean of the current year averages what exists. */
+export function sourceWindowMonths(src, month, seasonal = false, name = null) {
+    const months = windowMonths(month, seasonal);
+    return src ? months.filter(m => sourceHasMonth(src, m, name)) : months;
+}
+
 /** Cached tile for (name, month, level) from `src`. `seasonal` averages the
- *  three months centred on `month` (NaN-safe). Per-year sources pair the
- *  months within the same calendar year, like the globe's seasonal view, and
- *  skip months outside the archive rather than waiting on them. */
+ *  three months centred on `month`, or all twelve with 'annual' (NaN-safe).
+ *  Per-year sources pair the months within the same calendar year, like the
+ *  globe's seasonal view, and skip months outside the archive rather than
+ *  waiting on them. */
 export function sourceMonth(name, month, level, src, seasonal = false) {
     if (!src) return cachedMonth(name, month, level, 'mean', 'default', null, seasonal);
     if (seasonal) {
-        const prev = ((month + 10) % 12) + 1;
-        const next = (month % 12) + 1;
+        const months = windowMonths(month, seasonal).filter(m => sourceYears(src, m, name).length);
+        // Computed once per window (era5.js window-mean cache): the panels
+        // redraw on every tile arrival.
+        const key = `src|${name}|${level}|${sourceKey(src)}|${months.join(',')}`;
+        const hit = windowMean(key);
+        if (hit) return hit;
         const tiles = [];
-        for (const m of [prev, month, next]) {
-            if (!sourceYears(src, m, name).length) continue;
+        for (const m of months) {
             const t = sourceMonth(name, m, level, src, false);
             if (!t) return null;
             tiles.push(t);
@@ -81,6 +93,7 @@ export function sourceMonth(name, month, level, src, seasonal = false) {
             }
             out[i] = n > 0 ? s / n : NaN;
         }
+        rememberWindowMean(key, out);
         return out;
     }
     if (src.year != null) {

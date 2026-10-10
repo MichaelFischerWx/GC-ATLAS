@@ -319,7 +319,7 @@ function buildAllTermsProfile(terms, form, agg = 'mean') {
 function computeTorqueOverlays(terms, form, agg) {
     const { nlat, cosphi } = terms;
     const month = terms._month;
-    const seasonal = !!terms._seasonal;
+    const seasonal = terms._seasonal ?? false;   // false | true | annual window
     const srcSlice = terms._source ?? null;
     if (!month) return null;
     const fric = frictionTorqueProfile(month, seasonal, srcSlice);    // N/m² or null
@@ -511,7 +511,7 @@ export function buildMBudgetView(month, opts = {}) {
     const term = opts.term || 'total';
     const form = opts.form || 'u';
     const mode = opts.mode || '2d';
-    const seasonal = !!opts.seasonal;
+    const seasonal = opts.seasonal ?? false;   // false | true (3-month) | annual window
 
     const t = computeMBudgetTerms(month, seasonal, opts.source ?? null);
     if (!t) return null;

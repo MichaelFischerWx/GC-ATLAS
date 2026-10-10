@@ -102,6 +102,9 @@ const SPEC = [
     // globe, the cross-section panel (field sections and diagnostics) and
     // the Lorenz panel.
     ['seasonal',           'sn',  v => v ? '1' : null, s => s === '1'],
+    // "Annual mean" in the month selector: the 12-month mean (a single
+    // year's published months); `m` still carries the month to return to.
+    ['annual',             'an',  v => v ? '1' : null, s => s === '1'],
 
     // ── compare overlay (map view) ─────────────────────────────────
     ['compareMode',        'cmp',

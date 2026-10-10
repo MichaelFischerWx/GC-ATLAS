@@ -265,7 +265,7 @@ export function buildHBudgetView(month, opts = {}) {
     if (term === 'torque') term = 'source';
     const form = opts.form || 'h';
     const mode = opts.mode || '2d';
-    const seasonal = !!opts.seasonal;
+    const seasonal = opts.seasonal ?? false;   // false | true (3-month) | annual window
 
     const t = computeHBudgetTerms(month, seasonal, opts.source ?? null);
     if (!t) return null;
@@ -368,7 +368,7 @@ export function buildHBudgetView(month, opts = {}) {
 function buildAllTermsProfile(terms, form, agg) {
     const { N, nlat, cosphi } = terms;
     const month = terms._month;
-    const seasonal = !!terms._seasonal;
+    const seasonal = terms._seasonal ?? false;   // false | true | annual window
     const srcSlice = terms._source ?? null;
     const p_s = LEVELS[N - 1] * 100;
 

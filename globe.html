@@ -155,6 +155,7 @@
         .control-group:last-child { border-bottom: none; }
         .control-group.is-disabled { opacity: 0.4; pointer-events: none; }
         .segmented.is-disabled    { opacity: 0.4; pointer-events: none; }
+        .toggle-row.is-disabled   { opacity: 0.4; cursor: default; }   /* 3-month mean under the annual mean */
         .control-group label.field-label,
         .control-group h4 {
             display: block;
@@ -2307,7 +2308,7 @@ K_E = (1/2g) ∫ ⟨u*² + v*²⟩ dp       (eddy KE)</pre>
                 <p style="font-size: 0.74rem;">where T̂ = [T] − T_ref (zonal-mean departure from reference), T* = T − [T] (stationary-eddy departure from zonal mean), γ(p) = κT_ref/p − ∂T_ref/∂p (static stability), [·] is zonal mean, ⟨·⟩ is global area-mean. Leading factor R/(2g) is the Holton–Hakim / Vallis form (using c_p/2g instead overshoots by ~3.5×).</p>
                 <p><b>Conversions</b> — each has a clean physical reading:</p>
                 <pre>C(P_M→P_E) = -(R/g) ∫ ⟨v*T*⟩/(γp) · ∂[T]/∂y dp
-              -(R/g) ∫ ⟨ω*T*⟩/(γp) · ∂[T]/∂p dp
+              -(R/g) ∫ ⟨ω*T*⟩ · p^-κ ∂(p^κ T̂/(γp))/∂p dp
    ► baroclinic release — eddy heat flux
      down the mean T gradient
 
@@ -2331,7 +2332,7 @@ C(P_M→K_M) = -(R/g) ∫ [ω][T] / p dp
                     <li>Meridional derivatives ∂/∂y use centered differences on a = 6.371·10⁶ m; vertical ∂/∂p likewise on the 12-level pressure grid.</li>
                     <li>Global ⟨·⟩ uses a cosφ area weight over the full (181 × 360) grid, skipping NaN (land-masked) samples.</li>
                 </ul>
-                <p><b>Reference-state toggle</b> (controls T_ref, which sets γ and the T̂ used for P_M and C(P_M, K_M)):</p>
+                <p><b>Reference-state toggle</b> (controls T_ref, which sets γ and the T̂ used for P_M, C(P_M, K_M) and the vertical part of C(P_M, P_E)):</p>
                 <ul style="margin: 4px 0 6px 16px; padding: 0; font-size: 0.74rem;">
                     <li><b>Lorenz (sorted)</b> — the true minimum-PE reference from Lorenz (1955). Every parcel (~780k on the 12-level globe) is adiabatically re-stratified by θ, with highest θ at the top; T_ref(p) is the T at the rank where cumulative mass from the top equals (p / p_s)·total. This is the canonical "available" formulation.</li>
                     <li><b>Area-mean</b> — T_ref(p) = global area-weighted mean of T at each pressure level. The textbook diagnostic approximation. Faster, but it overstates how much PE is "available" — a lot of the meridional T gradient it sees is actually unavailable (non-adiabatic to release).</li>
@@ -2348,22 +2349,22 @@ C(P_M→K_M) = -(R/g) ∫ [ω][T] / p dp
                     <tr><td style="padding: 2px 6px;">K_M (MJ/m²)</td><td style="text-align: right;">0.8</td><td style="text-align: right;">~0.7-0.9</td></tr>
                     <tr><td style="padding: 2px 6px;">P_E (MJ/m²)</td><td style="text-align: right;">1.5</td><td style="text-align: right;">~0.2-0.4 (stat)</td></tr>
                     <tr><td style="padding: 2px 6px;">K_E (MJ/m²)</td><td style="text-align: right;">1.4</td><td style="text-align: right;">~0.2-0.3 (stat)</td></tr>
-                    <tr><td style="padding: 2px 6px;">C(P_M, P_E) (W/m²)</td><td style="text-align: right;">2.2</td><td style="text-align: right;">~0.7-1.1 (stat)</td></tr>
+                    <tr><td style="padding: 2px 6px;">C(P_M, P_E) (W/m²)</td><td style="text-align: right;">2.2</td><td style="text-align: right;">~0.3-0.55 (sorted, stat)</td></tr>
                     <tr><td style="padding: 2px 6px;">C(P_E, K_E) (W/m²)</td><td style="text-align: right;">1.7</td><td style="text-align: right;">~0.5-0.7 (stat)</td></tr>
                     <tr><td style="padding: 2px 6px;">C(K_E, K_M) (W/m²)</td><td style="text-align: right;">0.2</td><td style="text-align: right;">~0.06-0.12 (stat)</td></tr>
                     <tr><td style="padding: 2px 6px;">C(P_M, K_M) (W/m²)</td><td style="text-align: right;">0.2</td><td style="text-align: right;">~0.02-0.1 (sorted, stat)</td></tr>
                 </table>
-                <p style="font-size: 0.72rem; color: var(--paper-dim);">Left column: Peixoto &amp; Oort (1992) Table 13.1 for the full circulation. Right column: the stationary-only contribution you'd expect to see here, derived from Boer (1989)'s stationary/transient decomposition (~15-30% of total for eddy quantities). DJF values are closer to the top of each band; JJA to the bottom. Reanalysis-to-reanalysis variance alone is ±15-20%, so matches within that range count as good.</p>
+                <p style="font-size: 0.72rem; color: var(--paper-dim);">Left column: Peixoto &amp; Oort (1992) Table 13.1 for the full circulation. Right column: the stationary-only contribution you'd expect to see here, derived from Boer (1989)'s stationary/transient decomposition (~15-30% of total for eddy quantities). DJF values are closer to the top of each band; JJA to the bottom. Reanalysis-to-reanalysis variance alone is ±15-20%, so matches within that range count as good. For C(P_M, P_E), Li et al. (2007) find 1.79 W/m² (ERA-40; NCEP2 1.69) for the global annual mean with this same split — stationary = monthly-mean departures from the zonal mean, plus sub-monthly transients. 15-30% of that is 0.3-0.55; the 1991-2020 climatology here gives 0.27 (Jul) to 0.55 (Jan), annual mean 0.36 (sorted; area-mean ~0.1 higher).</p>
                 <p style="color: var(--ochre);"><b>Caveats:</b></p>
                 <ul style="margin: 4px 0 6px 16px; padding: 0; font-size: 0.74rem; color: var(--paper-dim);">
                     <li><b>Stationary eddies only.</b> * here is the departure of the monthly-mean field from its zonal mean — it captures planetary waves locked to topography / land-sea contrast. High-frequency (sub-monthly) <i>transient</i> eddies, which dominate baroclinic conversion in published totals, need daily data (currently out of scope).</li>
-                    <li>C(P_M, P_E) here includes both the meridional <b>and</b> vertical eddy-heat-flux terms; many references quote only the meridional term.</li>
-                    <li>Expect ~3-5× smaller conversions than Peixoto-Oort "total" numbers because transients are excluded — that gap is the transient-eddy contribution, not a bug.</li>
+                    <li>C(P_M, P_E) includes the vertical eddy heat flux in Peixoto &amp; Oort's (1974) form: ⟨ω*T*⟩ acts on the vertical structure of T̂, the departure from the reference state, not on ∂[T]/∂p. The eddy heat flux against the reference lapse rate itself is the eddy buoyancy flux, already counted in C(P_E, K_E). The vertical term is ~0.1 W/m² here, against 0.15-0.6 for the meridional one; with transients included, Li et al. (2007) find the ω terms ~10× smaller than the horizontal ones.</li>
+                    <li>Expect ~3-6× smaller conversions than Peixoto-Oort "total" numbers because transients are excluded — that gap is the transient-eddy contribution, not a bug.</li>
                 </ul>
                 <p style="color: var(--paper-dim); font-size: 0.74rem;">
                     Use the cycle to <i>illustrate</i> structure — which arrows are large, which way energy flows, how seasonal cycles shift it (swipe through months). Toggle the reference state to see how a methodology choice shifts P_M and C(P_M, K_M) by an order of magnitude — that's the pedagogy in its own right.
                 </p>
-                <p style="color: var(--paper-dim); font-size: 0.74rem;">References: Lorenz (1955, <i>Tellus</i>); Peixoto &amp; Oort (1974; 1992, <i>Physics of Climate</i>, ch. 13-14); Boer (1989, <i>JCli</i>) for the stationary/transient decomposition; Holton &amp; Hakim (textbook ch. 10) for the canonical derivation.</p>
+                <p style="color: var(--paper-dim); font-size: 0.74rem;">References: Lorenz (1955, <i>Tellus</i>); Peixoto &amp; Oort (1974; 1992, <i>Physics of Climate</i>, ch. 13-14); Boer (1989, <i>JCli</i>) for the stationary/transient decomposition; Li et al. (2007, <i>GRL</i>) for reanalysis totals with the same monthly split; Holton &amp; Hakim (textbook ch. 10) for the canonical derivation.</p>
             </div>
             <svg id="lorenz-svg" viewBox="0 0 360 260" xmlns="http://www.w3.org/2000/svg">
                 <!-- boxes -->

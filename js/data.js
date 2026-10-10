@@ -9,7 +9,7 @@
 // jets, Hadley return, stationary waves, subtropical highs). They exist so
 // the renderer works offline / before real tiles are staged.
 
-import { requestField as requestEra5, availableLevels, cachedMonth, getManifest, perYearHasMonth, getActivePeriod } from './era5.js';
+import { requestField as requestEra5, availableLevels, cachedMonth, getManifest, perYearHasMonth, getActivePeriod, windowMonths } from './era5.js';
 
 // Does the manifest for `period` carry pipeline-materialised std tiles for
 // this derived field? Used to un-gate σ-anom on wspd / mse / dls once the
@@ -549,20 +549,26 @@ export function getField(name, { month = 1, level = 500, coord = 'pressure', the
     // so the display keeps painting — the seasonal mean fills in on the
     // next render tick once the tile arrives (onFieldLoaded → updateField,
     // which listens for all three months).
+    //
+    // `seasonal: 'annual'` averages all twelve months the same way, but
+    // stays pending (loading overlay) until they are in: there is no centre
+    // month to stand in for the annual mean.
     if (seasonal) {
-        const prev = ((month + 10) % 12) + 1;   // m-1 with Dec wrap
-        const next = (month %  12) + 1;         // m+1 with Dec wrap
-        // A single year's season can reach past the latest published month
-        // (JAS while October is out), and that tile never loads: average the
-        // months that exist, as the diagnostic panels do (diag_source.js).
-        const months = [prev, month, next].filter((m) =>
-            m === month || year == null || perYearHasMonth(year, m, name));
+        // 'annual', or the explicit month list of a partial year's annual mean.
+        const annual = seasonal === 'annual' || Array.isArray(seasonal);
+        // A single year's window can reach past the latest published month
+        // (JAS while October is out, or the current year's annual mean), and
+        // those tiles never load: average the months that exist, as the
+        // diagnostic panels do (diag_source.js).
+        const months = windowMonths(month, seasonal).filter((m) =>
+            (m === month && !annual) || year == null || perYearHasMonth(year, m, name));
+        if (!months.length) months.push(month);   // nothing published: the notice path
         const fs = months.map(m => getField(name, {
             month: m, level, coord, theta, kind, period, year, customRange,
             seasonal: false,
         }));
-        const center = fs[months.indexOf(month)];
-        if (!fs.every(f => f.isReal)) return center;
+        const center = annual ? fs[0] : fs[months.indexOf(month)];
+        if (!fs.every(f => f.isReal)) return annual ? fs.find(f => !f.isReal) : center;
         const N = center.values.length;
         const out = new Float32Array(N);
         for (let i = 0; i < N; i++) {
@@ -573,9 +579,26 @@ export function getField(name, { month = 1, level = 500, coord = 'pressure', the
             }
             out[i] = n > 0 ? s / n : NaN;
         }
-        const vmin = Math.min(...fs.map(f => f.vmin));
-        const vmax = Math.max(...fs.map(f => f.vmax));
-        return { ...center, values: out, vmin, vmax, seasonal: true, seasonalMonths: months };
+        let vmin = Math.min(...fs.map(f => f.vmin));
+        let vmax = Math.max(...fs.map(f => f.vmax));
+        if (annual) {
+            // A single mean, nothing to scrub through: its own range (the
+            // field's percentile clamp, symmetric where declared) rather
+            // than the seasonal cycle's extremes.
+            if (meta.clamp) {
+                [vmin, vmax] = percentileBounds(out, meta.clamp.lo, meta.clamp.hi);
+            } else {
+                vmin = Infinity; vmax = -Infinity;
+                for (const v of out) if (Number.isFinite(v)) { if (v < vmin) vmin = v; if (v > vmax) vmax = v; }
+                if (!Number.isFinite(vmin)) { vmin = 0; vmax = 1; }
+            }
+            if (meta.displayCap) {
+                vmin = Math.max(vmin, -meta.displayCap);
+                vmax = Math.min(vmax, meta.displayCap);
+            }
+            if (kind !== 'std') ({ vmin, vmax } = symmetricRange(vmin, vmax, meta));
+        }
+        return { ...center, values: out, vmin, vmax, seasonal: annual ? 'annual' : true, seasonalMonths: months };
     }
 
     // Custom-range composite: browser-side mean of per-year tiles over an
