@@ -255,7 +255,8 @@ function buildAllTermsProfile(terms, form, agg = 'mean') {
 
     let units, suffix;
     if (agg === 'integral') {
-        units  = form === 'u' ? 'N m⁻²' : 'kg s⁻²';
+        // M form: the integrand above carries the 10⁶ display scaling.
+        units  = form === 'u' ? 'N m⁻²' : '10⁶ kg s⁻²';
         suffix = '· vertical integral';
     } else {
         units  = form === 'u' ? 'm s⁻¹ day⁻¹' : '10⁶ m² s⁻¹ day⁻¹';
@@ -306,9 +307,17 @@ function buildAllTermsProfile(terms, form, agg = 'mean') {
 }
 
 /** Prepare friction + mountain + (sum) overlay series in the active display
- *  units. Returns null if neither tile is yet built. */
+ *  units. Returns null if neither tile is yet built.
+ *
+ *  Both profiles arrive as zonal-mean forces per unit area on the air, F
+ *  (N m⁻²). They are put in the budget terms' units the same way:
+ *    ∂[u]/∂t form uses F itself; ∂[M]/∂t form uses the torque per unit area
+ *    about the axis, T = F · a cosφ (N m⁻¹ = kg s⁻²), scaled by 10⁻⁶ like the
+ *    M-form terms;
+ *    column mean: spread over the column's mass p_s/g → (·)·g/p_s per second,
+ *    × 86400 per day;  ∫dp/g: F in N m⁻², T in 10⁶ kg s⁻². */
 function computeTorqueOverlays(terms, form, agg) {
-    const { nlat } = terms;
+    const { nlat, cosphi } = terms;
     const month = terms._month;
     const seasonal = !!terms._seasonal;
     const srcSlice = terms._source ?? null;
@@ -317,35 +326,29 @@ function computeTorqueOverlays(terms, form, agg) {
     const mtn  = mountainTorqueProfile(month, seasonal, srcSlice);    // N/m² or null
     if (!fric && !mtn) return null;
 
-    // Convert N/m² → display units. For 'integral' aggregation we're already
-    // in N/m² so identity. For 'mean' (m/s/day or 10⁶ m²/s/day), convert via
-    // τ → ∂[u]/∂t = τ·g/p_s (m/s²) → × DAY_SEC for /day.
     const p_s = LEVELS[LEVELS.length - 1] * 100;
-    const conv = (t_si) => {
-        if (!Number.isFinite(t_si)) return NaN;
-        if (agg === 'integral') return t_si;
-        if (form === 'u') return (t_si * G / p_s) * DAY_SEC;
-        // M-form col-mean: equivalent ∂[M]/∂t = τ·g·a·cosφ / p_s; do approx
-        // by lat-by-lat. Caller passes per-lat — handled in the loop below.
-        return NaN;
+    const conv = (F, i) => {
+        if (!Number.isFinite(F)) return NaN;
+        const x = form === 'u' ? F : F * A_EARTH * cosphi[i] / 1e6;
+        return agg === 'integral' ? x : x * G / p_s * DAY_SEC;
     };
 
     const out = [];
     if (fric) {
         const f = new Float32Array(nlat);
-        for (let i = 0; i < nlat; i++) f[i] = conv(fric[i]);
+        for (let i = 0; i < nlat; i++) f[i] = conv(fric[i], i);
         out.push({ values: f, color: SERIES_COLORS.friction.color, label: SERIES_COLORS.friction.label });
     }
     if (mtn) {
         const m = new Float32Array(nlat);
-        for (let i = 0; i < nlat; i++) m[i] = conv(mtn[i]);
+        for (let i = 0; i < nlat; i++) m[i] = conv(mtn[i], i);
         out.push({ values: m, color: SERIES_COLORS.mountain.color, label: SERIES_COLORS.mountain.label });
     }
     if (fric && mtn) {
         const sum = new Float32Array(nlat);
         for (let i = 0; i < nlat; i++) {
             const a = fric[i], b = mtn[i];
-            sum[i] = (Number.isFinite(a) && Number.isFinite(b)) ? conv(a + b) : NaN;
+            sum[i] = (Number.isFinite(a) && Number.isFinite(b)) ? conv(a + b, i) : NaN;
         }
         out.push({ values: sum, color: SERIES_COLORS.fricMtn.color, label: SERIES_COLORS.fricMtn.label });
     }
@@ -422,19 +425,26 @@ const SERIES_COLORS = {
     eddyP:    { color: '#D44E5E', label: 'eddy vertical' },
     torque:   { color: '#88BFA0', label: 'implied torque' },
     total:    { color: '#E8C26A', label: 'total' },
-    friction: { color: '#3FBFD9', label: 'friction (ews)' },
-    mountain: { color: '#C97AC2', label: 'mountain (p_s·∂h/∂λ)' },
+    friction: { color: '#3FBFD9', label: 'friction (−[ews])' },
+    mountain: { color: '#C97AC2', label: 'mountain (−[p_s ∂h/∂x])' },
     fricMtn:  { color: '#F0F0F0', label: 'friction + mountain' },
 };
 
+// ── Surface torques on the atmosphere ───────────────────────────────────
+// Conventions after Peixoto & Oort (1992, ch. 11) and Newton (1971). Both
+// profiles are zonal-mean ZONAL FORCES PER UNIT AREA ON THE AIR, F (N m⁻²),
+// positive when they add westerly momentum; the torque per unit area about
+// the axis is T = F · a cosφ (N m⁻¹), and globally
+//   T_F = 2πa² ∫ T_f cosφ dφ,   T_M = −a² ∫∫ p_s (∂h/∂λ) cosφ dλ dφ.
+// computeTorqueOverlays puts F (∂[u]/∂t form) or T (∂[M]/∂t form) in the
+// budget terms' units.
+
 /**
- * Friction torque per unit area on the air, as a latitude profile.
- *   τ_f(φ) = -[ews](φ)  in N/m²
- *
- * Sign: positive [ews] is eastward stress on the air FROM the surface; that
- * removes westerly momentum from the atmosphere (sink), so the M-budget
- * contribution is -[ews]. In trade-wind belts where surface easterlies feel
- * positive ews from the ground, atmospheric M is gained → τ_f > 0.
+ * Friction: F_f(φ) = −[τ_E] in N m⁻², τ_E = ERA5 eastward turbulent surface
+ * stress (ewss ÷ 86400, turbulent + orographic form drag), the stress the air
+ * exerts ON the surface — positive under surface westerlies. The air feels
+ * the opposite stress: a sink of westerly momentum under the midlatitude
+ * westerlies (F_f < 0), a source under the trades (F_f > 0).
  *
  * Returns Float32Array(nlat) in N/m², or null if the ews tile isn't cached.
  */
@@ -443,20 +453,31 @@ function frictionTorqueProfile(month, seasonal = false, srcSlice = null) {
     const ews = sourceMonth('ews', month, null, srcSlice, seasonal);
     if (!ews) return null;
     const out = zonalMean(ews, nlat, nlon);
-    for (let i = 0; i < nlat; i++) out[i] = -out[i];   // sign convention
+    for (let i = 0; i < nlat; i++) out[i] = -out[i];   // stress on the air
     return out;
 }
 
 /**
- * Mountain torque per unit area on the air:
- *   τ_m(φ) = ⟨p_s · ∂h/∂λ⟩_zonal   in N/m²
+ * Mountain: F_m(φ) = −[p_s ∂h/∂x] = −[p_s ∂h/∂λ] / (a cosφ) in N m⁻², the
+ * zonal pressure force the topography h(λ, φ) exerts on the air (around a
+ * latitude circle −∮∫ ∂p/∂x dz dx = −∮ p_s ∂h/∂x dx). Higher surface pressure
+ * on a mountain's west (windward) slope than on its east slope pushes the
+ * air westward: F_m < 0, a sink of westerly momentum. Per unit area the
+ * torque is T_m = F_m · a cosφ = −[p_s ∂h/∂λ].
  *
- * where h(λ, φ) is the surface elevation. p_s is in Pa (not hPa) — undo the
- * cached hPa conversion. ∂h/∂λ is in m / radian; (p_s in Pa) × (m/rad) on a
- * sphere of radius a, with dy_zonal = a·cosφ·dλ, gives a stress in N/m².
+ * Numerics: the hydrostatic part of p_s, a function of h alone, contributes
+ * nothing analytically (p_ref(h) ∂h/∂λ = ∂(−p₀H e^{−h/H})/∂λ integrates to zero
+ * around the circle), but centred differences over steep 1° terrain turn it
+ * into a spurious −2.8×10¹⁹ N m global torque. It is removed before
+ * differencing (p_s − p₀ e^{−h/H}, p₀ = 1013.25 hPa, H = 8 km); then friction
+ * + mountain integrate to ≈ −0.1×10¹⁹ N m globally in the 1991–2020 annual
+ * mean (each ≈ ±0.9×10¹⁹), the near-zero total a steady AAM requires. Monthly
+ * means are exact here: h is fixed, so the term is linear in p_s.
  *
  * Returns Float32Array(nlat) in N/m², or null if either tile is missing.
  */
+const P_REF = 101325;   // Pa
+const H_REF = 8000;     // m, isothermal scale height
 function mountainTorqueProfile(month, seasonal = false, srcSlice = null) {
     const { nlat, nlon } = GRID;
     const sp_hPa = sourceMonth('sp', month, null, srcSlice, seasonal);
@@ -467,24 +488,21 @@ function mountainTorqueProfile(month, seasonal = false, srcSlice = null) {
     const dlam = (2 * Math.PI) / nlon;     // longitude step in radians
 
     for (let i = 0; i < nlat; i++) {
+        const c = Math.cos((90 - i) * D2R);
+        if (c < 1e-3) { out[i] = NaN; continue; }
         let s = 0, n = 0;
         const row = i * nlon;
         for (let j = 0; j < nlon; j++) {
             const jE = (j + 1) % nlon;
             const jW = (j - 1 + nlon) % nlon;
             const dh_dlam = (oro[row + jE] - oro[row + jW]) / (2 * dlam);   // m/rad
-            const ps = sp_hPa[row + j] * 100;                               // hPa → Pa
+            const h = oro[row + j];
+            const ps = sp_hPa[row + j] * 100 - P_REF * Math.exp(-h / H_REF);   // Pa, hydrostatic part removed
             if (!Number.isFinite(dh_dlam) || !Number.isFinite(ps)) continue;
-            // p_s · ∂h/∂λ has units Pa·m/rad. Per unit zonal arc length (m/rad)
-            // a·cosφ, the stress contribution is (p_s·∂h/∂λ) / (a·cosφ), but
-            // canonical mountain torque integrand is just ⟨p_s·∂h/∂λ⟩ over λ
-            // averaged into a stress equivalent. Following Newell (1971) /
-            // Egger-Weickmann-Hoinka (2007) we report ⟨p_s·∂h/∂λ⟩ / a as N/m²,
-            // dividing by Earth radius to make the units come out as stress.
             s += ps * dh_dlam;
             n += 1;
         }
-        out[i] = n > 0 ? (s / n) / A_EARTH : NaN;
+        out[i] = n > 0 ? -(s / n) / (A_EARTH * c) : NaN;   // −[p_s ∂h/∂λ]/(a cosφ)
     }
     return out;
 }
