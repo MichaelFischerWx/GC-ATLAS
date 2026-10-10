@@ -150,23 +150,11 @@ def _open_var_for_period(group: str, short: str) -> tuple[xr.DataArray, list[Pat
                         PERIOD_YEAR_RANGE, group, short)
             return None
     paths: list[Path] = []
-    missing: list[str] = []
     for raw_dir in active_dirs:
         p = raw_dir / f"era5_{group}_{short}.nc"
         if p.exists():
             paths.append(p)
-        else:
-            missing.append(raw_dir.name)
     if not paths:
-        return None
-    # A variable present in only some of the merged dirs would come out with a
-    # silently truncated time axis: a per-year tree starting in 1991 (which
-    # validate_manifest.py rejects, blocking the whole monthly refresh) or a
-    # sliding-window climatology averaged over part of its window. Newly added
-    # variables reach the dirs one download at a time, so wait for all of them.
-    if missing:
-        LOG.warning("skip  %s/%s  (not downloaded into %s yet)",
-                    group, short, ", ".join(missing))
         return None
     # Skip in-flight downloads to avoid HDF5 truncation errors.
     for p in paths:
