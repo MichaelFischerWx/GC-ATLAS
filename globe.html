@@ -2305,7 +2305,7 @@
 P_E = (R/2g) ∫ ⟨T*²⟩ / (γ p) dp     (eddy APE)
 K_M = (1/2g) ∫ ([u]² + [v]²) dp     (mean KE)
 K_E = (1/2g) ∫ ⟨u*² + v*²⟩ dp       (eddy KE)</pre>
-                <p style="font-size: 0.74rem;">where T̂ = [T] − T_ref (zonal-mean departure from reference), T* = T − [T] (stationary-eddy departure from zonal mean), γ(p) = κT_ref/p − ∂T_ref/∂p (static stability), [·] is zonal mean, ⟨·⟩ is global area-mean. Leading factor R/(2g) is the Holton–Hakim / Vallis form (using c_p/2g instead overshoots by ~3.5×).</p>
+                <p style="font-size: 0.74rem;">where T̂ = [T] − T_ref (zonal-mean departure from reference), T* = T − [T] (stationary-eddy departure from zonal mean), γ(p) = κT_ref/p − ∂T_ref/∂p (static stability), [·] is zonal mean, ⟨·⟩ is global area-mean and ( )″ the departure from it. Leading factor R/(2g) is the Holton–Hakim / Vallis form (using c_p/2g instead overshoots by ~3.5×).</p>
                 <p><b>Conversions</b> — each has a clean physical reading:</p>
                 <pre>C(P_M→P_E) = -(R/g) ∫ ⟨v*T*⟩/(γp) · ∂[T]/∂y dp
               -(R/g) ∫ ⟨ω*T*⟩ p^-κ ·
@@ -2322,50 +2322,52 @@ C(K_E→K_M) =  (1/g) ∫ ⟨u*v*⟩ cosφ · ∂([u]/cosφ)/∂y dp
    ► eddy momentum flux spinning up the
      zonal-mean jets (barotropic)
 
-C(P_M→K_M) = -(R/g) ∫ [ω][T] / p dp
-   ► direct thermal conversion by the
-     zonal-mean meridional circulation
-     (Hadley cell drives this)</pre>
+C(P_M→K_M) = -(R/g) ∫ ⟨[ω]″[T]″⟩ / p dp
+   ► zonal-mean meridional circulation:
+     direct Hadley cells (+) against
+     indirect Ferrel cells (−); they
+     nearly cancel globally</pre>
                 <p><b>Implementation notes:</b></p>
                 <ul style="margin: 4px 0 6px 16px; padding: 0; font-size: 0.74rem;">
                     <li>Inputs are the monthly-mean u, v, ω, T fields on 12 pressure levels (10 → 1000 hPa) from ERA5.</li>
                     <li>Vertical integration uses each level's half-distance layer (dp = (p_{k-1} + p_{k+1})/2 − (p_{k-1} + p_k)/2), one-sided at top and bottom.</li>
                     <li>Meridional derivatives ∂/∂y use centered differences on a = 6.371·10⁶ m; vertical ∂/∂p likewise on the 12-level pressure grid.</li>
-                    <li>Global ⟨·⟩ uses a cosφ area weight over the full (181 × 360) grid, skipping NaN (land-masked) samples.</li>
+                    <li>Global ⟨·⟩ uses a cosφ area weight over the full (181 × 360) grid. Pressure levels below the surface (p &gt; p_s, the monthly-mean surface pressure) are left out, following Boer (1982): [·] averages the above-ground part of each latitude circle, and ⟨·⟩ weights each latitude by that part's share but divides by the whole sphere, so ∫dp/g is a mass integral over the air that's actually there.</li>
                 </ul>
-                <p><b>Reference-state toggle</b> (controls T_ref, which sets γ and the T̂ used for P_M, C(P_M, K_M) and the vertical part of C(P_M, P_E)):</p>
+                <p><b>Reference-state toggle</b> (controls T_ref, which sets γ — the 1/(γp) weight in P_M, P_E and C(P_M, P_E) — and the T̂ in P_M and the vertical part of C(P_M, P_E)):</p>
                 <ul style="margin: 4px 0 6px 16px; padding: 0; font-size: 0.74rem;">
-                    <li><b>Lorenz (sorted)</b> — the true minimum-PE reference from Lorenz (1955). Every parcel (~780k on the 12-level globe) is adiabatically re-stratified by θ, with highest θ at the top; T_ref(p) is the T at the rank where cumulative mass from the top equals (p / p_s)·total. This is the canonical "available" formulation.</li>
-                    <li><b>Area-mean</b> — T_ref(p) = global area-weighted mean of T at each pressure level. The textbook diagnostic approximation. Faster, but it overstates how much PE is "available" — a lot of the meridional T gradient it sees is actually unavailable (non-adiabatic to release).</li>
+                    <li><b>Lorenz (sorted)</b> — the true minimum-PE reference from Lorenz (1955). Every above-ground parcel (~730k on the 12-level globe, each carrying its layer's mass, the lowest one's layer reaching down to the surface) is adiabatically re-stratified by θ, highest θ at the top, into one column from 10 hPa down to the global-mean surface pressure (~986 hPa). T_ref at a level is the mass-weighted mean over the slab of that column the level stands for. This is the canonical "available" formulation. The coldest ~2 % of the mass (winter-continent and polar boundary-layer air) pools at the bottom, so this reference is very stable below ~900 hPa: γp/T ≈ 0.5–0.6 at 925 hPa against ~0.1 in the free troposphere. That is the minimum-PE state itself (the sorted column sampled finely gives the same), and it is why the lowest layers hold less P_M here than under the area mean.</li>
+                    <li><b>Area-mean</b> — T_ref(p) = global area-weighted mean of T at each pressure level. The textbook diagnostic approximation. Faster, but it overstates how much PE is "available" — a lot of the meridional T gradient it sees is actually unavailable (non-adiabatic to release). It averages the whole isobaric surface, ERA5's below-ground values included: over the air alone, the 1000 hPa mean covers only the warm low-lying two-thirds of the globe and comes out superadiabatic against 925 hPa.</li>
                 </ul>
-                <p><b>Why sorted ≠ area-mean, especially for C(P_M, K_M):</b> both formulations share u, v, ω, T — only T_ref (and hence T̂, γ) differ. In area-mean, T̂ still contains the full tropics-to-pole gradient, so the Hadley-cell overturning [ω] correlates strongly with T̂ and C(P_M, K_M) is large. In sorted, the reference has already absorbed most of that gradient; the "excess" T̂ is small and C(P_M, K_M) drops sharply. The factor-of-many difference you see between the two panels is Lorenz's (1955) original pedagogical point in visible form — the area-mean calc systematically overstates convertible energy.</p>
+                <p><b>Why sorted ≠ area-mean:</b> both formulations share u, v, ω, T — only T_ref (and hence T̂, γ) differ. The sorted reference is colder and far more stable in the lower troposphere, so the same temperature departure there is worth less APE: P_M comes out ~13 % smaller (12-month mean 3.5 vs 4.0 MJ m⁻²) and P_E ~25 % smaller, and C(P_M, P_E) shifts from its meridional to its vertical term (annual 0.21 + 0.11 sorted vs 0.28 + 0.04 W m⁻² area-mean) at about the same total. That is Lorenz's (1955) point in visible form: part of the pole-to-equator contrast the area mean counts can't be released adiabatically. C(P_M, K_M) is identical in both panels: in Peixoto &amp; Oort's form ⟨[ω]″[T]″⟩ the reference drops out.</p>
                 <p><b>Typical magnitudes (for sanity-checking):</b></p>
                 <table style="font-size: 0.72rem; margin: 4px 0 8px; border-collapse: collapse; width: 100%;">
                     <tr style="color: var(--sage); border-bottom: 1px solid var(--border-light);">
                         <th style="text-align: left; padding: 2px 6px;">Quantity</th>
                         <th style="text-align: right; padding: 2px 6px;">P&amp;O total</th>
-                        <th style="text-align: right; padding: 2px 6px;">Stat-only band</th>
+                        <th style="text-align: right; padding: 2px 6px;">Here, by month</th>
                     </tr>
-                    <tr><td style="padding: 2px 6px;">P_M (MJ/m²)</td><td style="text-align: right;">4.0</td><td style="text-align: right;">~3.8-4.2 (sorted)</td></tr>
-                    <tr><td style="padding: 2px 6px;">K_M (MJ/m²)</td><td style="text-align: right;">0.8</td><td style="text-align: right;">~0.7-0.9</td></tr>
-                    <tr><td style="padding: 2px 6px;">P_E (MJ/m²)</td><td style="text-align: right;">1.5</td><td style="text-align: right;">~0.2-0.4 (stat)</td></tr>
-                    <tr><td style="padding: 2px 6px;">K_E (MJ/m²)</td><td style="text-align: right;">1.4</td><td style="text-align: right;">~0.2-0.3 (stat)</td></tr>
-                    <tr><td style="padding: 2px 6px;">C(P_M, P_E) (W/m²)</td><td style="text-align: right;">2.2</td><td style="text-align: right;">~0.3-0.55 (sorted, stat)</td></tr>
-                    <tr><td style="padding: 2px 6px;">C(P_E, K_E) (W/m²)</td><td style="text-align: right;">1.7</td><td style="text-align: right;">~0.5-0.7 (stat)</td></tr>
-                    <tr><td style="padding: 2px 6px;">C(K_E, K_M) (W/m²)</td><td style="text-align: right;">0.2</td><td style="text-align: right;">~0.06-0.12 (stat)</td></tr>
-                    <tr><td style="padding: 2px 6px;">C(P_M, K_M) (W/m²)</td><td style="text-align: right;">0.2</td><td style="text-align: right;">~0.02-0.1 (sorted, stat)</td></tr>
+                    <tr><td style="padding: 2px 6px;">P_M (MJ/m²)</td><td style="text-align: right; padding: 2px 6px;">4.0</td><td style="text-align: right; padding: 2px 6px;">3.2-3.7<br><span style="color: var(--paper-dim);">area-mean 3.6-4.4</span></td></tr>
+                    <tr><td style="padding: 2px 6px;">K_M (MJ/m²)</td><td style="text-align: right; padding: 2px 6px;">0.8</td><td style="text-align: right; padding: 2px 6px;">0.73-0.87</td></tr>
+                    <tr><td style="padding: 2px 6px;">P_E (MJ/m²)</td><td style="text-align: right; padding: 2px 6px;">1.5</td><td style="text-align: right; padding: 2px 6px;">0.07-0.17<br><span style="color: var(--paper-dim);">area-mean 0.11-0.23</span></td></tr>
+                    <tr><td style="padding: 2px 6px;">K_E (MJ/m²)</td><td style="text-align: right; padding: 2px 6px;">1.4</td><td style="text-align: right; padding: 2px 6px;">0.08-0.18</td></tr>
+                    <tr><td style="padding: 2px 6px;">C(P_M, P_E) (W/m²)</td><td style="text-align: right; padding: 2px 6px;">2.2</td><td style="text-align: right; padding: 2px 6px;">0.19-0.59</td></tr>
+                    <tr><td style="padding: 2px 6px;">C(P_E, K_E) (W/m²)</td><td style="text-align: right; padding: 2px 6px;">1.7</td><td style="text-align: right; padding: 2px 6px;">0.26-0.54</td></tr>
+                    <tr><td style="padding: 2px 6px;">C(K_E, K_M) (W/m²)</td><td style="text-align: right; padding: 2px 6px;">0.2</td><td style="text-align: right; padding: 2px 6px;">0.05-0.18</td></tr>
+                    <tr><td style="padding: 2px 6px;">C(P_M, K_M) (W/m²)</td><td style="text-align: right; padding: 2px 6px;">0.2</td><td style="text-align: right; padding: 2px 6px;">−0.21 to −0.02</td></tr>
                 </table>
-                <p style="font-size: 0.72rem; color: var(--paper-dim);">Left column: Peixoto &amp; Oort (1992) Table 13.1 for the full circulation. Right column: the stationary-only contribution you'd expect to see here, derived from Boer (1989)'s stationary/transient decomposition (~15-30% of total for eddy quantities). DJF values are closer to the top of each band; JJA to the bottom. Reanalysis-to-reanalysis variance alone is ±15-20%, so matches within that range count as good. For C(P_M, P_E), Li et al. (2007) find 1.79 W/m² (ERA-40; NCEP2 1.69) for the global annual mean with this same split — stationary = monthly-mean departures from the zonal mean, plus sub-monthly transients. 15-30% of that is 0.3-0.55; the 1991-2020 climatology here gives 0.27 (Jul) to 0.55 (Jan), annual mean 0.36 (sorted; area-mean ~0.1 higher).</p>
+                <p style="font-size: 0.72rem; color: var(--paper-dim);">Left column: Peixoto &amp; Oort (1992) Table 13.1 for the full circulation. Right column: the lowest to highest monthly value of the 1991-2020 climatology here, sorted reference (area-mean where it differs). The stationary eddies peak in Dec-Jan and are weakest in Mar-May. The mean-state terms compare directly: P_M with P&amp;O's 4.0 and Li et al.'s (2007) 4.3 MJ/m², whose formulas take the isobaric mean as reference (12-month mean here: 4.0 area-mean, 3.5 sorted), and K_M with 0.8. The eddy terms here are stationary only; Boer (1989) puts that share at ~15-30% of the total. For C(P_M, P_E), Li et al. (2007) find 1.79 W/m² (ERA-40; NCEP2 1.69) for the global annual mean with this same split — stationary = monthly-mean departures from the zonal mean, plus sub-monthly transients. 15-30% of that is 0.27-0.54; the 12-month mean here is 0.33 (area-mean 0.32). C(P_M, K_M) is a near-cancellation: 30°S-30°N (the direct Hadley cells) gives +0.5 to +0.7 W/m² and poleward of 30° (mostly the indirect Ferrel cells) −0.5 to −0.7, leaving −0.07 for the 12-month mean, so its sign is fragile. Reanalysis-to-reanalysis variance alone is ±15-20%, so matches within that range count as good.</p>
                 <p style="color: var(--ochre);"><b>Caveats:</b></p>
                 <ul style="margin: 4px 0 6px 16px; padding: 0; font-size: 0.74rem; color: var(--paper-dim);">
                     <li><b>Stationary eddies only.</b> * here is the departure of the monthly-mean field from its zonal mean — it captures planetary waves locked to topography / land-sea contrast. High-frequency (sub-monthly) <i>transient</i> eddies, which dominate baroclinic conversion in published totals, need daily data (currently out of scope).</li>
-                    <li>C(P_M, P_E) includes the vertical eddy heat flux in Peixoto &amp; Oort's (1974) form: ⟨ω*T*⟩ acts on the vertical structure of T̂, the departure from the reference state, not on ∂[T]/∂p. The eddy heat flux against the reference lapse rate itself is the eddy buoyancy flux, already counted in C(P_E, K_E). The vertical term is ~0.1 W/m² here, against 0.15-0.6 for the meridional one; with transients included, Li et al. (2007) find the ω terms ~10× smaller than the horizontal ones.</li>
+                    <li>C(P_M, P_E) includes the vertical eddy heat flux in Peixoto &amp; Oort's (1974) form: ⟨ω*T*⟩ acts on the vertical structure of T̂, the departure from the reference state, not on ∂[T]/∂p. The eddy heat flux against the reference lapse rate itself is the eddy buoyancy flux, already counted in C(P_E, K_E). By month the vertical term is 0.07-0.16 W/m² here under the sorted reference (0.01-0.09 area-mean), against 0.08-0.43 (0.10-0.58) for the meridional one; with transients included, Li et al. (2007) find the ω terms ~10× smaller than the horizontal ones.</li>
+                    <li><b>Below ground.</b> ERA5 fills pressure levels under the surface with extrapolated values (a third of the 1000 hPa surface, a tenth of 925 hPa). Their ω is no circulation (+0.02 to +0.10 Pa/s on average at 700-1000 hPa, against &lt; 0.001 over the air there); with the extrapolated T it would add +0.9 (Jan) to +1.3 W/m² (Jul) of spurious C(P_M, K_M), in July nearly all of it south of 60°S, and a third of July's C(P_M, P_E). Those cells are left out everywhere, the sort included.</li>
                     <li>Expect ~3-6× smaller conversions than Peixoto-Oort "total" numbers because transients are excluded — that gap is the transient-eddy contribution, not a bug.</li>
                 </ul>
                 <p style="color: var(--paper-dim); font-size: 0.74rem;">
-                    Use the cycle to <i>illustrate</i> structure — which arrows are large, which way energy flows, how seasonal cycles shift it (swipe through months). Toggle the reference state to see how a methodology choice shifts P_M and C(P_M, K_M) by an order of magnitude — that's the pedagogy in its own right.
+                    Use the cycle to <i>illustrate</i> structure — which arrows are large, which way energy flows, how seasonal cycles shift it (swipe through months). Toggle the reference state to see how much of the area-mean APE is unavailable (P_M −13 %, P_E −25 % under the sorted reference) — that's the pedagogy in its own right.
                 </p>
-                <p style="color: var(--paper-dim); font-size: 0.74rem;">References: Lorenz (1955, <i>Tellus</i>); Peixoto &amp; Oort (1974; 1992, <i>Physics of Climate</i>, ch. 13-14); Boer (1989, <i>JCli</i>) for the stationary/transient decomposition; Li et al. (2007, <i>GRL</i>) for reanalysis totals with the same monthly split; Holton &amp; Hakim (textbook ch. 10) for the canonical derivation.</p>
+                <p style="color: var(--paper-dim); font-size: 0.74rem;">References: Lorenz (1955, <i>Tellus</i>); Peixoto &amp; Oort (1974; 1992, <i>Physics of Climate</i>, ch. 13-14); Boer (1982, <i>MWR</i>) for pressure levels below the surface; Boer (1989, <i>JCli</i>) for the stationary/transient decomposition; Li et al. (2007, <i>GRL</i>) for reanalysis totals with the same monthly split; Holton &amp; Hakim (textbook ch. 10) for the canonical derivation.</p>
             </div>
             <svg id="lorenz-svg" viewBox="0 0 360 260" xmlns="http://www.w3.org/2000/svg">
                 <!-- boxes -->

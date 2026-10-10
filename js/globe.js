@@ -23,7 +23,7 @@ import { decompose, annualMeanFrom, aggregatedDecompositionRange } from './decom
 import { HoverProbe } from './hover.js';
 import { computeMassStreamfunction, computeAngularMomentum, computeBruntVaisala, computeGeostrophicWind } from './diagnostics.js';
 import { computeEPFlux } from './ep_flux.js';
-import { computeLorenzCycle } from './lorenz.js';
+import { computeLorenzCycle, LORENZ_INGREDIENTS } from './lorenz.js';
 import { buildMBudgetView } from './m_budget.js';
 import { buildQBudgetView } from './q_budget.js';
 import { buildHBudgetView } from './h_budget.js';
@@ -584,8 +584,8 @@ class GlobeApp {
             // terms read the neighbouring months too.
             const xsMonth = s.xsDiag === 'transport' ? this._transportNeedsMonth(month) : diagMonth;
             if (s.showXSection && xsNeeds && xsMonth) this.updateXSection();
-            // Lorenz cycle needs u, v, w, t at every level for the current month.
-            const lorenzIngredient = (name === 'u' || name === 'v' || name === 'w' || name === 't');
+            // Lorenz cycle needs u, v, w, t at every level, and sp, for the current month.
+            const lorenzIngredient = LORENZ_INGREDIENTS.pl.includes(name) || LORENZ_INGREDIENTS.sl.includes(name);
             if (s.showLorenz && lorenzIngredient && diagMonth) {
                 this.updateLorenz();
             }
@@ -2214,8 +2214,8 @@ class GlobeApp {
         if ('showLorenz' in patch) {
             const panel = document.getElementById('lorenz-panel');
             if (panel) panel.hidden = !patch.showLorenz;
-            // Lorenz needs u, v, w, t at every level for the globe's time slice.
-            if (patch.showLorenz) this._prefetchIngredients({ pl: ['u', 'v', 'w', 't'] });
+            // Lorenz needs u, v, w, t at every level, and sp, for the globe's time slice.
+            if (patch.showLorenz) this._prefetchIngredients(LORENZ_INGREDIENTS);
         }
         if ('showTimeseries' in patch) {
             const panel = document.getElementById('timeseries-panel');
@@ -2571,7 +2571,7 @@ class GlobeApp {
     updateLorenz() {
         const { month, lorenzRef } = this.state;
         const seasonal = this._avgWindow();
-        const notice = this._diagSourceNotice({ pl: ['u', 'v', 'w', 't'] });
+        const notice = this._diagSourceNotice(LORENZ_INGREDIENTS);
         const cycle = notice ? null
             : computeLorenzCycle(month, lorenzRef, { seasonal, source: this._diagSource() });
         this._lzPending = !cycle && !notice;
@@ -2601,7 +2601,7 @@ class GlobeApp {
             // Blank the conversions too so the last slice's numbers don't
             // sit under the new title.
             if (!notice) {
-                this._prefetchIngredients({ pl: ['u', 'v', 'w', 't'] });
+                this._prefetchIngredients(LORENZ_INGREDIENTS);
                 this._scheduleDiagRetry();
             }
             const ph = notice ? '—' : '…';
