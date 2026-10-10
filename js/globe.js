@@ -27,7 +27,7 @@ import { computeLorenzCycle } from './lorenz.js';
 import { buildMBudgetView } from './m_budget.js';
 import { buildQBudgetView } from './q_budget.js';
 import { buildHBudgetView } from './h_budget.js';
-import { buildTransportView, transportMonths, TRANSPORT_INGREDIENTS } from './transport.js';
+import { buildTransportView, transportMonths, transportTilesMissing, TRANSPORT_INGREDIENTS } from './transport.js';
 import { sourceFromState, sourceKey, sourceYears, sourceHasMonth, sourceMonth } from './diag_source.js';
 import { ParcelField } from './parcels.js';
 import { GifExporter, downloadBlob } from './gif_export.js';
@@ -251,6 +251,8 @@ class GlobeApp {
         // get colorbars based on their bulk distribution rather than isolated
         // topographic / convective extremes.
         registerClamps(FIELDS);
+        // Now we know which fields this tree has tiles for.
+        this._refreshFieldPickers();
         // A URL-restored diagnostic panel otherwise waits for the main
         // field's tile before its first draw — which never comes when the
         // main view is an unpublished month. Draw (and prefetch) it now.
@@ -318,6 +320,7 @@ class GlobeApp {
                 .then((ok) => {
                     if (!ok) return;
                     setActivePeriod(s.climatologyPeriod);
+                    this._refreshFieldPickers();
                     this.updateField();
                     this._refreshDiagPanels();
                 })
@@ -2230,6 +2233,7 @@ class GlobeApp {
             // include period in their keys, so wipe them to force rebuild from
             // the new period's underlying tiles. Wind cache + parcel cube same.
             setActivePeriod(patch.climatologyPeriod);
+            this._refreshFieldPickers();
             invalidateIsentropicCache();
             this.windCache.stale = true;
             if (this.parcels) this.parcels.invalidateCube();
@@ -2275,12 +2279,15 @@ class GlobeApp {
                         // σ-anom availability depends on the newly-loaded
                         // manifest's has_std flags — re-evaluate once it lands.
                         this._refreshZscoreAvailability?.();
+                        // So does which fields the pickers list.
+                        this._refreshFieldPickers();
                     }
                 });
             }
             this._refreshZscoreAvailability?.();
         }
         if ('field' in patch) this._refreshZscoreAvailability?.();
+        if ('field' in patch || 'contourField' in patch || 'xsDiag' in patch) this._refreshFieldPickers();
 
         // Eagerly prefetch all 12 months at this (field, level) so the
         // colorbar stabilises quickly once any tile lands.
@@ -3311,6 +3318,64 @@ class GlobeApp {
         }, 4000);
     }
 
+    /** Is field `name` listed in the pickers? Fields whose raw tiles the
+     *  active climatology's manifest lacks — the energy-transport fields
+     *  before their pipeline has run for that tree — are left out until the
+     *  tiles are uploaded. The current selection always stays, so a shared
+     *  link still opens on it and shows the "isn't built yet" notice.
+     *  Optimistic until the manifest has loaded. */
+    _fieldListed(name, selected) {
+        if (name === selected) return true;
+        if (!FIELDS[name] || FIELDS[name].hidden) return false;   // overlay-only sources (u10, v10, …)
+        return !fieldTilesMissing(name, getActivePeriod()).length;
+    }
+
+    /** (Re)build the field and contour-overlay pickers, and add / remove the
+     *  transport panel option, for the active climatology's tiles. Options
+     *  are removed rather than [hidden]: Safari's native select popup still
+     *  shows hidden options. Runs at start-up, when the manifest lands or
+     *  the climatology changes, and on selection changes. */
+    _refreshFieldPickers() {
+        const fill = (sel, include, value) => {
+            if (!sel) return;
+            for (const og of [...sel.querySelectorAll('optgroup')]) og.remove();
+            // One <optgroup> per category, in FIELDS insertion order, so the
+            // dropdown reads as a guided tour (Dynamics → Moisture → … → TOA).
+            const groups = new Map();
+            for (const [key, meta] of Object.entries(FIELDS)) {
+                if (!include(key, meta)) continue;
+                const g = meta.group || 'Other';
+                if (!groups.has(g)) groups.set(g, []);
+                groups.get(g).push([key, meta]);
+            }
+            for (const [groupName, entries] of groups) {
+                const og = document.createElement('optgroup');
+                og.label = groupName;
+                for (const [key, meta] of entries) {
+                    og.appendChild(Object.assign(document.createElement('option'),
+                        { value: key, textContent: meta.name }));
+                }
+                sel.appendChild(og);
+            }
+            sel.value = value;
+        };
+        const s = this.state;
+        fill(document.getElementById('field-select'),
+             (key) => this._fieldListed(key, s.field), s.field);
+        fill(document.getElementById('contour-field-select'),
+             (key, meta) => meta.contour != null && this._fieldListed(key, s.contourField),
+             s.contourField || '');
+        const diagSel = document.getElementById('xs-diag-select');
+        this._transportOpt ??= diagSel?.querySelector('option[value="transport"]');
+        const opt = this._transportOpt;
+        if (diagSel && opt) {
+            const want = s.xsDiag === 'transport' || !transportTilesMissing(null).length;
+            if (want && !opt.parentNode) diagSel.appendChild(opt);
+            if (!want && opt.parentNode) opt.remove();
+            diagSel.value = s.xsDiag;
+        }
+    }
+
     /** Transport sub-controls and caveat show only in the transport mode,
      *  and the radios follow the state (shared links restore both). */
     _syncTransportControls() {
@@ -3923,26 +3988,9 @@ class GlobeApp {
     // ── UI wiring ────────────────────────────────────────────────────
     bindUI() {
         const fieldSel = document.getElementById('field-select');
-        // Build a Map of group → entries to emit one <optgroup> per category,
-        // preserving insertion order so the dropdown reads as a guided tour
-        // (Dynamics → Moisture → Derived → Surface → fluxes → TOA).
-        const groups = new Map();
-        for (const [key, meta] of Object.entries(FIELDS)) {
-            if (meta.hidden) continue;   // overlay-only sources (u10, v10, …)
-            const g = meta.group || 'Other';
-            if (!groups.has(g)) groups.set(g, []);
-            groups.get(g).push([key, meta]);
-        }
-        for (const [groupName, entries] of groups) {
-            const og = document.createElement('optgroup');
-            og.label = groupName;
-            for (const [key, meta] of entries) {
-                og.appendChild(Object.assign(document.createElement('option'),
-                    { value: key, textContent: meta.name }));
-            }
-            fieldSel.appendChild(og);
-        }
-        fieldSel.value = this.state.field;
+        // Field + contour-overlay pickers (and the transport panel option);
+        // rebuilt as manifests land — see _refreshFieldPickers.
+        this._refreshFieldPickers();
         fieldSel.addEventListener('change', () => {
             const field = fieldSel.value;
             const meta = FIELDS[field];
@@ -4097,27 +4145,10 @@ class GlobeApp {
             const row = document.getElementById('contour-field-row');
             if (row) row.hidden = !e.target.checked;
         });
-        // Populate the contour-overlay dropdown with every field that has
-        // a `contour:` interval defined. Same field-grouping as the main
-        // selector so the optgroups read consistently.
+        // Contour-overlay dropdown: filled by _refreshFieldPickers with every
+        // listed field that has a `contour:` interval.
         const contourSel = document.getElementById('contour-field-select');
         if (contourSel) {
-            const groups = new Map();
-            for (const [key, meta] of Object.entries(FIELDS)) {
-                if (meta.hidden || meta.contour == null) continue;
-                const g = meta.group || 'Other';
-                if (!groups.has(g)) groups.set(g, []);
-                groups.get(g).push([key, meta]);
-            }
-            for (const [groupName, entries] of groups) {
-                const og = document.createElement('optgroup');
-                og.label = groupName;
-                for (const [key, meta] of entries) {
-                    og.appendChild(Object.assign(document.createElement('option'),
-                        { value: key, textContent: meta.name }));
-                }
-                contourSel.appendChild(og);
-            }
             contourSel.addEventListener('change', (e) => {
                 this.setState({ contourField: e.target.value || null });
             });
