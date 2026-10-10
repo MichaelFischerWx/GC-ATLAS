@@ -444,7 +444,12 @@ export function prefetchField(name, { level = null, months = [1,2,3,4,5,6,7,8,9,
 // values in the units advertised in data.js FIELDS metadata.
 const G   = 9.80665;
 const DAY = 86400;
-const RADIATIVE_FLUX_VARS = new Set(['sshf', 'slhf', 'ssr', 'str', 'tisr', 'ttr']);
+const RADIATIVE_FLUX_VARS = new Set(['sshf', 'slhf', 'ssr', 'str', 'tisr', 'ttr', 'tsr', 'tsrc', 'ttrc']);
+// Vertically integrated energy fluxes (W m⁻¹) and column mass fluxes
+// (kg m⁻¹ s⁻¹). Instantaneous in ERA5 — no 86400 — just rescaled to
+// readable display units. js/transport.js undoes these.
+const COLUMN_ENERGY_FLUX_VARS = new Set(['vitoen', 'vitoee', 'vithen', 'vign', 'viken']);
+const COLUMN_MASS_FLUX_VARS   = new Set(['viman', 'vimae']);
 
 function applyUnitConversions(name, values) {
     const n = values.length;
@@ -461,6 +466,15 @@ function applyUnitConversions(name, values) {
     } else if (RADIATIVE_FLUX_VARS.has(name)) {
         // Monthly means provide J m⁻² per day — convert to W m⁻².
         for (let i = 0; i < n; i++) values[i] /= DAY;
+    } else if (COLUMN_ENERGY_FLUX_VARS.has(name)) {
+        // W m⁻¹ → 10⁹ W m⁻¹ (GW per metre of latitude circle).
+        for (let i = 0; i < n; i++) values[i] /= 1e9;
+    } else if (COLUMN_MASS_FLUX_VARS.has(name)) {
+        // kg m⁻¹ s⁻¹ → 10³ kg m⁻¹ s⁻¹.
+        for (let i = 0; i < n; i++) values[i] /= 1e3;
+    } else if (name === 'viwvd') {
+        // Vapour-flux divergence kg m⁻² s⁻¹ → mm day⁻¹ (1 kg m⁻² = 1 mm water).
+        for (let i = 0; i < n; i++) values[i] *= DAY;
     } else if (name === 'ews') {
         // Eastward turbulent surface stress: monthly mean in N m⁻² s
         // (accumulated over a day). Divide by DAY to get instantaneous N m⁻².

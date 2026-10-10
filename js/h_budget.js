@@ -9,8 +9,8 @@
 //
 // Column-integrated steady-state:
 //   ∇·∫h·v dp = LH + SH + R_TOA - R_SFC
-//   where LH = -slhf, SH = -sshf, R_TOA = tisr+ttr (net down at top),
-//         R_SFC = ssr+str (net down at surface).
+//   where LH = -slhf, SH = -sshf, R_TOA = tsr+ttr (net down at top: absorbed
+//         solar minus OLR), R_SFC = ssr+str (net down at surface).
 //
 // Display forms:
 //   form='h':  ∂[h]/(c_p·∂t) in K/day (interpretable as a "moist enthalpy
@@ -21,9 +21,10 @@
 //
 // Stationary eddies only — transients need daily data.
 //
-// Surface heating overlay: when 1D mode + slhf/sshf/ssr/str/tisr/ttr tiles
+// Surface heating overlay: when 1D mode + slhf/sshf/ssr/str/tsr/ttr tiles
 // cached, additional lines appear for LH+SH (turbulent), net column radiation,
 // and total surface+TOA atmospheric heating that should equal -[transport].
+// Trees built before the tsr tiles existed show the turbulent line only.
 
 import { sourceMonth } from './diag_source.js';
 import { LEVELS, GRID } from './data.js';
@@ -229,29 +230,32 @@ function surfaceHeatingProfiles(month, seasonal = false, srcSlice = null) {
     const sshf = sourceMonth('sshf', month, null, srcSlice, seasonal);
     const ssr  = sourceMonth('ssr',  month, null, srcSlice, seasonal);
     const str  = sourceMonth('str',  month, null, srcSlice, seasonal);
-    const tisr = sourceMonth('tisr', month, null, srcSlice, seasonal);
+    // Net TOA shortwave is the ABSORBED solar (tsr), not the incident tisr:
+    // tisr + ttr overstated the column heating by the reflected ~100 W m⁻².
+    const tsr  = sourceMonth('tsr',  month, null, srcSlice, seasonal);
     const ttr  = sourceMonth('ttr',  month, null, srcSlice, seasonal);
-    if (!slhf || !sshf || !ssr || !str || !tisr || !ttr) return null;
+    if (!slhf || !sshf) return null;
 
     const slhfZ = zonalMean(slhf, nlat, nlon);
     const sshfZ = zonalMean(sshf, nlat, nlon);
-    const ssrZ  = zonalMean(ssr,  nlat, nlon);
-    const strZ  = zonalMean(str,  nlat, nlon);
-    const tisrZ = zonalMean(tisr, nlat, nlon);
-    const ttrZ  = zonalMean(ttr,  nlat, nlon);
-
     const turb = new Float32Array(nlat);   // LH + SH atmospheric uptake
+    for (let i = 0; i < nlat; i++) {
+        // ERA5 slhf / sshf are downward (into sfc); atm gain = −flux.
+        turb[i] = -slhfZ[i] - sshfZ[i];
+    }
+    if (!ssr || !str || !tsr || !ttr) return { turb, rad: null, tot: null };
+
+    const ssrZ = zonalMean(ssr, nlat, nlon);
+    const strZ = zonalMean(str, nlat, nlon);
+    const tsrZ = zonalMean(tsr, nlat, nlon);
+    const ttrZ = zonalMean(ttr, nlat, nlon);
     const rad  = new Float32Array(nlat);   // R_TOA_net - R_SFC_net (atm column net rad)
     const tot  = new Float32Array(nlat);
     for (let i = 0; i < nlat; i++) {
-        const lh = -slhfZ[i];      // ERA5 slhf is downward (into sfc); atm gain = -slhf
-        const sh = -sshfZ[i];
-        const Rtoa = tisrZ[i] + ttrZ[i];        // net down at TOA
-        const Rsfc = ssrZ[i]  + strZ[i];        // net down at surface
-        const Rcol = Rtoa - Rsfc;               // atmospheric column net radiation
-        turb[i] = lh + sh;
-        rad[i]  = Rcol;
-        tot[i]  = lh + sh + Rcol;
+        const Rtoa = tsrZ[i] + ttrZ[i];         // net down at TOA
+        const Rsfc = ssrZ[i] + strZ[i];         // net down at surface
+        rad[i] = Rtoa - Rsfc;                   // atmospheric column net radiation
+        tot[i] = turb[i] + rad[i];
     }
     return { turb, rad, tot };
 }
@@ -415,8 +419,8 @@ function buildAllTermsProfile(terms, form, agg) {
             surfaceLines.push({ values: v, color: SERIES_COLORS[key].color, label: SERIES_COLORS[key].label });
         };
         make(surf.turb, 'turb');
-        make(surf.rad,  'rad');
-        make(surf.tot,  'qNet');
+        if (surf.rad) make(surf.rad, 'rad');
+        if (surf.tot) make(surf.tot, 'qNet');
         for (const s of surfaceLines) {
             for (const v of s.values) {
                 if (Number.isFinite(v) && Math.abs(v) > absMax) absMax = Math.abs(v);

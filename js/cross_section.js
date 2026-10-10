@@ -135,6 +135,15 @@ function sampleZonalPL(zm, lat, p) {
     return vT * (1 - fK) + vB * fK;
 }
 
+/** Every curve of a multi-series zonal line plot at `lat` — for the hover
+ *  tooltip. Null for single-series plots and heatmaps. */
+export function sampleSeries(zm, lat) {
+    if (!zm?.series?.length || zm.kind !== 'zonal' || zm.type !== 'sl') return null;
+    return zm.series.map((s) => ({
+        label: s.label, color: s.color, value: sampleZonalSL({ values: s.values }, lat),
+    }));
+}
+
 function sampleZonalSL(zm, lat) {
     const { nlat } = GRID;
     const rLat = 90 - lat;
@@ -600,7 +609,8 @@ function drawLine(ctx, x0, y0, w, h, zm) {
 
     for (const s of series) {
         ctx.strokeStyle = s.color;
-        ctx.lineWidth = 2 * dpr;
+        ctx.lineWidth = (s.width ?? 2) * dpr;
+        ctx.setLineDash(s.dash ? s.dash.map((d) => d * dpr) : []);
         ctx.beginPath();
         let started = false;
         for (let i = 0; i < nlat; i++) {
@@ -614,9 +624,11 @@ function drawLine(ctx, x0, y0, w, h, zm) {
         }
         ctx.stroke();
     }
+    ctx.setLineDash([]);
 
-    // Legend (only if multi-series). Top-right of plot, compact two-column
-    // layout so it doesn't crowd the curves.
+    // Legend (only if multi-series). Top-right of plot by default; plots
+    // whose curves fill that corner (northward transports) ask for the
+    // top-left with zm.legendPos = 'tl'.
     if (zm.series && zm.series.length > 1) {
         const fs = 10 * dpr;
         ctx.font = `${fs}px 'JetBrains Mono', monospace`;
@@ -629,7 +641,7 @@ function drawLine(ctx, x0, y0, w, h, zm) {
         let maxLabel = 0;
         for (const s of zm.series) maxLabel = Math.max(maxLabel, ctx.measureText(s.label).width);
         const itemW = swatch + 6 * dpr + maxLabel + padPx;
-        const lx = x0 + w - itemW - padPx;
+        const lx = zm.legendPos === 'tl' ? x0 + padPx + 6 * dpr : x0 + w - itemW - padPx;
         const ly = y0 + padPx;
         // Background panel for legibility.
         ctx.fillStyle = 'rgba(6, 22, 18, 0.78)';
@@ -640,10 +652,12 @@ function drawLine(ctx, x0, y0, w, h, zm) {
             const yy = ly + si * lineH + lineH / 2;
             ctx.strokeStyle = s.color;
             ctx.lineWidth = 2.5 * dpr;
+            ctx.setLineDash(s.dash ? s.dash.map((d) => d * dpr) : []);
             ctx.beginPath();
             ctx.moveTo(lx, yy);
             ctx.lineTo(lx + swatch, yy);
             ctx.stroke();
+            ctx.setLineDash([]);
             ctx.fillStyle = '#E6EFE9';
             ctx.fillText(s.label, lx + swatch + 6 * dpr, yy);
         }

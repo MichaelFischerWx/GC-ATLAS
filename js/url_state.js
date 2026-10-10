@@ -154,9 +154,12 @@ const SPEC = [
     ['showLorenz',         'lz',  v => v ? '1' : null, s => s === '1'],
     ['xsDiag',             'xd',
         v => v === 'field' ? null : v,
-        s => ['field','psi','M','ug','N2','epflux','mbudget','qbudget','hbudget'].includes(s) ? s : undefined],
+        s => ['field','psi','M','ug','N2','epflux','mbudget','qbudget','hbudget','transport'].includes(s) ? s : undefined],
     // ψ / EP-flux panel as (year or composite) − active climatology.
     ['xsAnom',             'xa',  v => v ? '1' : null, s => s === '1'],
+    // Meridional transport panel: energy | moisture, displayed month | annual mean.
+    ['trQty',              'tq',  v => v === 'moisture' ? 'm' : null, s => s === 'm' ? 'moisture' : 'energy'],
+    ['trAvg',              'ta',  v => v === 'annual' ? 'a' : null,   s => s === 'a' ? 'annual' : 'month'],
 ];
 
 /** Encode a state snapshot as a URL hash (without the leading '#'). */

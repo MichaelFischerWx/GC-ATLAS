@@ -1340,6 +1340,7 @@
         }
         .lz-info-btn:hover { color: var(--paper); border-color: var(--emerald); }
         .lz-info-btn.active { color: var(--deep); background: var(--emerald-bright); border-color: var(--emerald-bright); }
+        .lz-info-btn[hidden] { display: none; }
         .lz-info {
             margin-top: 8px;
             padding: 10px 12px;
@@ -2445,6 +2446,7 @@ C(P_M→K_M) = -(R/g) ∫ [ω][T] / p dp
                     <option value="mbudget">Angular momentum budget</option>
                     <option value="qbudget">Moisture budget</option>
                     <option value="hbudget">Energy budget (MSE)</option>
+                    <option value="transport">Meridional transport (PW)</option>
                 </select>
                 <label class="xs-anom" id="xs-anom-row" hidden
                        title="Show the selected year / composite minus the active climatology">
@@ -2479,6 +2481,37 @@ C(P_M→K_M) = -(R/g) ∫ [ω][T] / p dp
             <div class="budget-caveat" id="budget-caveat" hidden>
                 Budget closure here has not yet been formally validated against published atlases. Spatial patterns and sign conventions are canonical and reliable for pedagogy; for quantitative research use, cross-check magnitudes against a trusted reference before citing a number.
             </div>
+            <div class="mb-controls" id="tr-controls" hidden>
+                <div class="mb-row mb-row-toggles">
+                    <div class="mb-toggle-group" role="radiogroup" aria-label="Transported quantity">
+                        <label class="mb-toggle"><input type="radio" name="tr-qty" value="energy" checked><span>Energy</span></label>
+                        <label class="mb-toggle"><input type="radio" name="tr-qty" value="moisture"><span>Moisture</span></label>
+                    </div>
+                    <div class="mb-toggle-group" role="radiogroup" aria-label="Averaging period"
+                         title="The displayed month (its 3-month season with the seasonal mean on), or the 12-month mean — the only average in which the TOA total and the ocean residual are pure transports">
+                        <label class="mb-toggle"><input type="radio" name="tr-avg" value="month" checked><span>Month</span></label>
+                        <label class="mb-toggle"><input type="radio" name="tr-avg" value="annual"><span>Annual</span></label>
+                    </div>
+                    <button class="lz-info-btn" id="tr-info-btn" type="button" style="flex: none;"
+                            aria-label="About the transport panel" title="Method and references">i</button>
+                </div>
+            </div>
+            <div class="lz-info" id="tr-info" hidden>
+                <p><b>Meridional transport</b> across each latitude circle, northward positive, in PW (10¹⁵ W).</p>
+                <p><b>Total (TOA)</b> — absorbed solar minus OLR, integrated from the South Pole, with the global-mean imbalance removed so the curve closes at both poles:</p>
+                <pre>T(φ) = ∫∫ (R_TOA − ⟨R_TOA⟩) dA   over the cap south of φ,   R_TOA = ASR − OLR</pre>
+                <p><b>Atmosphere</b> — ERA5's vertical integral of the total-energy flux ∫(c_pT + Φ + L_v q + k)·v dp/g, computed every hour on 137 model levels and integrated around the latitude circle. Being a monthly mean of hourly fluxes, it includes the transient eddies. <b>Ocean</b> = total − atmosphere, the residual method of Trenberth &amp; Caron (2001).</p>
+                <p><b>Mass correction</b> (Trenberth 1997). Reanalysis column mass fluxes don't satisfy the mass budget, and every 10⁹ kg s⁻¹ of spurious net mass flux across a latitude carries ≈0.3 PW at the column-mean energy (≈3.3×10⁵ J kg⁻¹). A vertically uniform (barotropic) wind is added so that the net mass flux equals what the budget allows — the water-vapour flux plus the climatological dry-mass tendency — and it carries the mean energy of the latitude circle's cross-section. The caption reports the size of the correction.</p>
+                <p><b>Decomposition of the atmospheric transport</b> — the same [·] / * split as the H and Q budgets, here vertically integrated over masked, mass-weighted columns:</p>
+                <pre>MMC        ∮∫ [v][s] dp/g        mean meridional circulation
+stationary ∮∫ [v*s*] dp/g        zonal departures of the monthly mean
+transient  = atmosphere − MMC − stationary      (s = c_pT + gz + L_v q)</pre>
+                <p>MMC and stationary eddies come from the monthly-mean v, T, z, q on 12 pressure levels (levels below the surface excluded); MMC carries the same mass correction. "Transient" is a residual: sub-monthly eddies, plus the year-to-year covariance of the monthly means and the difference between 12 pressure levels and ERA5's 137 model levels — trust it where it is large (the storm tracks), not its small tropical wiggles. Seasonal and annual means average the monthly decompositions, so the seasonal migration of the Hadley cells stays in the MMC.</p>
+                <p><b>Moisture</b> — the same with q in place of s, shown as latent energy L_v·F (1 PW ≙ 4.0×10⁸ kg s⁻¹ of water vapour ≈ 0.4 Sv). "E − P implied" integrates the surface evaporation minus precipitation (ERA5 short-range forecasts, E = −slhf / L_v) minus the column-water tendency, with its global-mean imbalance removed; its gap to the analysed vapour flux is the reanalysis moisture-budget residual.</p>
+                <p><b>Expected annual means</b> (Trenberth &amp; Caron 2001): atmosphere ≈5.0 PW at 43°N and similar near 40°S; the total peaks near 35° (≈5.8 PW in the NH), where the atmosphere carries 78 % (NH) and 92 % (SH) of it; the ocean dominates only between the equator and ≈17°N.</p>
+                <p style="color: var(--paper-dim); font-size: 0.74rem;">References: Trenberth (1997, <i>J. Climate</i> 10); Trenberth &amp; Caron (2001, <i>J. Climate</i> 14); Trenberth &amp; Stepaniak (2003, <i>J. Climate</i> 16); Peixoto &amp; Oort (1992, <i>Physics of Climate</i>); Mayer &amp; Haimberger (2012, <i>J. Climate</i> 25); Mayer, Mayer &amp; Haimberger (2021, <i>J. Climate</i> 34) on ERA5 budgets.</p>
+            </div>
+            <div class="budget-caveat" id="transport-caveat" hidden></div>
             <canvas id="xs-canvas" width="380" height="200"></canvas>
             <div class="xs-cb-wrap">
                 <canvas id="xs-cb-canvas" class="xs-cb"></canvas>

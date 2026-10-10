@@ -9,7 +9,7 @@
 // jets, Hadley return, stationary waves, subtropical highs). They exist so
 // the renderer works offline / before real tiles are staged.
 
-import { requestField as requestEra5, availableLevels, cachedMonth, getManifest, perYearHasMonth } from './era5.js';
+import { requestField as requestEra5, availableLevels, cachedMonth, getManifest, perYearHasMonth, getActivePeriod } from './era5.js';
 
 // Does the manifest for `period` carry pipeline-materialised std tiles for
 // this derived field? Used to un-gate σ-anom on wspd / mse / dls once the
@@ -59,7 +59,7 @@ export function expectedTilesForView(state) {
     let ingredients;
     let needsTCube = isTheta;
     if (meta.type === 'sl') {
-        ingredients = 1;
+        ingredients = SL_DERIVED[field]?.from.length ?? 1;
         needsTCube = false;
     } else if (field === 'pv') {
         ingredients = 1;
@@ -108,6 +108,7 @@ export function hasCachedIngredients(name, { month, level, coord = 'pressure', t
     const period = year != null ? 'per_year' : 'default';
     const has = (n, lvl) => !!cachedMonth(n, month, lvl, 'mean', period, year);
 
+    if (SL_DERIVED[name]) return SL_DERIVED[name].from.every(n => has(n, null));
     if (meta.type === 'sl') return has(name, null);
 
     const isTheta = coord === 'theta';
@@ -160,6 +161,10 @@ export const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oc
 //                      from below-ground extrapolation under high terrain
 //                      (Tibet, Antarctica, Andes) at low pressure levels,
 //                      and from isolated convective spikes (precip, ω).
+const VI_ENERGY_NOTE = 'Monthly mean of hourly column fluxes, transients included. '
+    + 'Locally the map is dominated by the column mass flux carrying ~3×10⁵ J kg⁻¹ — '
+    + 'read energy transport from the zonal integral (cross-section panel → Meridional '
+    + 'transport) or from the divergence field, not from this map.';
 export const FIELDS = {
     t:    { type: 'pl', group: 'Dynamics',           name: 'Temperature',              units: 'K',       cmap: 'turbo',   defaultLevel: 500, contour: 10, clamp: { lo: 0.005, hi: 0.995 } },
     u:    { type: 'pl', group: 'Dynamics',           name: 'Zonal wind (u)',           units: 'm s⁻¹',   cmap: 'RdBu_r',  defaultLevel: 200, contour: 10, symmetric: true },
@@ -197,13 +202,78 @@ export const FIELDS = {
     ssr:  { type: 'sl', group: 'Surface fluxes',     name: 'Surface net SW radiation',   units: 'W m⁻²', cmap: 'plasma',  contour: 25 },
     str:  { type: 'sl', group: 'Surface fluxes',     name: 'Surface net LW radiation',   units: 'W m⁻²', cmap: 'RdBu_r',  contour: 10, symmetric: true },
     tisr: { type: 'sl', group: 'TOA',                name: 'TOA incoming solar',         units: 'W m⁻²', cmap: 'plasma',  contour: 50 },
-    ttr:  { type: 'sl', group: 'TOA',                name: 'TOA net LW (OLR)',           units: 'W m⁻²', cmap: 'magma',   contour: 20 },
+    tsr:  { type: 'sl', group: 'TOA',                name: 'Absorbed solar (ASR, net SW)', units: 'W m⁻²', cmap: 'plasma', contour: 25 },
+    // TOA fields derived from single-level tiles (SL_DERIVED below). They
+    // follow the globe's year / composite like raw tiles do.
+    olr:  { type: 'sl', group: 'TOA',                name: 'Outgoing longwave (OLR)',    units: 'W m⁻²', cmap: 'magma',   contour: 20, derived: true, slDerived: true },
+    netrad: { type: 'sl', group: 'TOA',              name: 'Net TOA radiation (ASR − OLR)', units: 'W m⁻²', cmap: 'RdBu_r', contour: 25, symmetric: true, derived: true, slDerived: true,
+            note: 'A single month mostly shows the seasonal heat storage. In the annual mean the tropics gain and high latitudes lose energy — the difference the circulation carries poleward (cross-section panel → Meridional transport).' },
+    albedo: { type: 'sl', group: 'TOA',              name: 'Planetary albedo (1 − ASR / S↓)', units: '%', cmap: 'viridis', contour: 10, derived: true, slDerived: true,
+            note: 'Ratio of the monthly means. Masked where the month-mean insolation is below 10 W m⁻² (polar night).' },
+    swcre: { type: 'sl', group: 'TOA',               name: 'Shortwave cloud radiative effect', units: 'W m⁻²', cmap: 'RdBu_r', contour: 20, symmetric: true, derived: true, slDerived: true,
+            note: 'ASR − clear-sky ASR. ERA5 clear-sky fluxes rerun the radiation with the clouds removed from the same column (method II), unlike CERES, which samples cloud-free scenes.' },
+    lwcre: { type: 'sl', group: 'TOA',               name: 'Longwave cloud radiative effect', units: 'W m⁻²', cmap: 'RdBu_r', contour: 10, symmetric: true, derived: true, slDerived: true,
+            note: 'Clear-sky OLR − OLR. ERA5 clear-sky fluxes rerun the radiation with the clouds removed from the same column (method II).' },
+    netcre: { type: 'sl', group: 'TOA',              name: 'Net cloud radiative effect', units: 'W m⁻²', cmap: 'RdBu_r', contour: 10, symmetric: true, derived: true, slDerived: true },
+    // ERA5's TOA longwave is net DOWNWARD, i.e. −OLR. Kept for shared links
+    // (f=ttr) and as an ingredient; hidden so the picker doesn't list OLR
+    // twice with opposite signs.
+    ttr:  { type: 'sl', group: 'TOA',                name: 'TOA net longwave (ttr = −OLR)', units: 'W m⁻²', cmap: 'magma', contour: 20, hidden: true },
+    tsrc: { type: 'sl', group: '_internal',          name: 'TOA net shortwave, clear sky', units: 'W m⁻²', cmap: 'plasma', hidden: true },
+    ttrc: { type: 'sl', group: '_internal',          name: 'TOA net longwave, clear sky',  units: 'W m⁻²', cmap: 'magma',  hidden: true },
+    // ── Vertically integrated (column) fluxes. ERA5 integrates these on
+    // model levels every hour, so their monthly means include the transient
+    // eddies that the monthly-mean u, v, T, q tiles cannot carry.
+    vitoen: { type: 'sl', group: 'Column transports', name: 'Northward total-energy flux', units: '10⁹ W m⁻¹', cmap: 'RdBu_r', contour: 2,  symmetric: true, clamp: { lo: 0.005, hi: 0.995 }, note: VI_ENERGY_NOTE },
+    vitoee: { type: 'sl', group: 'Column transports', name: 'Eastward total-energy flux',  units: '10⁹ W m⁻¹', cmap: 'RdBu_r', contour: 5,  symmetric: true, clamp: { lo: 0.005, hi: 0.995 }, note: VI_ENERGY_NOTE },
+    vithen: { type: 'sl', group: 'Column transports', name: 'Northward enthalpy flux (c_pT·v)', units: '10⁹ W m⁻¹', cmap: 'RdBu_r', contour: 2, symmetric: true, clamp: { lo: 0.005, hi: 0.995 }, note: VI_ENERGY_NOTE },
+    vign:   { type: 'sl', group: 'Column transports', name: 'Northward geopotential flux (Φ·v)', units: '10⁹ W m⁻¹', cmap: 'RdBu_r', contour: 1, symmetric: true, clamp: { lo: 0.005, hi: 0.995 }, note: VI_ENERGY_NOTE },
+    viken:  { type: 'sl', group: 'Column transports', name: 'Northward kinetic-energy flux', units: '10⁹ W m⁻¹', cmap: 'RdBu_r', contour: 0.02, symmetric: true, clamp: { lo: 0.005, hi: 0.995 } },
+    viwvn:  { type: 'sl', group: 'Column transports', name: 'Northward water-vapour flux', units: 'kg m⁻¹ s⁻¹', cmap: 'RdBu_r', contour: 50,  symmetric: true },
+    viwve:  { type: 'sl', group: 'Column transports', name: 'Eastward water-vapour flux',  units: 'kg m⁻¹ s⁻¹', cmap: 'RdBu_r', contour: 100, symmetric: true },
+    ivt:    { type: 'sl', group: 'Column transports', name: 'Vapour transport |⟨Q⟩| (IVT)', units: 'kg m⁻¹ s⁻¹', cmap: 'thalo', contour: 50, derived: true, slDerived: true,
+            note: 'Magnitude of the monthly-mean vapour-flux vector. It is smaller than the mean of the hourly IVT magnitudes that atmospheric-river thresholds (≈250 kg m⁻¹ s⁻¹) refer to.' },
+    viman:  { type: 'sl', group: 'Column transports', name: 'Northward column mass flux', units: '10³ kg m⁻¹ s⁻¹', cmap: 'RdBu_r', contour: 5,  symmetric: true, clamp: { lo: 0.005, hi: 0.995 } },
+    vimae:  { type: 'sl', group: 'Column transports', name: 'Eastward column mass flux',  units: '10³ kg m⁻¹ s⁻¹', cmap: 'RdBu_r', contour: 20, symmetric: true, clamp: { lo: 0.005, hi: 0.995 } },
+    viwvd:  { type: 'sl', group: 'Column transports', name: 'Vapour-flux divergence', units: 'mm day⁻¹', cmap: 'RdBu_r', contour: 2, symmetric: true, clamp: { lo: 0.02, hi: 0.98 },
+            note: '∇·∫q v dp/g ≈ E − P − ∂TCWV/∂t: positive where the column exports moisture (subtropical oceans), negative where it converges (ITCZ, monsoons, storm tracks). Hourly fluxes, not mass-corrected — noisy over steep terrain.' },
+    vitoed: { type: 'sl', group: 'Column transports', name: 'Total-energy-flux divergence', units: 'W m⁻²', cmap: 'RdBu_r', contour: 25, symmetric: true, clamp: { lo: 0.02, hi: 0.98 },
+            note: '∇·∫(c_pT + Φ + L_v q + k) v dp/g ≈ net TOA − net surface flux − storage. Hourly fluxes, not mass-corrected — noisy over steep terrain.' },
     // 10-m winds — surface-level u/v used by the particle/barb overlay when
     // a single-level field is displayed. Hidden from the field dropdown
     // (they're an overlay source, not a primary display field).
     u10:  { type: 'sl', group: '_internal',          name: '10-m zonal wind',            units: 'm s⁻¹', cmap: 'RdBu_r',  symmetric: true, hidden: true },
     v10:  { type: 'sl', group: '_internal',          name: '10-m meridional wind',       units: 'm s⁻¹', cmap: 'RdBu_r',  symmetric: true, hidden: true },
 };
+
+// Single-level fields derived point-wise from other single-level tiles
+// (inputs in era5.js display units). Evaluated in computeDerived; unlike
+// wspd / mse / dls they honour the globe's year and reference period.
+const SL_DERIVED = {
+    olr:    { from: ['ttr'],                        f: (ttr) => -ttr },
+    netrad: { from: ['tsr', 'ttr'],                 f: (tsr, ttr) => tsr + ttr },
+    albedo: { from: ['tsr', 'tisr'],                f: (tsr, tisr) => (tisr >= 10 ? 100 * (1 - tsr / tisr) : NaN) },
+    swcre:  { from: ['tsr', 'tsrc'],                f: (tsr, tsrc) => tsr - tsrc },
+    lwcre:  { from: ['ttr', 'ttrc'],                f: (ttr, ttrc) => ttr - ttrc },
+    netcre: { from: ['tsr', 'tsrc', 'ttr', 'ttrc'], f: (tsr, tsrc, ttr, ttrc) => (tsr - tsrc) + (ttr - ttrc) },
+    ivt:    { from: ['viwve', 'viwvn'],             f: (e, n) => Math.hypot(e, n) },
+};
+
+/** Raw tiles a single-level derived field is computed from, or null. */
+export function slDerivedIngredients(name) { return SL_DERIVED[name]?.from || null; }
+
+/** Raw tiles `name` needs that the manifest for `period` doesn't list — the
+ *  energy-transport fields in a tree built before them, say — so the globe
+ *  can say so instead of waiting forever. [] while the manifest loads, and
+ *  for fields computed from pressure-level tiles. */
+export function fieldTilesMissing(name, period = 'default') {
+    const m = getManifest(period);
+    if (!m) return [];
+    const need = SL_DERIVED[name]?.from || (FIELDS[name]?.derived ? [] : [name]);
+    const have = new Set();
+    for (const g of Object.values(m.groups || {})) for (const k of Object.keys(g)) have.add(k);
+    return need.filter((n) => !have.has(n));
+}
 
 /** Fields that only make sense on isentropic surfaces. When user picks one of
  *  these, the vertical-coord toggle forces θ coordinates. */
@@ -518,10 +588,15 @@ export function getField(name, { month = 1, level = 500, coord = 'pressure', the
     // Compute per-year, then mean across event years (NaN-skipping).
     // Without this branch, derived/θ composites silently returned the
     // climatology, which made the anomaly view paint zero everywhere.
-    if (customRange && Array.isArray(customRange.years) && customRange.years.length
+    // Single-level derived fields are cheap per year (2–4 tiles), so they
+    // also compose over contiguous ranges, not just event-year lists.
+    const derivedYears = !customRange ? []
+        : meta.slDerived ? customRangeYears(customRange)
+        : (Array.isArray(customRange.years) ? customRange.years : []);
+    if (derivedYears.length
         && (meta.derived || (coord === 'theta' && meta.type === 'pl'))) {
         const composed = composeDerivedComposite(
-            name, { month, level, coord, theta }, customRange.years);
+            name, { month, level, coord, theta }, derivedYears);
         if (composed) {
             const r = symmetricRange(composed.vmin, composed.vmax, meta);
             return {
@@ -572,9 +647,10 @@ export function getField(name, { month = 1, level = 500, coord = 'pressure', the
     const periodUnsupported = period !== 'default'
         && meta.derived
         && !meta.thetaOnly
+        && !meta.slDerived
         && !isenMode;
     const effPeriod = periodUnsupported ? 'default' : period;
-    const effYear = (year != null && meta.derived && !meta.thetaOnly) ? null : year;
+    const effYear = (year != null && meta.derived && !meta.thetaOnly && !meta.slDerived) ? null : year;
 
     // Derived fields (e.g. wind speed, PV) — compute from component tiles.
     // refPeriod (e.g. 1961-1990) is only propagated when year is null, since
@@ -622,7 +698,9 @@ export function getField(name, { month = 1, level = 500, coord = 'pressure', the
                 kind: 'mean',
                 stdUnavailable: stdUnsupported,
                 year: effYear,
-                period: effPeriod,
+                // Name the tree the values came from (cross_section.js
+                // labels a year only when getField really served one).
+                period: effYear != null ? 'per_year' : effPeriod,
             };
         }
     } else if (isenMode) {
@@ -764,6 +842,7 @@ function computeDerived(name, month, level, coord, theta, year = null, refPeriod
     const yReq = year != null
         ? { period, year }
         : (refPeriod ? { period: refPeriod } : {});
+    if (SL_DERIVED[name]) return computeSlDerived(name, month, srcSfx, period, year, yReq);
     if (name === 'wspd') {
         for (let m = 1; m <= 12; m++) {
             const k = `${coord}:${coord === 'theta' ? theta : level}:${m}:${srcSfx}`;
@@ -912,6 +991,65 @@ function computeDerived(name, month, level, coord, theta, year = null, refPeriod
         };
     }
     return null;
+}
+
+const _slDerivedCache = new Map();   // `${name}:${month}:${srcSfx}:${activePeriod}` → entry
+
+/** A SL_DERIVED field for `month` from the year / reference-period / active
+ *  climatology tiles (`period`, `yReq` as in computeDerived). The active
+ *  period is part of the key: switching climatology window must not reuse
+ *  the previous window's values. */
+function computeSlDerived(name, month, srcSfx, period, year, yReq) {
+    const { from, f } = SL_DERIVED[name];
+    const meta = FIELDS[name];
+    const tag = `:${srcSfx}:${getActivePeriod()}`;
+    const evalMonth = (m, fetch) => {
+        const tiles = from.map((n) => fetch
+            ? requestEra5(n, { month: m, ...yReq })?.values
+            : cachedMonth(n, m, null, 'mean', period, year));
+        if (tiles.some((t) => !t)) return null;
+        const N = tiles[0].length;
+        const out = new Float32Array(N);
+        const args = new Array(tiles.length);
+        let vmin = Infinity, vmax = -Infinity;
+        for (let i = 0; i < N; i++) {
+            let ok = true;
+            for (let k = 0; k < tiles.length; k++) {
+                args[k] = tiles[k][i];
+                if (!Number.isFinite(args[k])) ok = false;
+            }
+            const v = ok ? f(...args) : NaN;
+            out[i] = v;
+            if (Number.isFinite(v)) {
+                if (v < vmin) vmin = v;
+                if (v > vmax) vmax = v;
+            }
+        }
+        if (!Number.isFinite(vmin)) { vmin = 0; vmax = 1; }
+        return applyClampToEntry({ values: out, vmin, vmax }, meta);
+    };
+    // Opportunistic fill of every cached month so the colorbar range is
+    // pooled across the year and stays put while the user scrubs months.
+    for (let m = 1; m <= 12; m++) {
+        const k = `${name}:${m}${tag}`;
+        if (_slDerivedCache.has(k)) continue;
+        const e = evalMonth(m, false);
+        if (e) _slDerivedCache.set(k, e);
+    }
+    const key = `${name}:${month}${tag}`;
+    let entry = _slDerivedCache.get(key);
+    if (!entry) {
+        entry = evalMonth(month, true);     // kicks the ingredient fetches
+        if (!entry) return null;
+        _slDerivedCache.set(key, entry);
+    }
+    const agg = aggregateRangeByPrefixSuffix(_slDerivedCache, `${name}:`, tag);
+    return {
+        values: entry.values,
+        vmin: agg ? agg.vmin : entry.vmin,
+        vmax: agg ? agg.vmax : entry.vmax,
+        isReal: true,
+    };
 }
 
 // Aggregate vmin/vmax across every cached entry whose key matches both a
@@ -1098,6 +1236,7 @@ export function invalidateIsentropicCache() {
     _wspdCache.clear();
     _dlsCache.clear();
     _mseCache.clear();
+    _slDerivedCache.clear();
     _derivedYearCache.clear();
 }
 // Legacy name kept for callers that still import it.

@@ -8,7 +8,7 @@ import { Line2 } from 'three/addons/lines/Line2.js';
 import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 import { fillRGBA, fillColorbar, COLORMAPS, meanLuminance } from './colormap.js';
-import { getField, FIELDS, LEVELS, THETA_LEVELS, MONTHS, GRID, invalidateIsentropicCache, isThetaOnly, customRangeYears, fieldHasStdTiles, expectedTilesForView, hasCachedIngredients } from './data.js';
+import { getField, FIELDS, LEVELS, THETA_LEVELS, MONTHS, GRID, invalidateIsentropicCache, isThetaOnly, customRangeYears, fieldHasStdTiles, expectedTilesForView, hasCachedIngredients, slDerivedIngredients, fieldTilesMissing } from './data.js';
 import { loadIndices, getIndex, eventYears, compositeLabel, lastIndexMonth } from './indices.js';
 import { ParticleField } from './particles.js';
 import { BarbField } from './barbs.js';
@@ -16,9 +16,9 @@ import { ContourField } from './contours.js';
 import { ContourLabels } from './contour_labels.js';
 import { SunLight } from './sun.js';
 import { OrbitScene, ORBIT_RADIUS } from './orbit.js';
-import { computeZonalMean, computeArcCrossSection, renderCrossSection, samplePanel } from './cross_section.js';
+import { computeZonalMean, computeArcCrossSection, renderCrossSection, samplePanel, sampleSeries } from './cross_section.js';
 import { greatCircleArc, linearLatLonArc, latLonToVec3, gcDistanceKm, greatCircleMidpoint, linearLatLonMidpoint, threePointArc } from './arc.js';
-import { loadManifest, onFieldLoaded, onTileProgress, isReady as era5Ready, prefetchField, cachedMonth, registerClamps, setActivePeriod, getManifest, perYearHasMonth, latestPerYearMonth, activePeriodLabel } from './era5.js';
+import { loadManifest, onFieldLoaded, onTileProgress, isReady as era5Ready, prefetchField, cachedMonth, registerClamps, setActivePeriod, getActivePeriod, getManifest, perYearHasMonth, latestPerYearMonth, activePeriodLabel } from './era5.js';
 import { decompose, annualMeanFrom, aggregatedDecompositionRange } from './decompose.js';
 import { HoverProbe } from './hover.js';
 import { computeMassStreamfunction, computeAngularMomentum, computeBruntVaisala, computeGeostrophicWind } from './diagnostics.js';
@@ -27,6 +27,7 @@ import { computeLorenzCycle } from './lorenz.js';
 import { buildMBudgetView } from './m_budget.js';
 import { buildQBudgetView } from './q_budget.js';
 import { buildHBudgetView } from './h_budget.js';
+import { buildTransportView, transportMonths, TRANSPORT_INGREDIENTS } from './transport.js';
 import { sourceFromState, sourceKey, sourceYears, sourceHasMonth, sourceMonth } from './diag_source.js';
 import { ParcelField } from './parcels.js';
 import { GifExporter, downloadBlob } from './gif_export.js';
@@ -67,7 +68,8 @@ const XS_DIAG_INGREDIENTS = {
     epflux:  { pl: ['u', 'v', 'w', 't'] },
     mbudget: { pl: ['u', 'v', 'w'],                sl: ['ews', 'oro', 'sp'] },
     qbudget: { pl: ['u', 'v', 'w', 'q'],           sl: ['slhf', 'tp'] },
-    hbudget: { pl: ['u', 'v', 'w', 't', 'z', 'q'], sl: ['slhf', 'sshf', 'ssr', 'str', 'tisr', 'ttr'] },
+    hbudget: { pl: ['u', 'v', 'w', 't', 'z', 'q'], sl: ['slhf', 'sshf', 'ssr', 'str', 'tsr', 'ttr'] },
+    transport: TRANSPORT_INGREDIENTS,
 };
 function xsDiagUses(diag, name) {
     const ing = XS_DIAG_INGREDIENTS[diag];
@@ -169,6 +171,8 @@ class GlobeApp {
             mbTerm: 'total',         // 'total' | 'meanY' | 'meanP' | 'eddyY' | 'eddyP' | 'torque'
             mbForm: 'u',             // 'u' (∂[u]/∂t m/s/day) | 'M' (∂[M]/∂t scaled)
             mbMode: '2d',            // '2d' | '1d_mean' (mass-weighted profile) | '1d_int' (∫dp/g, N/m²)
+            trQty: 'energy',         // Meridional transport panel: 'energy' | 'moisture'
+            trAvg: 'month',          // … averaged over the displayed month (season) | 'annual'
         };
         this.windCache = { u: null, v: null, nlat: 0, nlon: 0, stale: true };
 
@@ -455,6 +459,13 @@ class GlobeApp {
                     && xsDiagUses(s.xsDiag, name)) {
                     this.updateXSection();
                 }
+                // The transport panel's storage tendencies read the
+                // climatology's sp / tcwv either side of the averaged months,
+                // whatever time slice the globe shows.
+                if (isActiveClimo && s.showXSection && s.xsDiag === 'transport'
+                    && (name === 'sp' || name === 'tcwv') && this._transportNeedsMonth(month)) {
+                    this.updateXSection();
+                }
                 return;   // don't trigger any of the active-period logic
             }
             const isenActive  = (s.vCoord === 'theta');
@@ -471,6 +482,7 @@ class GlobeApp {
                 (s.field === 'pv'   && (name === 't' || name === 'pv')) ||
                 (s.field === 'mse'  && (name === 't' || name === 'z' || name === 'q')) ||
                 (s.field === 'dls'  && (name === 'u' || name === 'v')) ||
+                !!slDerivedIngredients(s.field)?.includes(name) ||
                 isenNeedsName;
 
             // PV and θ-coord fields span every pressure level, so don't
@@ -528,7 +540,10 @@ class GlobeApp {
             // seasonal mean on, the neighbouring months' tiles count too.
             const diagMonth = this._diagMonthMatches(month);
             const xsNeeds = s.xsDiag === 'field' ? feedsCurrentField : xsDiagUses(s.xsDiag, name);
-            if (s.showXSection && xsNeeds && diagMonth) this.updateXSection();
+            // The transport panel can average the whole year, and its storage
+            // terms read the neighbouring months too.
+            const xsMonth = s.xsDiag === 'transport' ? this._transportNeedsMonth(month) : diagMonth;
+            if (s.showXSection && xsNeeds && xsMonth) this.updateXSection();
             // Lorenz cycle needs u, v, w, t at every level for the current month.
             const lorenzIngredient = (name === 'u' || name === 'v' || name === 'w' || name === 't');
             if (s.showLorenz && lorenzIngredient && diagMonth) {
@@ -1796,6 +1811,14 @@ class GlobeApp {
             parts.push(lonS);
         }
         if (sample.p !== undefined) parts.push(`${Math.round(sample.p)} hPa`);
+        // Multi-series line plots (transport, budget all-terms): one row per curve.
+        const rows = sampleSeries(zm, sample.lat);
+        if (rows) {
+            return parts.join('<span class="hv-sep">·</span>')
+                + `<span class="hv-unit"> ${zm.units || ''}</span>`
+                + rows.map(r => `<br><span style="color:${r.color}">${r.label}</span> `
+                    + `<span class="hv-value">${fmt(r.value, 2)}</span>`).join('');
+        }
         const valHtml =
             `<span class="hv-value">${fmt(sample.value, 2)}</span>` +
             `<span class="hv-unit">${zm.units || ''}</span>`;
@@ -1992,7 +2015,7 @@ class GlobeApp {
             this.state.xsUserVmin = null;
             this.state.xsUserVmax = null;
         }
-        if ('xsDiag' in patch || 'xsAnom' in patch) {
+        if ('xsDiag' in patch || 'xsAnom' in patch || 'trQty' in patch) {
             // Each xs diagnostic has its own units (ψ in 10⁹ kg/s, M in 10⁹
             // m²/s, N² in 10⁻⁴ s⁻², EP flux, budgets …), and an anomaly spans
             // a fraction of the full field's range. A clamp set for one mode
@@ -2099,6 +2122,12 @@ class GlobeApp {
             const caveat = document.getElementById('budget-caveat');
             if (caveat) {
                 caveat.hidden = !(patch.xsDiag === 'qbudget' || patch.xsDiag === 'hbudget');
+            }
+            // Transport controls + caveat follow xsDiag in updateXSection (so a
+            // shared link shows them too); only the popover is closed here.
+            if (patch.xsDiag !== 'transport') {
+                document.getElementById('tr-info')?.setAttribute('hidden', '');
+                document.getElementById('tr-info-btn')?.classList.remove('active');
             }
         }
         if ('showXSection' in patch) {
@@ -2372,6 +2401,13 @@ class GlobeApp {
                     }
                 }
             }
+            // Single-level derived fields (OLR, net TOA, albedo, CRE, IVT):
+            // their raw tiles for every month, so the pooled colorbar is
+            // stable, and for the selected year.
+            for (const n of slDerivedIngredients(this.state.field) || []) {
+                prefetchField(n, {});
+                if (this.state.year != null) prefetchField(n, { period: 'per_year', year: this.state.year });
+            }
             // PV and any θ-coord rendering require T at every pressure level
             // (for the θ cube) plus the chosen field at every level — kick
             // those here so they arrive in parallel. In θ-coord we also
@@ -2504,8 +2540,37 @@ class GlobeApp {
      *  globe's time slice. Idempotent: cached / in-flight tiles are
      *  skipped. */
     prefetchXsDiag(diag) {
+        if (diag === 'transport') { this._prefetchTransport(); return; }
         const ing = XS_DIAG_INGREDIENTS[diag];
         if (ing) this._prefetchIngredients(ing, this._xsAnomActive());
+    }
+
+    /** Months the transport panel averages (the displayed month or season,
+     *  or all twelve for the annual mean). */
+    _transportMonths() {
+        return transportMonths(this.state.month,
+            { average: this.state.trAvg, seasonal: this.state.seasonal });
+    }
+
+    /** Does a tile for `month` feed the transport panel? The averaged
+     *  months, plus their neighbours for the storage tendencies. */
+    _transportNeedsMonth(month) {
+        return this._transportMonths().some(m =>
+            m === month || ((m % 12) + 1) === month || (((m + 10) % 12) + 1) === month);
+    }
+
+    /** Transport-panel tiles: the averaged months for the globe's time
+     *  slice, and the climatology's sp / tcwv one month either side (the
+     *  mass and moisture storage tendencies always come from the
+     *  climatology). */
+    _prefetchTransport() {
+        const monthsFn = () => this._transportMonths();
+        this._prefetchIngredients(TRANSPORT_INGREDIENTS, false, monthsFn);
+        const around = new Set();
+        for (const m of monthsFn()) {
+            around.add(m); around.add((m % 12) + 1); around.add(((m + 10) % 12) + 1);
+        }
+        for (const name of ['sp', 'tcwv']) prefetchField(name, { months: [...around] });
     }
 
     /** Prefetch { pl: [...], sl: [...] } ingredient tiles for the panels'
@@ -2515,28 +2580,32 @@ class GlobeApp {
      *  only — a composite month of the MSE budget is already ~80 tiles per
      *  event year. `withClimo` adds the climatology for those months (the
      *  ψ / EP-flux anomaly baseline). */
-    _prefetchIngredients(ing, withClimo = false) {
+    _prefetchIngredients(ing, withClimo = false, monthsFn = () => this._diagMonths()) {
         const src = this._diagSource();
-        if (!src) { this._prefetchClimoIngredients(ing, true); return; }
-        if (withClimo) this._prefetchClimoIngredients(ing, false);
+        if (!src) { this._prefetchClimoIngredients(ing, true, monthsFn()); return; }
+        if (withClimo) this._prefetchClimoIngredients(ing, false, monthsFn());
         // Per-year fan-out is debounced on the slice: the year slider fires
         // on every step of a drag, and only the year it stops on should
         // pull a full level stack. Repeat requests for the same slice (tile
         // arrivals re-render the panel) join the pending batch instead of
         // postponing it.
-        const months = this._diagMonths();
-        const sliceKey = () => `${sourceKey(this._diagSource())}|${this._diagMonths().join(',')}`;
+        const months = monthsFn();
+        const sliceKey = () => `${sourceKey(this._diagSource())}|${monthsFn().join(',')}`;
         const key = sliceKey();
-        const pend = this._diagPrefetch;
-        if (pend && pend.key === key) {
+        // One pending batch per slice key: panels averaging different months
+        // (the transport panel's annual mean next to the Lorenz panel's
+        // month) must not cancel each other's batches. A superseded slice
+        // needs no cancelling — its batch sees the moved-on key and skips.
+        const pending = (this._diagPrefetches ??= new Map());
+        const pend = pending.get(key);
+        if (pend) {
             for (const n of ing.pl || []) pend.pl.add(n);
             for (const n of ing.sl || []) pend.sl.add(n);
             return;
         }
-        if (pend) clearTimeout(pend.timer);
         const batch = { key, pl: new Set(ing.pl || []), sl: new Set(ing.sl || []) };
         batch.timer = setTimeout(() => {
-            if (this._diagPrefetch === batch) this._diagPrefetch = null;
+            pending.delete(key);
             if (sliceKey() !== key) return;   // the user moved on
             for (const m of months) {
                 for (const year of sourceYears(src, m)) {
@@ -2551,13 +2620,13 @@ class GlobeApp {
                 }
             }
         }, 250);
-        this._diagPrefetch = batch;
+        pending.set(key, batch);
     }
 
     /** Active-climatology ingredient tiles: the displayed month(s), then
      *  (allMonths) the rest of the year. */
-    _prefetchClimoIngredients(ing, allMonths) {
-        for (const months of (allMonths ? [this._diagMonths(), undefined] : [this._diagMonths()])) {
+    _prefetchClimoIngredients(ing, allMonths, first = this._diagMonths()) {
+        for (const months of (allMonths ? [first, undefined] : [first])) {
             for (const L of LEVELS) {
                 for (const name of ing.pl || []) prefetchField(name, { level: L, months });
             }
@@ -2628,6 +2697,7 @@ class GlobeApp {
         const fieldOpts = { seasonal, year, customRange };
         const anomRow = document.getElementById('xs-anom-row');
         if (anomRow) anomRow.hidden = !((xsDiag === 'psi' || xsDiag === 'epflux') && source);
+        this._syncTransportControls();
         let zm;
         let effCmap = cmap;
         if (xsDiag === 'psi') {
@@ -2712,6 +2782,17 @@ class GlobeApp {
                 effCmap = 'RdBu_r';
                 zm.suppressContours = true;
             }
+        } else if (xsDiag === 'transport') {
+            const view = buildTransportView(month, {
+                quantity: this.state.trQty,
+                average: this.state.trAvg,
+                seasonal,
+                source,
+            });
+            if (!view || view.unavailable) return this._xsTransportPending(canvas, view);
+            zm = view;
+            zm.suppressContours = true;
+            this._updateTransportCaveat(zm);
         } else if (xsArc) {
             // Map view: straight-line-in-(lat, lon) sampling — reads as a
             // straight line on the equirectangular projection. Globe view:
@@ -2761,7 +2842,9 @@ class GlobeApp {
             // actually served it (zm.slice).
             const fieldSlice = ['per_year', 'custom_range'].includes(zm.slice?.period)
                 ? this._diagSourceSuffix() : '';
-            if (zm.isDiagnostic) {
+            if (zm.transport) {
+                title.textContent = `${zm.name}  (${zm.units})${this._transportTitleSuffix()}`;
+            } else if (zm.isDiagnostic) {
                 title.textContent = `${zm.name}  (${zm.units})${this._diagSourceSuffix({ anomaly })}`;
             } else if (zm.kind === 'arc') {
                 const km = Math.round(zm.distanceKm).toLocaleString();
@@ -2787,8 +2870,11 @@ class GlobeApp {
                         ? `ΔF = F(selection) − F(${ref}) — stationary eddies; shading: ∇·ΔF (m s⁻¹ day⁻¹)`
                         : 'F = (-a cos φ [u′v′], a cos φ f [v′θ′] / ∂[θ]/∂p) — stationary eddies; shading: ∇·F (m s⁻¹ day⁻¹)',
                     mbudget: '∂[M]/∂t = -∇·([v][M]) - ∇·([v*M*]) + torque · stationary eddies only · 1° monthly means',
+                    transport: this.state.trQty === 'moisture'
+                        ? 'atmosphere = ∮∫ q v dp/g (ERA5 hourly) · E − P implied = ∫∫ (E − P − ∂W/∂t) dA · ×L_v'
+                        : 'total = ∫∫ (R_TOA − ⟨R_TOA⟩) dA · atmosphere = ∮∫ E v dp/g (ERA5 hourly) · ocean = total − atmosphere',
                 }[xsDiag] || 'Zonal-mean diagnostic';
-                const eddyDiag = ['epflux', 'mbudget', 'qbudget', 'hbudget'].includes(xsDiag);
+                const eddyDiag = ['epflux', 'mbudget', 'qbudget', 'hbudget', 'transport'].includes(xsDiag);
                 hint.innerHTML = desc + (eddyDiag ? this._diagEddyNote() : '');
             } else if (zm.kind === 'arc') {
                 hint.innerHTML = '<span class="xs-kbd">⇧</span> + drag to redraw';
@@ -2898,7 +2984,8 @@ class GlobeApp {
             seasonal,
         });
         this.setLoadingOverlay(!f.isReal,
-            f.isReal || this.state.customRange ? null : this._perYearNotice(this.state.year, month));
+            f.isReal ? null : (this._unbuiltFieldNotice(field)
+                || (this.state.customRange ? null : this._perYearNotice(this.state.year, month))));
         // Stash the expected-tiles-for-first-paint snapshot for the overlay
         // progress counter. Computed once per updateField call; stays stable
         // while the tiles stream in. Only needs to be refreshed on pending
@@ -3224,10 +3311,133 @@ class GlobeApp {
         }, 4000);
     }
 
+    /** Transport sub-controls and caveat show only in the transport mode,
+     *  and the radios follow the state (shared links restore both). */
+    _syncTransportControls() {
+        const on = this.state.xsDiag === 'transport';
+        const ctl = document.getElementById('tr-controls');
+        if (ctl) ctl.hidden = !on;
+        if (!on) {
+            const cav = document.getElementById('transport-caveat');
+            if (cav) cav.hidden = true;
+        }
+        for (const [name, v] of [['tr-qty', this.state.trQty], ['tr-avg', this.state.trAvg]]) {
+            const r = document.querySelector(`input[name="${name}"][value="${v}"]`);
+            if (r && !r.checked) r.checked = true;
+        }
+    }
+
+    /** " · Jan", " · DJF", " · annual mean", " · 1998 annual mean", or the
+     *  year / composite suffix for a single month of a time slice. */
+    _transportTitleSuffix() {
+        const src = this._diagSource();
+        if (this.state.trAvg === 'annual') {
+            return src?.year != null ? ` · ${src.year} annual mean` : ' · annual mean';
+        }
+        return src ? this._diagSourceSuffix() : ` · ${this._diagMonthLabel()}`;
+    }
+
+    /** The transport panel can't draw: its tiles are still loading (view
+     *  null), or this tree / selection can't supply it (view.unavailable,
+     *  e.g. a climatology window built before the energy-transport tiles). */
+    _xsTransportPending(canvas, view) {
+        const notice = view?.unavailable || null;
+        this._xsPending = !notice;
+        // Before the tree's manifest has loaded we can't tell whether it has
+        // the transport tiles at all — don't pull ~600 level tiles on spec.
+        // bootstrapEra5 redraws the panel once the manifest is in.
+        const treeKnown = !!getManifest(this._diagSource() ? 'per_year' : getActivePeriod());
+        if (!notice && treeKnown) {
+            this._prefetchTransport();
+            this._scheduleDiagRetry();
+        }
+        const DPR = Math.min(window.devicePixelRatio || 1, 2);
+        canvas.width  = (canvas.clientWidth  || 380) * DPR;
+        canvas.height = (canvas.clientHeight || 200) * DPR;
+        const ctx = canvas.getContext('2d');
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = '#AEC3B6';
+        ctx.font = `${11 * DPR}px 'JetBrains Mono', monospace`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        const n = this._transportMonths().length;
+        const msg = notice || `Loading tiles for the transport panel (${n} month${n > 1 ? 's' : ''})…`;
+        // Word-wrap to the canvas: the notices name a tree and its tiles.
+        const lines = [];
+        for (const word of msg.split(' ')) {
+            const last = lines.length ? lines[lines.length - 1] : null;
+            if (last != null && ctx.measureText(`${last} ${word}`).width <= canvas.width * 0.9) {
+                lines[lines.length - 1] = `${last} ${word}`;
+            } else {
+                lines.push(word);
+            }
+        }
+        const lh = 15 * DPR;
+        lines.forEach((ln, k) => ctx.fillText(ln, canvas.width / 2,
+            canvas.height / 2 + (k - (lines.length - 1) / 2) * lh));
+        const title = document.getElementById('xs-title');
+        const qty = this.state.trQty === 'moisture' ? 'moisture' : 'energy';
+        if (title) title.textContent = `Meridional ${qty} transport${this._transportTitleSuffix()}`;
+        const cav = document.getElementById('transport-caveat');
+        if (cav) cav.hidden = true;
+        this._xsLastZm = null;
+    }
+
+    /** Amber caveat under the transport controls: what the curves are (and
+     *  aren't) for this averaging, with the numbers the user should know —
+     *  the removed global imbalance and the size of the mass correction. */
+    _updateTransportCaveat(zm) {
+        const el = document.getElementById('transport-caveat');
+        const t = zm?.transport;
+        if (!el || !t) return;
+        const fmt = (v, d) => (Number.isFinite(v) ? v.toFixed(d) : '—');
+        const lat = (v) => (Number.isFinite(v) ? `${Math.abs(v)}°${v >= 0 ? 'N' : 'S'}` : '—');
+        const nMonths = t.months.length;
+        const resid = 'Transient = atmosphere − MMC − stationary eddies: a residual that also '
+            + 'absorbs the error of 12 pressure levels, so trust it where it is large.';
+        let text;
+        if (t.quantity === 'energy') {
+            const corr = `Atmosphere mass-corrected after Trenberth (1997) — up to `
+                + `${fmt(t.massCorrectionMax, 2)} PW here, at ${lat(t.massCorrectionLat)}.`;
+            text = nMonths === 12
+                ? `Annual mean: storage cancels, so total − atmosphere is the ocean transport. `
+                  + `ERA5's global TOA imbalance of ${fmt(t.toaImbalance, 2)} W m⁻² is removed. ${corr} ${resid}`
+                : `${nMonths === 1 ? 'A single month' : `${nMonths} months`}: the TOA total and the ocean `
+                  + `residual include the heat the surface (mostly the ocean) stores or releases, which `
+                  + `dominates the seasonal cycle — only the annual mean is a transport. ${corr} ${resid}`;
+            if (t.average === 'annual' && nMonths < 12) {
+                text = `Only ${nMonths} months of this year are published, so this "annual" mean still `
+                     + `contains seasonal storage. ${corr} ${resid}`;
+            } else if (nMonths === 12 && this._diagSource()?.year != null) {
+                text += ' For a single year the ocean residual also holds that year\'s change in '
+                      + 'ocean heat content, which is large in ENSO years.';
+            }
+        } else {
+            text = `E − P from ERA5's short-range forecasts (global imbalance `
+                + `${fmt(t.empImbalance, 2)} mm day⁻¹ removed) against the analysed vapour flux: `
+                + `their gap is the reanalysis moisture-budget residual. 1 PW ≙ 4.0×10⁸ kg s⁻¹ `
+                + `of vapour. ${resid}`;
+        }
+        el.textContent = text;
+        el.hidden = false;
+    }
+
     /** Redraw whichever diagnostic panels are open. */
     _refreshDiagPanels() {
         if (this.state.showXSection) this.updateXSection();
         if (this.state.showLorenz) this.updateLorenz();
+    }
+
+    /** Notice when the tree behind the globe's time slice has no tiles for
+     *  `field` (e.g. a climatology window built before the energy-transport
+     *  variables), or null. */
+    _unbuiltFieldNotice(field) {
+        const perYear = this.state.year != null || !!this.state.customRange;
+        const missing = fieldTilesMissing(field, perYear ? 'per_year' : getActivePeriod());
+        if (!missing.length) return null;
+        const where = perYear ? 'the per-year archive' : `the ${activePeriodLabel()} climatology`;
+        return `${FIELDS[field]?.name || field} isn't built for ${where} yet `
+             + `(no ${missing.join(' / ')} tiles).`;
     }
 
     /** Notice text when single-year mode asks for a month the per-year
@@ -4370,6 +4580,25 @@ class GlobeApp {
                 if (e.target.checked) this.setState({ mbMode: e.target.value });
             });
         });
+        // Meridional transport sub-controls (shown only in that mode).
+        document.querySelectorAll('input[name="tr-qty"]').forEach((r) => {
+            r.addEventListener('change', (e) => {
+                if (e.target.checked) this.setState({ trQty: e.target.value });
+            });
+        });
+        document.querySelectorAll('input[name="tr-avg"]').forEach((r) => {
+            r.addEventListener('change', (e) => {
+                if (e.target.checked) this.setState({ trAvg: e.target.value });
+            });
+        });
+        document.getElementById('tr-info-btn')?.addEventListener('click', () => {
+            const info = document.getElementById('tr-info');
+            const btn  = document.getElementById('tr-info-btn');
+            if (!info || !btn) return;
+            const open = info.hasAttribute('hidden');
+            if (open) { info.removeAttribute('hidden'); btn.classList.add('active'); }
+            else      { info.setAttribute('hidden', ''); btn.classList.remove('active'); }
+        });
         document.getElementById('mb-info-btn')?.addEventListener('click', () => {
             const info = document.getElementById('mb-info');
             const btn  = document.getElementById('mb-info-btn');
@@ -4633,6 +4862,8 @@ class GlobeApp {
     // prefetches the right tiles for derived / θ-coord fields.
     _compositeIngredientFields() {
         const f = this.state.field;
+        const slIng = slDerivedIngredients(f);
+        if (slIng) return slIng;
         const isenActive = this.state.vCoord === 'theta';
         if (f === 'pv')   return ['t', 'pv'];
         if (f === 'wspd') return isenActive ? ['t', 'u', 'v'] : ['u', 'v'];
@@ -4666,7 +4897,7 @@ class GlobeApp {
         // for the current month to avoid flooding (months scrub lazily).
         const ingredients = this._compositeIngredientFields();
         const meta = FIELDS[this.state.field];
-        const allLevels = !!(meta?.derived || this.state.vCoord === 'theta');
+        const allLevels = !!((meta?.derived && meta.type === 'pl') || this.state.vCoord === 'theta');
         const lvls = allLevels ? LEVELS : [meta?.type === 'pl' ? this.state.level : null];
         for (const y of years) {
             for (const ing of ingredients) {
@@ -5515,6 +5746,7 @@ class GlobeApp {
         check('toggle-compare',    s.compareMode);
         check('toggle-seasonal',   s.seasonal);
         check('xs-anom-toggle',    s.xsAnom);
+        this._syncTransportControls();
         // Seasonal label shows the current 3-month window in parentheses
         // next to the checkbox so users see exactly what they're averaging.
         this._refreshSeasonalLabel();
