@@ -215,12 +215,15 @@ export function computeEPFlux(month, { seasonal = false, source = null, anomaly 
             const FphiN = Fphi[k * nlat + iN] * Math.cos((90 - iN) * D2R);
             const FphiS = Fphi[k * nlat + iS] * Math.cos((90 - iS) * D2R);
             // Note: latitude index increases southward, so iS is south of iN.
-            // ∂/∂φ in the *northward-positive* sense → (north - south) / (φN - φS).
-            // φN > φS, and (iS - iN) is positive in degree-units, so dividing by
-            // -dPhi flips to north-positive.
+            // ∂/∂φ in the *northward-positive* sense → (north - south) / (φN - φS),
+            // and φN - φS = (90 - iN) - (90 - iS) = iS - iN, i.e. dPhi itself.
+            // (Dividing by -dPhi flipped the sign of the whole meridional term:
+            // its momentum-flux part must equal the eddy momentum-flux
+            // convergence -(1/(a cos²φ)) ∂([u'v'] cos²φ)/∂φ that the M budget
+            // shows.)
             let dFphi_dphi;
             if (Number.isFinite(FphiN) && Number.isFinite(FphiS) && cosPhi > 1e-3 && dPhi > 0) {
-                dFphi_dphi = (FphiN - FphiS) / -dPhi;
+                dFphi_dphi = (FphiN - FphiS) / dPhi;
             } else {
                 divF[idx] = NaN; continue;
             }
