@@ -38,16 +38,26 @@
 // Near the ground F_p still grows where the stratification is weak (the
 // wintertime marine surface layer), as any QG EP flux does there.
 //
+// At the top there is no level above 10 hPa and none between 10 and 50 hPa.
+// ∂θ/∂p and ∂F_p/∂p at 10 hPa are one-sided across that gap; θ ∝ p^−κ curves
+// so much over it that the secant is 3½× smaller than the stability at
+// 10 hPa, so F_p there is 3½× too large. In January (1991–2020) the 10 hPa row
+// shows divergence across 55–85°N (+14.8 m s⁻¹ day⁻¹ at 72°N) where ERA5 on
+// all 37 levels has convergence (−6.0 at 60°N, −2.3 at 72°N). The 50 hPa
+// row's ∂F_p/∂p spans 10–100 hPa and inherits part of the error. Those rows
+// read qualitatively, like the bottom two.
+//
 // Output:
 //   - values: ∇·F shading (m s⁻¹ day⁻¹) on the (nlev × nlat) panel grid
 //   - arrows: per-(lat, level) (F_φ, F_p) for vector rendering, in panel-
 //     normalised units so arrow length is visually proportional in (φ, log p)
 //     space (Edmon–Hoskins–McIntyre convention).
 //   - ground: 1 where the level doesn't take part (air_mask.js; hatched)
+//   - vmin/vmax: symmetric colour range from the panel's interior (below)
 
 import { sourceMonth } from './diag_source.js';
 import { LEVELS, GRID } from './data.js';
-import { airZonalMean, airZonalCov, ddy, groundCells, MIN_AIR_SHARE } from './air_mask.js';
+import { airShare, airZonalMean, airZonalCov, ddy, groundCells, MIN_AIR_SHARE } from './air_mask.js';
 
 const A_EARTH = 6.371e6;
 const OMEGA   = 7.2921e-5;
@@ -63,6 +73,18 @@ const DIV_UNIT = 1;              // m s⁻¹ day⁻¹  (typical |∇·F| ≈ 1�
 // any panel size.
 const ARROW_LAT_STRIDE = 12;
 const ARROW_LEV_STRIDE = 2;
+
+// The auto colour range comes from the cells that are read quantitatively:
+// RANGE_P_TOP–RANGE_P_BOT hPa (not the top two rows or the bottom two),
+// within RANGE_LAT of the equator, and only where the level below has air all
+// round the latitude circle, so ∂F_p/∂p isn't taken over the part of a circle
+// beside the terrain. Next to the Antarctic plateau 700 hPa is the lowest
+// level with air, and its F_p is several times that at 500 and 850 hPa: at
+// 70–80°S in July the 500 hPa row reads −5 to −8 m s⁻¹ day⁻¹, where ERA5 on
+// all 37 levels has −0.6 to +0.5, and it would set the April–October scale.
+const RANGE_P_TOP = 100;
+const RANGE_P_BOT = 850;
+const RANGE_LAT   = 80;
 
 /** Static stability ∂θ/∂p (K / Pa) at level m in each column: centred;
  *  one-sided at the top, and where the level below is underground in that
@@ -141,6 +163,12 @@ function epFluxFields(month, seasonal, source) {
     }
     const S = TH.map((_, m) => columnStability(TH, SP, m));
     const ground = groundCells(SP);
+    // 1 where the level below has air all round the circle (colour range).
+    const fullBelow = new Uint8Array(nlev * nlat);
+    for (let k = 0; k + 1 < nlev; k++) {
+        const share = airShare(SP, LEVELS[k + 1]);
+        for (let i = 0; i < nlat; i++) fullBelow[k * nlat + i] = share[i] >= 1 ? 1 : 0;
+    }
 
     // F_φ, F_p on the (k, i) grid in SI, each level's zonal statistics over
     // its own air. F_φ cos φ for the meridional divergence.
@@ -203,7 +231,7 @@ function epFluxFields(month, seasonal, source) {
             divF[idx] = (div_si / aCos) * DAY_SEC / DIV_UNIT;
         }
     }
-    return { Fphi, Fp, divF, ground };
+    return { Fphi, Fp, divF, ground, fullBelow };
 }
 
 /**
@@ -217,7 +245,7 @@ export function computeEPFlux(month, { seasonal = false, source = null, anomaly 
     const nlev = LEVELS.length;
     const F = epFluxFields(month, seasonal, source);
     if (!F) return null;
-    const { Fphi, Fp, divF, ground } = F;
+    const { Fphi, Fp, divF, ground, fullBelow } = F;
     const isAnomaly = anomaly && source != null;
     if (isAnomaly) {
         const ref = epFluxFields(month, seasonal, null);
@@ -227,22 +255,28 @@ export function computeEPFlux(month, { seasonal = false, source = null, anomaly 
             Fp[idx]   -= ref.Fp[idx];
             divF[idx] -= ref.divF[idx];
             ground[idx] |= ref.ground[idx];
+            fullBelow[idx] &= ref.fullBelow[idx];
         }
     }
 
-    let vmin = Infinity, vmax = -Infinity;
-    for (const v of divF) {
-        if (!Number.isFinite(v)) continue;
-        if (v < vmin) vmin = v;
-        if (v > vmax) vmax = v;
+    // Symmetric range so the divergent colormap centres on zero, from the
+    // interior cells (RANGE_*) and clamped to [1, 20]. Taken over the whole
+    // panel it was set every month by a row to read qualitatively or a polar
+    // cap (January +14.8 at 10 hPa, 72°N, against −7.7 at 250 hPa, 51°N); those
+    // cells now saturate, and the hover still reads them.
+    let absMax = 0;
+    for (let k = 0; k < nlev; k++) {
+        if (LEVELS[k] < RANGE_P_TOP || LEVELS[k] > RANGE_P_BOT) continue;
+        for (let i = 0; i < nlat; i++) {
+            const idx = k * nlat + i;
+            if (Math.abs(90 - i) > RANGE_LAT || !fullBelow[idx]) continue;
+            const v = Math.abs(divF[idx]);
+            if (v > absMax) absMax = v;
+        }
     }
-    if (!Number.isFinite(vmin)) { vmin = -1; vmax = 1; }
-    // Symmetric, clamped range so the divergent colormap centres on zero
-    // and extreme outliers near the boundaries don't squash the interior.
-    let absMax = Math.max(Math.abs(vmin), Math.abs(vmax));
     if (absMax > 20) absMax = 20;
     if (absMax < 1) absMax = 1;
-    vmin = -absMax; vmax = absMax;
+    const vmin = -absMax, vmax = absMax;
 
     // Build the arrow sample grid. Visual normalisation (Edmon–Hoskins–McIntyre):
     // we plot vectors in (φ, log p) space, so the components must be scaled
