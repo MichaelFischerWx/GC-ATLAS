@@ -1378,7 +1378,7 @@ select optgroup option {
 .hover-tooltip.hidden { opacity: 0; }
 .hover-tooltip .hv-sep   { color: var(--p-text-3); padding: 0 4px; }
 .hover-tooltip .hv-value { color: var(--accent-text); font-weight: 600; }
-.hover-tooltip .hv-unit  { color: var(--p-text-2); margin-left: 2px; }
+.hover-tooltip .hv-unit  { color: var(--p-text-2); margin-left: 0.35em; }   /* units can start with a digit (10⁹ kg s⁻¹) */
 .hover-tooltip .hv-mode  { color: var(--value); margin-left: 6px; }
 
 /* ── Mobile drawer (hidden on desktop) ───────────────────────────── */
