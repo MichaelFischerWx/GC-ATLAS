@@ -288,8 +288,8 @@ export function computeMonthTransport(month, get, climo = climoMonth, levels = L
         energy: e, moisture: m,
         massRaw: mRaw, massRes: pl.mRes, massTarget: mTarget,
         eBar: pl.eBar, qBar: pl.qBar,
-        toaGlobalMean: toa.globalMean / NLON,          // W m⁻²
-        empGlobalMean: sfcQ.globalMean / NLON,         // kg m⁻² s⁻¹
+        toaGlobalMean: toa.globalMean,                 // W m⁻² (already per unit area)
+        empGlobalMean: sfcQ.globalMean,                // kg m⁻² s⁻¹
     };
 }
 
