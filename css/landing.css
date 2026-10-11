@@ -3,6 +3,8 @@
 
 html { scroll-behavior: smooth; }
 body { line-height: 1.6; min-height: 100vh; }
+/* In-page links (#features, #about) land below the sticky top bar */
+[id] { scroll-margin-top: 72px; }
 
 /* ── Top bar ─────────────────────────────────────────────────────── */
 .topbar { position: sticky; top: 0; z-index: 1000; }
@@ -306,7 +308,8 @@ body { line-height: 1.6; min-height: 100vh; }
     .nav-hamburger.is-open { color: var(--text); border-color: var(--accent-text); }
     .hero { padding: 28px 20px 56px; }
     .hero-figure { max-width: 260px; }
-    .hero-eyebrow { font-size: var(--fs-2xs); letter-spacing: 0.1em; }
+    .hero-eyebrow { font-size: var(--fs-2xs); letter-spacing: 0.06em; }
+    .hero-eyebrow::before { display: none; }   /* one line at 375 px */
     .hero-facts { grid-template-columns: 1fr; gap: 12px; }
     .section, .section-bg-inner { padding: 56px 20px; }
     .section-title { font-size: 1.55rem; }
