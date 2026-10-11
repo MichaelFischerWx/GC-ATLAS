@@ -154,7 +154,8 @@ export function samplePanel(zm, fracX, fracY) {
             const pMin = zm.levels[0];
             const pMax = zm.levels[zm.levels.length - 1];
             const p = pMin * Math.exp(fracY * Math.log(pMax / pMin));
-            return { lat, p, value: sampleZonalPL(zm, lat, p) };
+            const value = sampleZonalPL(zm, lat, p);
+            return { lat, p, value, ground: !Number.isFinite(value) && onGround(zm, lat, p) };
         }
         return { lat, value: sampleZonalSL(zm, lat) };
     }
@@ -201,6 +202,23 @@ function sampleZonalPL(zm, lat, p) {
     const vT = v00 * (1 - fi) + v01 * fi;
     const vB = v10 * (1 - fi) + v11 * fi;
     return vT * (1 - fK) + vB * fK;
+}
+
+/** Does the (lat, p) point of a zonal diagnostic touch a cell that is
+ *  blank as ground (zm.ground, air_mask.js)? The heatmap hatches it. */
+function onGround(zm, lat, p) {
+    if (!zm.ground) return false;
+    const { nlat } = GRID;
+    const { levels, ground } = zm;
+    const rLat = 90 - lat;
+    if (rLat < 0 || rLat > nlat - 1) return false;
+    const i0 = Math.max(0, Math.min(nlat - 1, Math.floor(rLat)));
+    const i1 = Math.max(0, Math.min(nlat - 1, i0 + 1));
+    let k0 = 0;
+    while (k0 < levels.length - 1 && levels[k0 + 1] < p) k0++;
+    const k1 = Math.min(levels.length - 1, k0 + 1);
+    return !!(ground[k0 * nlat + i0] || ground[k0 * nlat + i1]
+            || ground[k1 * nlat + i0] || ground[k1 * nlat + i1]);
 }
 
 /** Every curve of a multi-series zonal line plot at `lat` — for the hover
@@ -647,6 +665,13 @@ function drawHeatmap(ctx, x0, y0, w, h, zm, cmap) {
     const span = (vmax - vmin) || 1;
     const showContours = !!zm.showContours;
     const interval = zm.contourInterval || 0;
+    // Diagnostics mark the cells that are underground (air_mask.js) in
+    // zm.ground; blank pixels touching one get a diagonal hatch, the rest of
+    // the missing data (the poles, …) the plain dark fill.
+    const ground = zm.ground || null;
+    const dpr = zm._dpr || 1;
+    const hatchPeriod = Math.max(4, Math.round(6 * dpr));
+    const hatchWidth  = Math.max(1, Math.round(1.25 * dpr));
 
     const iw = Math.floor(w), ih = Math.floor(h);
     const img = ctx.createImageData(iw, ih);
@@ -682,7 +707,13 @@ function drawHeatmap(ctx, x0, y0, w, h, zm, cmap) {
 
             const k = (py * iw + px) * 4;
             if (!Number.isFinite(v)) {
-                data[k] = 18; data[k+1] = 26; data[k+2] = 22; data[k+3] = 255;
+                const isGround = ground && (ground[k0 * nlat + i0] || ground[k0 * nlat + i1]
+                                         || ground[k1 * nlat + i0] || ground[k1 * nlat + i1]);
+                if (isGround && (px + py) % hatchPeriod < hatchWidth) {
+                    data[k] = 66; data[k+1] = 84; data[k+2] = 74; data[k+3] = 255;
+                } else {
+                    data[k] = 18; data[k+1] = 26; data[k+2] = 22; data[k+3] = 255;
+                }
                 if (prevRow) prevRow[px] = NaN;
                 continue;
             }

@@ -21,9 +21,18 @@
 // Surface E-P overlay: when 1D mode + slhf/tp tiles are cached, additional
 // lines appear for evaporation E = slhf / L_v, precipitation P = tp, and
 // the net E-P that should equal the implied source.
+//
+// Below ground (air_mask.js): the zonal means and eddy covariances count
+// only cells above the surface (Boer 1982), a level with less than a quarter
+// of its circle above ground is blank, and ∂/∂y, ∂/∂p are one-sided next to
+// one. Column views weight each level by the air it holds, down to the
+// surface: ∫dp/g is the zonal mean of the column integrals, and the column
+// mean divides by [p_s], not 1000 hPa.
 
 import { sourceMonth } from './diag_source.js';
 import { LEVELS, GRID } from './data.js';
+import { airZonalMean, airZonalCov, airLayers, columnSum, columnMass,
+         ddy, ddp, smoothLat, smoothLev, groundCells } from './air_mask.js';
 
 const A_EARTH = 6.371e6;
 const G       = 9.80665;
@@ -34,6 +43,7 @@ const L_V     = 2.501e6;       // J/kg, latent heat of vaporisation (~273 K)
 // back to kg/kg before computing fluxes — conceptually cleaner.
 const Q_TO_SI = 1e-3;
 
+/** Zonal mean over the whole circle, NaN-safe (surface fields). */
 function zonalMean(tile, nlat, nlon) {
     const out = new Float32Array(nlat);
     for (let i = 0; i < nlat; i++) {
@@ -48,36 +58,18 @@ function zonalMean(tile, nlat, nlon) {
     return out;
 }
 
-function zonalCov(tA, tB, mA, mB, nlat, nlon) {
-    const out = new Float32Array(nlat);
-    for (let i = 0; i < nlat; i++) {
-        let s = 0, n = 0;
-        const row = i * nlon;
-        const ma = mA[i], mb = mB[i];
-        if (!Number.isFinite(ma) || !Number.isFinite(mb)) { out[i] = NaN; continue; }
-        for (let j = 0; j < nlon; j++) {
-            const a = tA[row + j], b = tB[row + j];
-            if (!Number.isFinite(a) || !Number.isFinite(b)) continue;
-            s += (a - ma) * (b - mb);
-            n++;
-        }
-        out[i] = n > 0 ? s / n : NaN;
-    }
-    return out;
-}
 
 function computeQBudgetTerms(month, seasonal = false, srcSlice = null) {
-    const { nlat, nlon } = GRID;
+    const { nlat } = GRID;
     const N = LEVELS.length;
 
-    const U = [], V = [], W = [], Q = [];
+    const V = [], W = [], Q = [];
     for (let k = 0; k < N; k++) {
-        const u = sourceMonth('u', month, LEVELS[k], srcSlice, seasonal);
         const v = sourceMonth('v', month, LEVELS[k], srcSlice, seasonal);
         const w = sourceMonth('w', month, LEVELS[k], srcSlice, seasonal);
         const q = sourceMonth('q', month, LEVELS[k], srcSlice, seasonal);
-        if (!u || !v || !w || !q) return null;
-        U.push(u); V.push(v); W.push(w);
+        if (!v || !w || !q) return null;
+        V.push(v); W.push(w);
         // Convert q from g/kg → kg/kg in-place into a temp tile.
         const qSI = new Float32Array(q.length);
         for (let i = 0; i < q.length; i++) {
@@ -85,20 +77,33 @@ function computeQBudgetTerms(month, seasonal = false, srcSlice = null) {
         }
         Q.push(qSI);
     }
+    const SP = sourceMonth('sp', month, null, srcSlice, seasonal);   // hPa
+    if (!SP) return null;
 
     const cosphi = new Float32Array(nlat);
     for (let i = 0; i < nlat; i++) cosphi[i] = Math.cos((90 - i) * D2R);
 
-    const Uzm = [], Vzm = [], Wzm = [], Qzm = [];
-    const vqE = [], wqE = [];     // [v*q*], [ω*q*]
+    // The fluxes the terms differentiate, [k * nlat + i], from zonal means and
+    // eddy covariances over the air (NaN where the level doesn't take part):
+    // [v][q] cos φ, [ω][q], [v*q*] cos φ, [ω*q*].
+    const fluxVQ = new Float32Array(N * nlat);
+    const fluxWQ = new Float32Array(N * nlat);
+    const fluxVQe = new Float32Array(N * nlat);
+    const fluxWQe = new Float32Array(N * nlat);
     for (let k = 0; k < N; k++) {
-        const ub = zonalMean(U[k], nlat, nlon);
-        const vb = zonalMean(V[k], nlat, nlon);
-        const wb = zonalMean(W[k], nlat, nlon);
-        const qb = zonalMean(Q[k], nlat, nlon);
-        Uzm.push(ub); Vzm.push(vb); Wzm.push(wb); Qzm.push(qb);
-        vqE.push(zonalCov(V[k], Q[k], vb, qb, nlat, nlon));
-        wqE.push(zonalCov(W[k], Q[k], wb, qb, nlat, nlon));
+        const p = LEVELS[k];
+        const vb = airZonalMean(V[k], SP, p);
+        const wb = airZonalMean(W[k], SP, p);
+        const qb = airZonalMean(Q[k], SP, p);
+        const vq = airZonalCov(V[k], Q[k], vb, qb, SP, p);
+        const wq = airZonalCov(W[k], Q[k], wb, qb, SP, p);
+        for (let i = 0; i < nlat; i++) {
+            const idx = k * nlat + i;
+            fluxVQ[idx]  = vb[i] * qb[i] * cosphi[i];
+            fluxWQ[idx]  = wb[i] * qb[i];
+            fluxVQe[idx] = vq[i] * cosphi[i];
+            fluxWQe[idx] = wq[i];
+        }
     }
 
     const meanY = new Float32Array(N * nlat);
@@ -110,69 +115,40 @@ function computeQBudgetTerms(month, seasonal = false, srcSlice = null) {
         for (let i = 0; i < nlat; i++) {
             const c = cosphi[i];
             const idx = k * nlat + i;
-            if (c < 1e-3) {
+            if (c < 1e-3 || !Number.isFinite(fluxVQ[idx])) {
                 meanY[idx] = NaN; meanP[idx] = NaN;
                 eddyY[idx] = NaN; eddyP[idx] = NaN;
                 continue;
             }
 
-            const iN = Math.max(0, i - 1);
-            const iS = Math.min(nlat - 1, i + 1);
-            const dy_m = A_EARTH * (iS - iN) * D2R;
-
             // Mean meridional: -(1/cosφ)·∂([v][q] cosφ)/∂y  (after dy = a·dφ
             // collapses one factor of a).
-            const fmN = Vzm[k][iN] * Qzm[k][iN] * cosphi[iN];
-            const fmS = Vzm[k][iS] * Qzm[k][iS] * cosphi[iS];
-            meanY[idx] = -((fmN - fmS) / dy_m) / c;
+            meanY[idx] = -ddy(fluxVQ, k, i) / c;
 
             // Mean vertical: -∂([ω][q])/∂p
-            let dWQ_dp;
-            if (k === 0) {
-                const dp = (LEVELS[1] - LEVELS[0]) * 100;
-                dWQ_dp = (Wzm[1][i] * Qzm[1][i] - Wzm[0][i] * Qzm[0][i]) / dp;
-            } else if (k === N - 1) {
-                const dp = (LEVELS[N - 1] - LEVELS[N - 2]) * 100;
-                dWQ_dp = (Wzm[N - 1][i] * Qzm[N - 1][i] - Wzm[N - 2][i] * Qzm[N - 2][i]) / dp;
-            } else {
-                const dp = (LEVELS[k + 1] - LEVELS[k - 1]) * 100;
-                dWQ_dp = (Wzm[k + 1][i] * Qzm[k + 1][i] - Wzm[k - 1][i] * Qzm[k - 1][i]) / dp;
-            }
-            meanP[idx] = -dWQ_dp;
+            meanP[idx] = -ddp(fluxWQ, k, i);
 
             // Eddy meridional: -(1/cosφ)·∂([v*q*] cosφ)/∂y. The cosφ stays
             // as an explicit factor; no extra a appears (q is a scalar, no
             // cos²φ as in M-budget).
-            const eYN = vqE[k][iN] * cosphi[iN];
-            const eYS = vqE[k][iS] * cosphi[iS];
-            eddyY[idx] = -((eYN - eYS) / dy_m) / c;
+            eddyY[idx] = -ddy(fluxVQe, k, i) / c;
 
             // Eddy vertical: -∂([ω*q*])/∂p
-            let duw_dp;
-            if (k === 0) {
-                const dp = (LEVELS[1] - LEVELS[0]) * 100;
-                duw_dp = (wqE[1][i] - wqE[0][i]) / dp;
-            } else if (k === N - 1) {
-                const dp = (LEVELS[N - 1] - LEVELS[N - 2]) * 100;
-                duw_dp = (wqE[N - 1][i] - wqE[N - 2][i]) / dp;
-            } else {
-                const dp = (LEVELS[k + 1] - LEVELS[k - 1]) * 100;
-                duw_dp = (wqE[k + 1][i] - wqE[k - 1][i]) / dp;
-            }
-            eddyP[idx] = -duw_dp;
+            eddyP[idx] = -ddp(fluxWQe, k, i);
         }
     }
 
+    // Total = sum; implied source = -total. Blank where no term is
+    // (underground, the poles).
     const total  = new Float32Array(N * nlat);
     const source = new Float32Array(N * nlat);    // implied source/sink = -total
     for (let i = 0; i < N * nlat; i++) {
-        const my = Number.isFinite(meanY[i]) ? meanY[i] : 0;
-        const mp = Number.isFinite(meanP[i]) ? meanP[i] : 0;
-        const ey = Number.isFinite(eddyY[i]) ? eddyY[i] : 0;
-        const ep = Number.isFinite(eddyP[i]) ? eddyP[i] : 0;
-        const s = my + mp + ey + ep;
-        total[i]  = s;
-        source[i] = -s;
+        let s = 0, any = false;
+        for (const t of [meanY[i], meanP[i], eddyY[i], eddyP[i]]) {
+            if (Number.isFinite(t)) { s += t; any = true; }
+        }
+        total[i]  = any ? s : NaN;
+        source[i] = any ? -s : NaN;
     }
 
     // Smooth (3 lat passes + 1 level pass) — same rationale as M-budget:
@@ -192,7 +168,9 @@ function computeQBudgetTerms(month, seasonal = false, srcSlice = null) {
     smoothLev(total,  N, nlat);
     smoothLev(source, N, nlat);
 
-    return { meanY, meanP, eddyY, eddyP, total, source, N, nlat, cosphi, _month: month, _seasonal: seasonal, _source: srcSlice };
+    return { meanY, meanP, eddyY, eddyP, total, source, N, nlat, cosphi,
+             layers: airLayers(SP), ground: groundCells(SP),
+             _month: month, _seasonal: seasonal, _source: srcSlice };
 }
 
 const TERM_LABELS = {
@@ -289,18 +267,11 @@ export function buildQBudgetView(month, opts = {}) {
     const nameLabel  = `Q budget · ${TERM_LABELS[term]}`;
 
     if (mode === '1d_mean') {
-        const p_s = LEVELS[N - 1] * 100;
+        // Mass-weighted mean over the air column.
+        const sum = columnSum(out, t.layers);
+        const colMass = columnMass(t.layers);
         const prof = new Float32Array(nlat);
-        for (let i = 0; i < nlat; i++) {
-            let s = 0;
-            for (let k = 0; k < N - 1; k++) {
-                const a = out[k * nlat + i], b = out[(k + 1) * nlat + i];
-                if (!Number.isFinite(a) || !Number.isFinite(b)) continue;
-                const dp = (LEVELS[k + 1] - LEVELS[k]) * 100;
-                s += 0.5 * (a + b) * dp;
-            }
-            prof[i] = s / p_s;
-        }
+        for (let i = 0; i < nlat; i++) prof[i] = sum[i] / colMass[i];
         let absMax = 0;
         for (const v of prof) if (Number.isFinite(v) && Math.abs(v) > absMax) absMax = Math.abs(v);
         if (absMax < 0.05) absMax = 0.05;
@@ -317,17 +288,11 @@ export function buildQBudgetView(month, opts = {}) {
         // Vertical integral in mm/day water-equivalent.
         // ∫ ∂q/∂t · (1/g) dp has units (1/s)·(kg/m²) = kg/m²/s. Convert to
         // mm/day: × DAY_SEC then ÷ 1000 (1 kg/m² = 1 mm water).
+        const sum = columnSum(arr_si, t.layers);
         const prof = new Float32Array(nlat);
         let absMax = 0;
         for (let i = 0; i < nlat; i++) {
-            let s = 0;
-            for (let k = 0; k < N - 1; k++) {
-                const a_si = arr_si[k * nlat + i];
-                const b_si = arr_si[(k + 1) * nlat + i];
-                if (!Number.isFinite(a_si) || !Number.isFinite(b_si)) continue;
-                const dp = (LEVELS[k + 1] - LEVELS[k]) * 100;
-                s += 0.5 * (a_si + b_si) * dp / G;
-            }
+            const s = sum[i] * 100 / G;
             // s in kg/m²/s; × 86400 / 1000 = mm/day water equivalent.
             prof[i] = s * DAY_SEC;
             if (Number.isFinite(prof[i]) && Math.abs(prof[i]) > absMax) absMax = Math.abs(prof[i]);
@@ -356,6 +321,7 @@ export function buildQBudgetView(month, opts = {}) {
         kind: 'zonal', type: 'pl',
         values: out, vmin: -absMax, vmax: absMax,
         levels: LEVELS.slice(),
+        ground: t.ground,
         name: nameLabel,
         units: unitsLabel,
         isSymmetric: true, isDiagnostic: true,
@@ -363,38 +329,26 @@ export function buildQBudgetView(month, opts = {}) {
 }
 
 function buildAllTermsProfile(terms, form, agg) {
-    const { N, nlat, cosphi } = terms;
+    const { nlat, layers } = terms;
     const month = terms._month;
     const seasonal = terms._seasonal ?? false;   // false | true | annual window
     const srcSlice = terms._source ?? null;
-    const p_s = LEVELS[N - 1] * 100;
+    const colMass = columnMass(layers);          // [p_s], hPa
 
     const seriesKeys = ['meanY', 'meanP', 'eddyY', 'eddyP', 'total'];
     const profiles = {};
     let absMax = 0;
 
     for (const key of seriesKeys) {
-        const arr_si = terms[key];
+        // Σ ∂q/∂t · layers over the air column (kg/kg/s × hPa).
+        const sum = columnSum(terms[key], layers);
         const prof = new Float32Array(nlat);
         for (let i = 0; i < nlat; i++) {
-            let s = 0;
-            for (let k = 0; k < N - 1; k++) {
-                const aSI = arr_si[k * nlat + i];
-                const bSI = arr_si[(k + 1) * nlat + i];
-                if (!Number.isFinite(aSI) || !Number.isFinite(bSI)) continue;
-                const dp = (LEVELS[k + 1] - LEVELS[k]) * 100;
-                if (agg === 'integral') {
-                    // kg/m²/s → mm/day = × 86400 / 1000 = × 86.4
-                    // s here = ∫ ∂q/∂t · (1/g) dp. Multiply by DAY_SEC for /day.
-                    s += 0.5 * (aSI + bSI) * dp / G;
-                } else {
-                    // Mass-weighted column mean, in g/kg/day.
-                    const aDisp = aSI * 1000 * DAY_SEC;
-                    const bDisp = bSI * 1000 * DAY_SEC;
-                    s += 0.5 * (aDisp + bDisp) * dp;
-                }
-            }
-            prof[i] = (agg === 'integral') ? s * DAY_SEC : s / p_s;
+            // ∫dp/g: kg/m²/s → mm/day = × 86400 / 1000 = × 86.4 (1 kg/m² =
+            // 1 mm). Column mean: mass-weighted, in g/kg/day.
+            prof[i] = (agg === 'integral')
+                ? sum[i] * 100 / G * DAY_SEC
+                : sum[i] / colMass[i] * 1000 * DAY_SEC;
             if (Number.isFinite(prof[i]) && Math.abs(prof[i]) > absMax) absMax = Math.abs(prof[i]);
         }
         profiles[key] = prof;
@@ -405,29 +359,29 @@ function buildAllTermsProfile(terms, form, agg) {
     const precip = month ? precipitationProfile(month, seasonal, srcSlice) : null;
     const surfaceLines = [];
     if (evap || precip) {
-        const conv = (kgs) => {
+        const conv = (kgs, i) => {
             // kg/m²/s → mm/day
             if (!Number.isFinite(kgs)) return NaN;
             if (agg === 'integral') return kgs * DAY_SEC;
             // Convert surface flux to equivalent column-mean q tendency
-            // (g/kg/day): kgs / (p_s/g) = (kg/m²/s) / (kg/m²) = 1/s → ×1000×86400.
-            return kgs / (p_s / G) * 1000 * DAY_SEC;
+            // (g/kg/day): kgs / ([p_s]/g) = (kg/m²/s) / (kg/m²) = 1/s → ×1000×86400.
+            return kgs / (colMass[i] * 100 / G) * 1000 * DAY_SEC;
         };
         if (evap) {
             const e = new Float32Array(nlat);
-            for (let i = 0; i < nlat; i++) e[i] = conv(evap[i]);
+            for (let i = 0; i < nlat; i++) e[i] = conv(evap[i], i);
             surfaceLines.push({ values: e, color: SERIES_COLORS.evap.color, label: SERIES_COLORS.evap.label });
         }
         if (precip) {
             const p = new Float32Array(nlat);
-            for (let i = 0; i < nlat; i++) p[i] = conv(precip[i]);
+            for (let i = 0; i < nlat; i++) p[i] = conv(precip[i], i);
             surfaceLines.push({ values: p, color: SERIES_COLORS.precip.color, label: SERIES_COLORS.precip.label });
         }
         if (evap && precip) {
             const ep = new Float32Array(nlat);
             for (let i = 0; i < nlat; i++) {
                 const a = evap[i], b = precip[i];
-                ep[i] = (Number.isFinite(a) && Number.isFinite(b)) ? conv(a - b) : NaN;
+                ep[i] = (Number.isFinite(a) && Number.isFinite(b)) ? conv(a - b, i) : NaN;
             }
             surfaceLines.push({ values: ep, color: SERIES_COLORS.eMinusP.color, label: SERIES_COLORS.eMinusP.label });
         }
@@ -460,43 +414,3 @@ function buildAllTermsProfile(terms, form, agg) {
     };
 }
 
-function smoothLat(arr, N, nlat) {
-    const tmp = new Float32Array(nlat);
-    const W = [1, 4, 6, 4, 1];
-    for (let k = 0; k < N; k++) {
-        const off = k * nlat;
-        for (let i = 0; i < nlat; i++) {
-            let s = 0, w = 0;
-            for (let m = -2; m <= 2; m++) {
-                const ii = i + m;
-                if (ii < 0 || ii >= nlat) continue;
-                const v = arr[off + ii];
-                if (!Number.isFinite(v)) continue;
-                s += v * W[m + 2];
-                w += W[m + 2];
-            }
-            tmp[i] = w > 0 ? s / w : NaN;
-        }
-        for (let i = 0; i < nlat; i++) arr[off + i] = tmp[i];
-    }
-}
-
-function smoothLev(arr, N, nlat) {
-    const tmp = new Float32Array(N);
-    for (let i = 0; i < nlat; i++) {
-        for (let k = 0; k < N; k++) {
-            let s = 0, w = 0;
-            for (let m = -1; m <= 1; m++) {
-                const kk = k + m;
-                if (kk < 0 || kk >= N) continue;
-                const v = arr[kk * nlat + i];
-                if (!Number.isFinite(v)) continue;
-                const wt = m === 0 ? 2 : 1;
-                s += v * wt;
-                w += wt;
-            }
-            tmp[k] = w > 0 ? s / w : NaN;
-        }
-        for (let k = 0; k < N; k++) arr[k * nlat + i] = tmp[k];
-    }
-}

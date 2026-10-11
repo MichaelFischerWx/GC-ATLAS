@@ -25,9 +25,19 @@
 // cached, additional lines appear for LH+SH (turbulent), net column radiation,
 // and total surface+TOA atmospheric heating that should equal -[transport].
 // Trees built before the tsr tiles existed show the turbulent line only.
+//
+// Below ground (air_mask.js): the zonal means and eddy covariances count
+// only cells above the surface (Boer 1982), a level with less than a quarter
+// of its circle above ground is blank, and ∂/∂y, ∂/∂p are one-sided next to
+// one. Column views weight each level by the air it holds, down to the
+// surface: ∫dp/g is the zonal mean of the column integrals, and the column
+// mean divides by [p_s], not 1000 hPa. (ERA5's below-ground ω and h made the
+// unmasked Jan ∫dp/g "mean vertical" −590 W m⁻² at 30°N and −2400 near 70°S.)
 
 import { sourceMonth } from './diag_source.js';
 import { LEVELS, GRID } from './data.js';
+import { airZonalMean, airZonalCov, airLayers, columnSum, columnMass,
+         ddy, ddp, smoothLat, smoothLev, groundCells } from './air_mask.js';
 
 const A_EARTH = 6.371e6;
 const G       = 9.80665;
@@ -37,6 +47,7 @@ const CP      = 1004;          // J/(kg·K)
 const L_V     = 2.501e6;       // J/kg
 const Q_TO_SI = 1e-3;          // q stored as g/kg → divide by 1000 for kg/kg
 
+/** Zonal mean over the whole circle, NaN-safe (surface fields). */
 function zonalMean(tile, nlat, nlon) {
     const out = new Float32Array(nlat);
     for (let i = 0; i < nlat; i++) {
@@ -51,23 +62,6 @@ function zonalMean(tile, nlat, nlon) {
     return out;
 }
 
-function zonalCov(tA, tB, mA, mB, nlat, nlon) {
-    const out = new Float32Array(nlat);
-    for (let i = 0; i < nlat; i++) {
-        let s = 0, n = 0;
-        const row = i * nlon;
-        const ma = mA[i], mb = mB[i];
-        if (!Number.isFinite(ma) || !Number.isFinite(mb)) { out[i] = NaN; continue; }
-        for (let j = 0; j < nlon; j++) {
-            const a = tA[row + j], b = tB[row + j];
-            if (!Number.isFinite(a) || !Number.isFinite(b)) continue;
-            s += (a - ma) * (b - mb);
-            n++;
-        }
-        out[i] = n > 0 ? s / n : NaN;
-    }
-    return out;
-}
 
 /** Compose MSE field h = c_p·T + g·z + L_v·q for a single tile. z is already
  *  in m (geopotential height, after era5.js's m²/s² → m conversion). */
@@ -84,35 +78,47 @@ function composeMSETile(t, z, q) {
 }
 
 function computeHBudgetTerms(month, seasonal = false, srcSlice = null) {
-    const { nlat, nlon } = GRID;
+    const { nlat } = GRID;
     const N = LEVELS.length;
 
-    const U = [], V = [], W = [], H = [];
+    const V = [], W = [], H = [];
     for (let k = 0; k < N; k++) {
-        const u = sourceMonth('u', month, LEVELS[k], srcSlice, seasonal);
         const v = sourceMonth('v', month, LEVELS[k], srcSlice, seasonal);
         const w = sourceMonth('w', month, LEVELS[k], srcSlice, seasonal);
         const t = sourceMonth('t', month, LEVELS[k], srcSlice, seasonal);
         const z = sourceMonth('z', month, LEVELS[k], srcSlice, seasonal);
         const q = sourceMonth('q', month, LEVELS[k], srcSlice, seasonal);
-        if (!u || !v || !w || !t || !z || !q) return null;
-        U.push(u); V.push(v); W.push(w);
+        if (!v || !w || !t || !z || !q) return null;
+        V.push(v); W.push(w);
         H.push(composeMSETile(t, z, q));
     }
+    const SP = sourceMonth('sp', month, null, srcSlice, seasonal);   // hPa
+    if (!SP) return null;
 
     const cosphi = new Float32Array(nlat);
     for (let i = 0; i < nlat; i++) cosphi[i] = Math.cos((90 - i) * D2R);
 
-    const Uzm = [], Vzm = [], Wzm = [], Hzm = [];
-    const vhE = [], whE = [];
+    // The fluxes the terms differentiate, [k * nlat + i], from zonal means and
+    // eddy covariances over the air (NaN where the level doesn't take part):
+    // [v][h] cos φ, [ω][h], [v*h*] cos φ, [ω*h*].
+    const fluxVH = new Float32Array(N * nlat);
+    const fluxWH = new Float32Array(N * nlat);
+    const fluxVHe = new Float32Array(N * nlat);
+    const fluxWHe = new Float32Array(N * nlat);
     for (let k = 0; k < N; k++) {
-        const ub = zonalMean(U[k], nlat, nlon);
-        const vb = zonalMean(V[k], nlat, nlon);
-        const wb = zonalMean(W[k], nlat, nlon);
-        const hb = zonalMean(H[k], nlat, nlon);
-        Uzm.push(ub); Vzm.push(vb); Wzm.push(wb); Hzm.push(hb);
-        vhE.push(zonalCov(V[k], H[k], vb, hb, nlat, nlon));
-        whE.push(zonalCov(W[k], H[k], wb, hb, nlat, nlon));
+        const p = LEVELS[k];
+        const vb = airZonalMean(V[k], SP, p);
+        const wb = airZonalMean(W[k], SP, p);
+        const hb = airZonalMean(H[k], SP, p);
+        const vh = airZonalCov(V[k], H[k], vb, hb, SP, p);
+        const wh = airZonalCov(W[k], H[k], wb, hb, SP, p);
+        for (let i = 0; i < nlat; i++) {
+            const idx = k * nlat + i;
+            fluxVH[idx]  = vb[i] * hb[i] * cosphi[i];
+            fluxWH[idx]  = wb[i] * hb[i];
+            fluxVHe[idx] = vh[i] * cosphi[i];
+            fluxWHe[idx] = wh[i];
+        }
     }
 
     const meanY = new Float32Array(N * nlat);
@@ -124,62 +130,29 @@ function computeHBudgetTerms(month, seasonal = false, srcSlice = null) {
         for (let i = 0; i < nlat; i++) {
             const c = cosphi[i];
             const idx = k * nlat + i;
-            if (c < 1e-3) {
+            if (c < 1e-3 || !Number.isFinite(fluxVH[idx])) {
                 meanY[idx] = NaN; meanP[idx] = NaN;
                 eddyY[idx] = NaN; eddyP[idx] = NaN;
                 continue;
             }
-
-            const iN = Math.max(0, i - 1);
-            const iS = Math.min(nlat - 1, i + 1);
-            const dy_m = A_EARTH * (iS - iN) * D2R;
-
-            const fmN = Vzm[k][iN] * Hzm[k][iN] * cosphi[iN];
-            const fmS = Vzm[k][iS] * Hzm[k][iS] * cosphi[iS];
-            meanY[idx] = -((fmN - fmS) / dy_m) / c;
-
-            let dWH_dp;
-            if (k === 0) {
-                const dp = (LEVELS[1] - LEVELS[0]) * 100;
-                dWH_dp = (Wzm[1][i] * Hzm[1][i] - Wzm[0][i] * Hzm[0][i]) / dp;
-            } else if (k === N - 1) {
-                const dp = (LEVELS[N - 1] - LEVELS[N - 2]) * 100;
-                dWH_dp = (Wzm[N - 1][i] * Hzm[N - 1][i] - Wzm[N - 2][i] * Hzm[N - 2][i]) / dp;
-            } else {
-                const dp = (LEVELS[k + 1] - LEVELS[k - 1]) * 100;
-                dWH_dp = (Wzm[k + 1][i] * Hzm[k + 1][i] - Wzm[k - 1][i] * Hzm[k - 1][i]) / dp;
-            }
-            meanP[idx] = -dWH_dp;
-
-            const eYN = vhE[k][iN] * cosphi[iN];
-            const eYS = vhE[k][iS] * cosphi[iS];
-            eddyY[idx] = -((eYN - eYS) / dy_m) / c;
-
-            let duw_dp;
-            if (k === 0) {
-                const dp = (LEVELS[1] - LEVELS[0]) * 100;
-                duw_dp = (whE[1][i] - whE[0][i]) / dp;
-            } else if (k === N - 1) {
-                const dp = (LEVELS[N - 1] - LEVELS[N - 2]) * 100;
-                duw_dp = (whE[N - 1][i] - whE[N - 2][i]) / dp;
-            } else {
-                const dp = (LEVELS[k + 1] - LEVELS[k - 1]) * 100;
-                duw_dp = (whE[k + 1][i] - whE[k - 1][i]) / dp;
-            }
-            eddyP[idx] = -duw_dp;
+            meanY[idx] = -ddy(fluxVH, k, i) / c;
+            meanP[idx] = -ddp(fluxWH, k, i);
+            eddyY[idx] = -ddy(fluxVHe, k, i) / c;
+            eddyP[idx] = -ddp(fluxWHe, k, i);
         }
     }
 
+    // Total = sum; implied heating = -total. Blank where no term is
+    // (underground, the poles).
     const total  = new Float32Array(N * nlat);
     const source = new Float32Array(N * nlat);
     for (let i = 0; i < N * nlat; i++) {
-        const my = Number.isFinite(meanY[i]) ? meanY[i] : 0;
-        const mp = Number.isFinite(meanP[i]) ? meanP[i] : 0;
-        const ey = Number.isFinite(eddyY[i]) ? eddyY[i] : 0;
-        const ep = Number.isFinite(eddyP[i]) ? eddyP[i] : 0;
-        const s = my + mp + ey + ep;
-        total[i]  = s;
-        source[i] = -s;
+        let s = 0, any = false;
+        for (const t of [meanY[i], meanP[i], eddyY[i], eddyP[i]]) {
+            if (Number.isFinite(t)) { s += t; any = true; }
+        }
+        total[i]  = any ? s : NaN;
+        source[i] = any ? -s : NaN;
     }
 
     for (let pass = 0; pass < 3; pass++) {
@@ -197,7 +170,9 @@ function computeHBudgetTerms(month, seasonal = false, srcSlice = null) {
     smoothLev(total,  N, nlat);
     smoothLev(source, N, nlat);
 
-    return { meanY, meanP, eddyY, eddyP, total, source, N, nlat, cosphi, _month: month, _seasonal: seasonal, _source: srcSlice };
+    return { meanY, meanP, eddyY, eddyP, total, source, N, nlat, cosphi,
+             layers: airLayers(SP), ground: groundCells(SP),
+             _month: month, _seasonal: seasonal, _source: srcSlice };
 }
 
 const TERM_LABELS = {
@@ -295,18 +270,11 @@ export function buildHBudgetView(month, opts = {}) {
     const nameLabel  = `H budget · ${TERM_LABELS[term]}`;
 
     if (mode === '1d_mean') {
-        const p_s = LEVELS[N - 1] * 100;
+        // Mass-weighted mean over the air column.
+        const sum = columnSum(out, t.layers);
+        const colMass = columnMass(t.layers);
         const prof = new Float32Array(nlat);
-        for (let i = 0; i < nlat; i++) {
-            let s = 0;
-            for (let k = 0; k < N - 1; k++) {
-                const a = out[k * nlat + i], b = out[(k + 1) * nlat + i];
-                if (!Number.isFinite(a) || !Number.isFinite(b)) continue;
-                const dp = (LEVELS[k + 1] - LEVELS[k]) * 100;
-                s += 0.5 * (a + b) * dp;
-            }
-            prof[i] = s / p_s;
-        }
+        for (let i = 0; i < nlat; i++) prof[i] = sum[i] / colMass[i];
         let absMax = 0;
         for (const v of prof) if (Number.isFinite(v) && Math.abs(v) > absMax) absMax = Math.abs(v);
         if (absMax < 0.1) absMax = 0.1;
@@ -320,18 +288,12 @@ export function buildHBudgetView(month, opts = {}) {
     }
 
     if (mode === '1d_int') {
-        // Vertical integral ∫ ∂h/∂t · (1/g) dp in W/m² (= J/m²/s).
+        // Vertical integral ∫ ∂h/∂t · (1/g) dp in W/m² (= J/m²/s), over the air.
+        const sum = columnSum(arr_si, t.layers);
         const prof = new Float32Array(nlat);
         let absMax = 0;
         for (let i = 0; i < nlat; i++) {
-            let s = 0;
-            for (let k = 0; k < N - 1; k++) {
-                const aSI = arr_si[k * nlat + i];
-                const bSI = arr_si[(k + 1) * nlat + i];
-                if (!Number.isFinite(aSI) || !Number.isFinite(bSI)) continue;
-                const dp = (LEVELS[k + 1] - LEVELS[k]) * 100;
-                s += 0.5 * (aSI + bSI) * dp / G;
-            }
+            const s = sum[i] * 100 / G;
             prof[i] = s;          // already W/m² (J/(kg·s) · kg/m² = W/m²)
             if (Number.isFinite(s) && Math.abs(s) > absMax) absMax = Math.abs(s);
         }
@@ -359,6 +321,7 @@ export function buildHBudgetView(month, opts = {}) {
         kind: 'zonal', type: 'pl',
         values: out, vmin: -absMax, vmax: absMax,
         levels: LEVELS.slice(),
+        ground: t.ground,
         name: nameLabel,
         units: unitsLabel,
         isSymmetric: true, isDiagnostic: true,
@@ -366,36 +329,28 @@ export function buildHBudgetView(month, opts = {}) {
 }
 
 function buildAllTermsProfile(terms, form, agg) {
-    const { N, nlat, cosphi } = terms;
+    const { nlat, layers } = terms;
     const month = terms._month;
     const seasonal = terms._seasonal ?? false;   // false | true | annual window
     const srcSlice = terms._source ?? null;
-    const p_s = LEVELS[N - 1] * 100;
+    const colMass = columnMass(layers);          // [p_s], hPa
 
     const seriesKeys = ['meanY', 'meanP', 'eddyY', 'eddyP', 'total'];
     const profiles = {};
     let absMax = 0;
 
     for (const key of seriesKeys) {
-        const arr_si = terms[key];
+        // Σ ∂h/∂t · layers over the air column (J/kg/s × hPa).
+        const sum = columnSum(terms[key], layers);
         const prof = new Float32Array(nlat);
         for (let i = 0; i < nlat; i++) {
-            let s = 0;
-            for (let k = 0; k < N - 1; k++) {
-                const aSI = arr_si[k * nlat + i];
-                const bSI = arr_si[(k + 1) * nlat + i];
-                if (!Number.isFinite(aSI) || !Number.isFinite(bSI)) continue;
-                const dp = (LEVELS[k + 1] - LEVELS[k]) * 100;
-                if (agg === 'integral') {
-                    s += 0.5 * (aSI + bSI) * dp / G;        // → W/m²
-                } else {
-                    // Column-mean K/day if form='h', kJ/kg/day if form='H'.
-                    const aDisp = (form === 'h') ? (aSI / CP) * DAY_SEC : aSI * DAY_SEC / 1e3;
-                    const bDisp = (form === 'h') ? (bSI / CP) * DAY_SEC : bSI * DAY_SEC / 1e3;
-                    s += 0.5 * (aDisp + bDisp) * dp;
-                }
+            if (agg === 'integral') {
+                prof[i] = sum[i] * 100 / G;          // → W/m²
+            } else {
+                // Column-mean K/day if form='h', kJ/kg/day if form='H'.
+                const m = sum[i] / colMass[i];
+                prof[i] = (form === 'h') ? (m / CP) * DAY_SEC : m * DAY_SEC / 1e3;
             }
-            prof[i] = (agg === 'integral') ? s : s / p_s;
             if (Number.isFinite(prof[i]) && Math.abs(prof[i]) > absMax) absMax = Math.abs(prof[i]);
         }
         profiles[key] = prof;
@@ -405,9 +360,10 @@ function buildAllTermsProfile(terms, form, agg) {
     const surf = month ? surfaceHeatingProfiles(month, seasonal, srcSlice) : null;
     const surfaceLines = [];
     if (surf) {
-        const conv = (wm2) => {
+        const conv = (wm2, i) => {
             if (!Number.isFinite(wm2)) return NaN;
             if (agg === 'integral') return wm2;
+            const p_s = colMass[i] * 100;        // [p_s], Pa
             // For column-mean K/day: wm2 (W/m²) ÷ (mass·cp) = wm2·g/(p_s·cp) (K/s) → ×DAY_SEC
             if (form === 'h') return wm2 * G / (p_s * CP) * DAY_SEC;
             // For kJ/kg/day: wm2 ÷ mass × DAY/1e3
@@ -415,7 +371,7 @@ function buildAllTermsProfile(terms, form, agg) {
         };
         const make = (arr, key) => {
             const v = new Float32Array(nlat);
-            for (let i = 0; i < nlat; i++) v[i] = conv(arr[i]);
+            for (let i = 0; i < nlat; i++) v[i] = conv(arr[i], i);
             surfaceLines.push({ values: v, color: SERIES_COLORS[key].color, label: SERIES_COLORS[key].label });
         };
         make(surf.turb, 'turb');
@@ -452,43 +408,3 @@ function buildAllTermsProfile(terms, form, agg) {
     };
 }
 
-function smoothLat(arr, N, nlat) {
-    const tmp = new Float32Array(nlat);
-    const W = [1, 4, 6, 4, 1];
-    for (let k = 0; k < N; k++) {
-        const off = k * nlat;
-        for (let i = 0; i < nlat; i++) {
-            let s = 0, w = 0;
-            for (let m = -2; m <= 2; m++) {
-                const ii = i + m;
-                if (ii < 0 || ii >= nlat) continue;
-                const v = arr[off + ii];
-                if (!Number.isFinite(v)) continue;
-                s += v * W[m + 2];
-                w += W[m + 2];
-            }
-            tmp[i] = w > 0 ? s / w : NaN;
-        }
-        for (let i = 0; i < nlat; i++) arr[off + i] = tmp[i];
-    }
-}
-
-function smoothLev(arr, N, nlat) {
-    const tmp = new Float32Array(N);
-    for (let i = 0; i < nlat; i++) {
-        for (let k = 0; k < N; k++) {
-            let s = 0, w = 0;
-            for (let m = -1; m <= 1; m++) {
-                const kk = k + m;
-                if (kk < 0 || kk >= N) continue;
-                const v = arr[kk * nlat + i];
-                if (!Number.isFinite(v)) continue;
-                const wt = m === 0 ? 2 : 1;
-                s += v * wt;
-                w += wt;
-            }
-            tmp[k] = w > 0 ? s / w : NaN;
-        }
-        for (let k = 0; k < N; k++) arr[k * nlat + i] = tmp[k];
-    }
-}

@@ -62,20 +62,24 @@ const MAP_W = 4;
 const MAP_H = 2;
 
 // Tiles each cross-section diagnostic reads: pressure-level fields sampled
-// at every level in LEVELS, plus single-level fields some overlay (surface
-// fluxes, friction / mountain torque). One table drives both the prefetch
-// and the "re-render when an ingredient lands" check.
+// at every level in LEVELS, plus single-level fields: the surface pressure
+// that says which levels are underground (air_mask.js; required), and the
+// optional overlays (surface fluxes, friction / mountain torque). One table
+// drives both the prefetch and the "re-render when an ingredient lands"
+// check.
 const XS_DIAG_INGREDIENTS = {
-    psi:     { pl: ['v'] },
+    psi:     { pl: ['v'],                          sl: ['sp'] },
     M:       { pl: ['u'] },
     ug:      { pl: ['z'] },
     N2:      { pl: ['t'] },
-    epflux:  { pl: ['u', 'v', 'w', 't'] },
-    mbudget: { pl: ['u', 'v', 'w'],                sl: ['ews', 'oro', 'sp'] },
-    qbudget: { pl: ['u', 'v', 'w', 'q'],           sl: ['slhf', 'tp'] },
-    hbudget: { pl: ['u', 'v', 'w', 't', 'z', 'q'], sl: ['slhf', 'sshf', 'ssr', 'str', 'tsr', 'ttr'] },
+    epflux:  { pl: ['u', 'v', 'w', 't'],           sl: ['sp'] },
+    mbudget: { pl: ['u', 'v', 'w'],                sl: ['sp', 'ews', 'oro'] },
+    qbudget: { pl: ['v', 'w', 'q'],                sl: ['sp', 'slhf', 'tp'] },
+    hbudget: { pl: ['v', 'w', 't', 'z', 'q'],      sl: ['sp', 'slhf', 'sshf', 'ssr', 'str', 'tsr', 'ttr'] },
     transport: TRANSPORT_INGREDIENTS,
 };
+// Method popovers in the cross-section panel, opened by its ⓘ button.
+const XS_INFO = { psi: 'psi-info', epflux: 'ep-info', mbudget: 'mb-info', qbudget: 'qh-info', hbudget: 'qh-info' };
 function xsDiagUses(diag, name) {
     const ing = XS_DIAG_INGREDIENTS[diag];
     return !!ing && ((ing.pl || []).includes(name) || (ing.sl || []).includes(name));
@@ -1868,9 +1872,10 @@ class GlobeApp {
                 + rows.map(r => `<br><span style="color:${r.color}">${r.label}</span> `
                     + `<span class="hv-value">${fmt(r.value, 2)}</span>`).join('');
         }
-        const valHtml =
-            `<span class="hv-value">${fmt(sample.value, 2)}</span>` +
-            `<span class="hv-unit">${zm.units || ''}</span>`;
+        const valHtml = sample.ground
+            ? '<span class="hv-unit">below ground</span>'
+            : `<span class="hv-value">${fmt(sample.value, 2)}</span>` +
+              `<span class="hv-unit">${zm.units || ''}</span>`;
         return parts.join('<span class="hv-sep">·</span>') +
                '<span class="hv-sep">·</span>' + valHtml;
     }
@@ -2184,13 +2189,12 @@ class GlobeApp {
                                        : patch.xsDiag === 'hbudget' ? 'Implied atmospheric heating'
                                        : 'Implied surface torque';
             }
-            const mbInfoBtn = document.getElementById('mb-info-btn');
-            if (mbInfoBtn) mbInfoBtn.hidden = patch.xsDiag !== 'mbudget';   // popover is M-specific
-            const mbInfo = document.getElementById('mb-info');
-            if (mbInfo && patch.xsDiag !== 'mbudget') {
-                mbInfo.setAttribute('hidden', '');
-                mbInfoBtn?.classList.remove('active');
+            // A new diagnostic closes the method popover (updateXSection shows
+            // the ⓘ button for the diagnostics that have one).
+            for (const id of new Set(Object.values(XS_INFO))) {
+                document.getElementById(id)?.setAttribute('hidden', '');
             }
+            document.getElementById('xs-info-btn')?.classList.remove('active');
             // Q-budget and H-budget: closure hasn't been formally validated
             // against literature (ROADMAP item #8 pending). Surface a
             // "structure reliable, magnitudes want a spot-check" caveat
@@ -2743,8 +2747,9 @@ class GlobeApp {
     }
 
     /** True when every pressure-level tile the diagnostic needs for this
-     *  month is cached (single-level overlays are optional) — for the
-     *  globe's time slice, plus the climatology in the anomaly view. */
+     *  month is cached, and the surface pressure that masks them (the other
+     *  single-level overlays are optional) — for the globe's time slice,
+     *  plus the climatology in the anomaly view. */
     _xsDiagReady(diag) {
         const ing = XS_DIAG_INGREDIENTS[diag];
         if (!ing) return true;
@@ -2752,8 +2757,10 @@ class GlobeApp {
         const seasonal = this._avgWindow();
         const sources = [this._diagSource()];
         if (this._xsAnomActive()) sources.push(null);
+        const masked = (ing.sl || []).includes('sp');
         return sources.every(src => LEVELS.every(L => (ing.pl || []).every(name =>
-            sourceMonth(name, month, L, src, seasonal))));
+            sourceMonth(name, month, L, src, seasonal)))
+            && (!masked || sourceMonth('sp', month, null, src, seasonal)));
     }
 
     /** The diagnostic couldn't be drawn. Usually its ingredient tiles aren't
@@ -2812,6 +2819,8 @@ class GlobeApp {
                             ...(isen ? { isentropes: THETA_LEVELS, markTheta: this.state.theta } : {}) };
         const anomRow = document.getElementById('xs-anom-row');
         if (anomRow) anomRow.hidden = !((xsDiag === 'psi' || xsDiag === 'epflux') && source);
+        const infoBtn = document.getElementById('xs-info-btn');
+        if (infoBtn) infoBtn.hidden = !XS_INFO[xsDiag];
         this._syncTransportControls();
         let zm;
         let effCmap = cmap;
@@ -4953,9 +4962,9 @@ class GlobeApp {
             if (open) { info.removeAttribute('hidden'); btn.classList.add('active'); }
             else      { info.setAttribute('hidden', ''); btn.classList.remove('active'); }
         });
-        document.getElementById('mb-info-btn')?.addEventListener('click', () => {
-            const info = document.getElementById('mb-info');
-            const btn  = document.getElementById('mb-info-btn');
+        document.getElementById('xs-info-btn')?.addEventListener('click', () => {
+            const info = document.getElementById(XS_INFO[this.state.xsDiag]);
+            const btn  = document.getElementById('xs-info-btn');
             if (!info || !btn) return;
             const open = info.hasAttribute('hidden');
             if (open) { info.removeAttribute('hidden'); btn.classList.add('active'); }

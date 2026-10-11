@@ -11,9 +11,18 @@
 // upper-level poleward flow, lower-level equatorward return).
 //
 // Output values in 10⁹ kg s⁻¹ for display.
+//
+// Below ground (air_mask.js), [v] carries only the air: ψ integrates [βv], v
+// summed over the cells above the surface ÷ the whole circle (Boer 1982), so
+// ψ is the mass flux through the part of the circle that is open. ERA5's
+// below-ground winds had drawn a cell of their own around Antarctica, ψ =
+// +45 (Jan) to +73 ×10⁹ kg s⁻¹ (Jul) at 72°S, 1000 hPa — as strong as the
+// Ferrel cells, and July's maximum of ψ. Levels with less than a quarter of
+// the circle above ground are blank.
 
 import { sourceMonth } from './diag_source.js';
 import { LEVELS, GRID } from './data.js';
+import { groundCells } from './air_mask.js';
 
 const A_EARTH = 6.371e6;         // m
 const G       = 9.80665;         // m s⁻²
@@ -35,13 +44,17 @@ const N2_UNIT  = 1e-4;           // 10⁻⁴ s⁻²  (tropospheric N² ≈ 1, st
  * ψ(active climatology).
  */
 export function computeMassStreamfunction(month, { seasonal = false, source = null, anomaly = false } = {}) {
-    const psi = psiValues(month, seasonal, source);
-    if (!psi) return null;
+    const res = psiValues(month, seasonal, source);
+    if (!res) return null;
+    const { psi, ground } = res;
     const isAnomaly = anomaly && source != null;
     if (isAnomaly) {
         const ref = psiValues(month, seasonal, null);
         if (!ref) return null;
-        for (let i = 0; i < psi.length; i++) psi[i] -= ref[i];
+        for (let i = 0; i < psi.length; i++) {
+            psi[i] -= ref.psi[i];
+            ground[i] |= ref.ground[i];
+        }
     }
 
     // Symmetric range so the divergent colormap centres on zero.
@@ -58,6 +71,7 @@ export function computeMassStreamfunction(month, { seasonal = false, source = nu
         vmin: -absMax,
         vmax:  absMax,
         levels: LEVELS.slice(),
+        ground,
         name: isAnomaly ? 'Mass streamfunction anomaly ψ′' : 'Mass streamfunction ψ',
         units: '10⁹ kg s⁻¹',
         isSymmetric: true,
@@ -65,29 +79,38 @@ export function computeMassStreamfunction(month, { seasonal = false, source = nu
     };
 }
 
-/** ψ(k, lat) in 10⁹ kg s⁻¹ for one time slice, or null while tiles load. */
+/** ψ(k, lat) in 10⁹ kg s⁻¹ for one time slice, with the cells that are
+ *  blank as ground (air_mask.js groundCells), or null while tiles load. */
 function psiValues(month, seasonal, source) {
     const { nlat, nlon } = GRID;
     const nlev = LEVELS.length;
+    const SP = sourceMonth('sp', month, null, source, seasonal);   // hPa
+    if (!SP) return null;
 
-    // Zonal-mean v at each (k, lat) — NaN-aware.
+    // [βv] at each (k, lat): v summed over the cells above the surface, ÷ the
+    // circle (its cells with a value) — NaN-aware.
     const vzm = new Float32Array(nlev * nlat);
     for (let k = 0; k < nlev; k++) {
         const tile = sourceMonth('v', month, LEVELS[k], source, seasonal);
         if (!tile) return null;
+        const p = LEVELS[k];
         for (let i = 0; i < nlat; i++) {
             let s = 0, n = 0;
             const row = i * nlon;
             for (let j = 0; j < nlon; j++) {
                 const v = tile[row + j];
-                if (Number.isFinite(v)) { s += v; n += 1; }
+                if (!Number.isFinite(v)) continue;
+                n += 1;
+                if (!(p > SP[row + j])) s += v;
             }
             vzm[k * nlat + i] = n > 0 ? s / n : NaN;
         }
     }
+    const ground = groundCells(SP);
 
     // Integrate from TOA (k=0, small p) downward with the trapezoidal rule.
-    // dp is in Pa so ψ comes out in kg/s.
+    // dp is in Pa so ψ comes out in kg/s. Ground cells keep integrating
+    // (their sliver of air counts) but show blank.
     const psi = new Float32Array(nlev * nlat);
     for (let i = 0; i < nlat; i++) {
         const lat = 90 - i;
@@ -104,10 +127,10 @@ function psiValues(month, seasonal, source) {
             }
             const dp = (LEVELS[k] - LEVELS[k - 1]) * 100;   // hPa → Pa
             accum += 0.5 * (v0 + v1) * dp;
-            psi[k * nlat + i] = scale * accum / PSI_UNIT;
+            psi[k * nlat + i] = ground[k * nlat + i] ? NaN : scale * accum / PSI_UNIT;
         }
     }
-    return psi;
+    return { psi, ground };
 }
 
 /**

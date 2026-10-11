@@ -20,17 +20,36 @@
 // NOT include the transient-eddy contribution, which would require daily
 // data. Label it that way in the UI.
 //
+// Below ground (air_mask.js). ERA5's extrapolations under the surface made
+// eddies that aren't there: under the Antarctic plateau the 700 hPa row held
+// −3 (Jan) to −8 m s⁻¹ day⁻¹ (Jul) of spurious convergence. The zonal means,
+// the eddy covariances and the stratification count only cells above the
+// surface (Boer 1982), and a level with less than a quarter of its latitude
+// circle above ground is blank.
+// Two details keep a circle that is partly underground from inventing
+// vertical structure, because its air covers different longitudes at
+// different levels:
+//   - ∂[θ]/∂p is the mean over the air of each column's own ∂θ/∂p. The
+//     difference of the air-part means compared different places: at 48°N
+//     in January the 1000 hPa air is mostly the warm oceans', the 925 hPa
+//     air takes in the cold continents, and the layer came out unstable.
+//   - ∂F_p/∂p compares F_p at the two levels over the same columns, those
+//     with air at the lower one.
+// Near the ground F_p still grows where the stratification is weak (the
+// wintertime marine surface layer), as any QG EP flux does there.
+//
 // Output:
 //   - values: ∇·F shading (m s⁻¹ day⁻¹) on the (nlev × nlat) panel grid
 //   - arrows: per-(lat, level) (F_φ, F_p) for vector rendering, in panel-
 //     normalised units so arrow length is visually proportional in (φ, log p)
 //     space (Edmon–Hoskins–McIntyre convention).
+//   - ground: 1 where the level doesn't take part (air_mask.js; hatched)
 
 import { sourceMonth } from './diag_source.js';
 import { LEVELS, GRID } from './data.js';
+import { airZonalMean, airZonalCov, ddy, groundCells, MIN_AIR_SHARE } from './air_mask.js';
 
 const A_EARTH = 6.371e6;
-const G       = 9.80665;
 const OMEGA   = 7.2921e-5;
 const KAPPA   = 0.2854;          // R_dry / cp
 const D2R     = Math.PI / 180;
@@ -45,56 +64,67 @@ const DIV_UNIT = 1;              // m s⁻¹ day⁻¹  (typical |∇·F| ≈ 1�
 const ARROW_LAT_STRIDE = 12;
 const ARROW_LEV_STRIDE = 2;
 
-/** NaN-safe zonal mean of a (nlat × nlon) tile, returning Float32Array(nlat). */
-function zonalMean(tile, nlat, nlon) {
-    const zm = new Float32Array(nlat);
-    for (let i = 0; i < nlat; i++) {
-        let s = 0, n = 0;
-        const row = i * nlon;
-        for (let j = 0; j < nlon; j++) {
-            const v = tile[row + j];
-            if (Number.isFinite(v)) { s += v; n += 1; }
-        }
-        zm[i] = n > 0 ? s / n : NaN;
-    }
-    return zm;
-}
-
-/** NaN-safe zonal mean of (a · b) where a, b are co-located tiles, returning
- *  the zonal-mean COVARIANCE [a'b'] = [ab] - [a][b]. */
-function zonalCov(tileA, tileB, nlat, nlon) {
-    const cov = new Float32Array(nlat);
-    const meanA = zonalMean(tileA, nlat, nlon);
-    const meanB = zonalMean(tileB, nlat, nlon);
-    for (let i = 0; i < nlat; i++) {
-        let s = 0, n = 0;
-        const row = i * nlon;
-        for (let j = 0; j < nlon; j++) {
-            const a = tileA[row + j];
-            const b = tileB[row + j];
-            if (Number.isFinite(a) && Number.isFinite(b)) { s += a * b; n += 1; }
-        }
-        const meanAB = n > 0 ? s / n : NaN;
-        cov[i] = (Number.isFinite(meanAB) && Number.isFinite(meanA[i]) && Number.isFinite(meanB[i]))
-            ? meanAB - meanA[i] * meanB[i]
-            : NaN;
-    }
-    return cov;
-}
-
-/** F_φ and F_p (SI) on the (k, i) panel grid for one time slice
- *  (diag_source.js), or null while any tile is missing. */
-function epFluxComponents(month, seasonal, source) {
-    const { nlat, nlon } = GRID;
+/** Static stability ∂θ/∂p (K / Pa) at level m in each column: centred;
+ *  one-sided at the top, and where the level below is underground in that
+ *  column; NaN where level m is. Float32Array(nlat × nlon). */
+function columnStability(TH, SP, m) {
     const nlev = LEVELS.length;
+    const out = new Float32Array(SP.length);
+    for (let idx = 0; idx < SP.length; idx++) {
+        const ps = SP[idx];
+        if (LEVELS[m] > ps) { out[idx] = NaN; continue; }
+        const kUp = m > 0 ? m - 1 : m;
+        const kDn = m + 1 < nlev && !(LEVELS[m + 1] > ps) ? m + 1 : m;
+        out[idx] = (TH[kDn][idx] - TH[kUp][idx]) / ((LEVELS[kDn] - LEVELS[kUp]) * 100);
+    }
+    return out;
+}
 
-    // Zonal-mean θ at each level (for ∂[θ]/∂p in the stratification term),
-    // plus zonal-mean covariances [u'v'] and [v'θ']  at each (k, lat).
-    const Th_zm  = new Float32Array(nlev * nlat);     // [θ] (k,i)
-    const cov_uv = new Float32Array(nlev * nlat);     // [u'v']
-    const cov_vT = new Float32Array(nlev * nlat);     // [v'θ']
-    const u_zm   = new Float32Array(nlev * nlat);     // for context (not used in QG form)
+/** F_p = a cos φ · f · [v'θ'] / (∂θ/∂p) (Pa·m²·s⁻²) at level m, its zonal
+ *  statistics over the columns with air at pressure pDom (≥ LEVELS[m]); the
+ *  stratification is the mean over those columns of their own ∂θ/∂p (`S`,
+ *  columnStability). Float32Array(nlat); NaN where the level doesn't take
+ *  part (air_mask.js) or the stratification is ~neutral. */
+function verticalFlux(V, TH, S, SP, m, pDom) {
+    const { nlat, nlon } = GRID;
+    const Vm = V[m], THm = TH[m], Sm = S[m];
+    const out = new Float32Array(nlat);
+    for (let i = 0; i < nlat; i++) {
+        const lat = 90 - i;
+        const cosPhi = Math.cos(lat * D2R);
+        // One pass, NaN-safe: [v'θ'] = [vθ] - [v][θ] (float64 sums) and [∂θ/∂p].
+        let n = 0, sv = 0, st = 0, svt = 0, sd = 0;
+        const row = i * nlon;
+        for (let j = 0; j < nlon; j++) {
+            const idx = row + j;
+            if (pDom > SP[idx]) continue;
+            const v = Vm[idx], th = THm[idx], d = Sm[idx];
+            if (!Number.isFinite(v) || !Number.isFinite(th) || !Number.isFinite(d)) continue;
+            sv += v; st += th; svt += v * th; sd += d;
+            n++;
+        }
+        if (n < MIN_AIR_SHARE * nlon || cosPhi < 1e-3) { out[i] = NaN; continue; }
+        const vT = svt / n - (sv / n) * (st / n);
+        const dth = sd / n;
+        // ∂θ/∂p is negative in the troposphere — ratio v'θ'/(∂θ/∂p) carries
+        // the right sign. Tiny |∂θ/∂p| near the model top can blow up; cap.
+        out[i] = (!Number.isFinite(vT) || !Number.isFinite(dth) || Math.abs(dth) < 1e-7)
+            ? NaN
+            : A_EARTH * cosPhi * 2 * OMEGA * Math.sin(lat * D2R) * vT / dth;
+    }
+    return out;
+}
 
+/** F_φ, F_p (SI) and ∇·F / (a cos φ) (m s⁻¹ day⁻¹) on the (k, i) panel grid
+ *  for one time slice (diag_source.js), with the cells that don't take part
+ *  (air_mask.js groundCells), or null while any tile is missing. */
+function epFluxFields(month, seasonal, source) {
+    const { nlat } = GRID;
+    const nlev = LEVELS.length;
+    const SP = sourceMonth('sp', month, null, source, seasonal);   // hPa
+    if (!SP) return null;
+
+    const U = [], V = [], TH = [];
     for (let k = 0; k < nlev; k++) {
         const tU = sourceMonth('u', month, LEVELS[k], source, seasonal);
         const tV = sourceMonth('v', month, LEVELS[k], source, seasonal);
@@ -107,152 +137,104 @@ function epFluxComponents(month, seasonal, source) {
             const v = tT[i];
             tTh[i] = Number.isFinite(v) ? v * thetaFactor : NaN;
         }
-        const thZ = zonalMean(tTh, nlat, nlon);
-        const uZ  = zonalMean(tU,  nlat, nlon);
-        const cuv = zonalCov(tU, tV, nlat, nlon);
-        const cvT = zonalCov(tV, tTh, nlat, nlon);
-        for (let i = 0; i < nlat; i++) {
-            Th_zm [k * nlat + i] = thZ[i];
-            u_zm  [k * nlat + i] = uZ[i];
-            cov_uv[k * nlat + i] = cuv[i];
-            cov_vT[k * nlat + i] = cvT[i];
-        }
+        U.push(tU); V.push(tV); TH.push(tTh);
     }
+    const S = TH.map((_, m) => columnStability(TH, SP, m));
+    const ground = groundCells(SP);
 
-    // ∂[θ]/∂p with centred differences on pressure (Pa).
-    const dThdp = new Float32Array(nlev * nlat);
-    for (let i = 0; i < nlat; i++) {
-        for (let k = 0; k < nlev; k++) {
-            let dp, num;
-            if (k === 0) {
-                dp  = (LEVELS[1] - LEVELS[0]) * 100;
-                num = Th_zm[1 * nlat + i] - Th_zm[0 * nlat + i];
-            } else if (k === nlev - 1) {
-                dp  = (LEVELS[nlev - 1] - LEVELS[nlev - 2]) * 100;
-                num = Th_zm[(nlev - 1) * nlat + i] - Th_zm[(nlev - 2) * nlat + i];
-            } else {
-                dp  = (LEVELS[k + 1] - LEVELS[k - 1]) * 100;
-                num = Th_zm[(k + 1) * nlat + i] - Th_zm[(k - 1) * nlat + i];
-            }
-            dThdp[k * nlat + i] = num / dp;     // K / Pa
-        }
-    }
-
-    // Coriolis parameter f(lat).
-    const fCor = new Float32Array(nlat);
-    for (let i = 0; i < nlat; i++) {
-        const lat = 90 - i;
-        fCor[i] = 2 * OMEGA * Math.sin(lat * D2R);
-    }
-
-    // F_φ, F_p on the (k, i) grid in SI.
+    // F_φ, F_p on the (k, i) grid in SI, each level's zonal statistics over
+    // its own air. F_φ cos φ for the meridional divergence.
     //   F_φ = -a cos φ · [u'v']            units: m³ s⁻²
-    //   F_p =  a cos φ · f · [v'θ'] / (∂[θ]/∂p)   units: Pa·m²·s⁻²
+    //   F_p =  a cos φ · f · [v'θ'] / (∂θ/∂p)   units: Pa·m²·s⁻²
     const Fphi = new Float32Array(nlev * nlat);
     const Fp   = new Float32Array(nlev * nlat);
-    for (let i = 0; i < nlat; i++) {
-        const lat = 90 - i;
-        const cosPhi = Math.cos(lat * D2R);
-        const aCos = A_EARTH * cosPhi;
-        for (let k = 0; k < nlev; k++) {
+    const FphiCos = new Float32Array(nlev * nlat);
+    for (let k = 0; k < nlev; k++) {
+        const p = LEVELS[k];
+        const uZ = airZonalMean(U[k], SP, p);
+        const vZ = airZonalMean(V[k], SP, p);
+        const uv = airZonalCov(U[k], V[k], uZ, vZ, SP, p);
+        const fp = verticalFlux(V, TH, S, SP, k, p);
+        for (let i = 0; i < nlat; i++) {
             const idx = k * nlat + i;
-            const cuv = cov_uv[idx];
-            const cvT = cov_vT[idx];
-            const dth = dThdp[idx];
-            if (!Number.isFinite(cuv) || cosPhi < 1e-3) {
-                Fphi[idx] = NaN;
-            } else {
-                Fphi[idx] = -aCos * cuv;
-            }
-            // ∂θ/∂p is negative in the troposphere — ratio v'θ'/(∂θ/∂p) carries
-            // the right sign. Tiny |∂θ/∂p| near the model top can blow up; cap.
-            if (!Number.isFinite(cvT) || !Number.isFinite(dth) ||
-                Math.abs(dth) < 1e-7 || cosPhi < 1e-3) {
-                Fp[idx] = NaN;
-            } else {
-                Fp[idx] = aCos * fCor[i] * cvT / dth;
-            }
-        }
-    }
-    return { Fphi, Fp };
-}
-
-/**
- * Stationary-eddy EP flux for `source` (null = active climatology).
- * `anomaly: true` with a year / composite source returns the departure from
- * the active climatology instead. ∇·F is linear in F, so the anomaly is
- * built from F(source) − F(climatology): divergence and arrows alike.
- */
-export function computeEPFlux(month, { seasonal = false, source = null, anomaly = false } = {}) {
-    const { nlat } = GRID;
-    const nlev = LEVELS.length;
-    const F = epFluxComponents(month, seasonal, source);
-    if (!F) return null;
-    const { Fphi, Fp } = F;
-    const isAnomaly = anomaly && source != null;
-    if (isAnomaly) {
-        const ref = epFluxComponents(month, seasonal, null);
-        if (!ref) return null;
-        for (let idx = 0; idx < Fphi.length; idx++) {
-            Fphi[idx] -= ref.Fphi[idx];
-            Fp[idx]   -= ref.Fp[idx];
+            const cosPhi = Math.cos((90 - i) * D2R);
+            Fphi[idx] = (!Number.isFinite(uv[i]) || cosPhi < 1e-3) ? NaN : -A_EARTH * cosPhi * uv[i];
+            Fp[idx] = fp[i];
+            FphiCos[idx] = Fphi[idx] * cosPhi;
         }
     }
 
     // ∇·F = (1/(a cos φ)) · ∂(F_φ cos φ)/∂φ + ∂F_p/∂p     units: m³ s⁻² / m = m² s⁻²
     // To get the eddy forcing ON [u]: divide by (a cos φ). Convert to m s⁻¹ day⁻¹.
+    // ∂/∂φ = a ∂/∂y (northward), centred, one-sided next to a latitude with
+    // no air at the level. ∂F_p/∂p is centred where the level below has air
+    // on the circle, from F_p at the levels above and below over the columns
+    // with air at the lower one; one-sided (this level and the one above,
+    // over this level's air) at the bottom of the air.
     const divF = new Float32Array(nlev * nlat);
-    let vmin = Infinity, vmax = -Infinity;
-    for (let i = 0; i < nlat; i++) {
-        const lat = 90 - i;
-        const cosPhi = Math.cos(lat * D2R);
-        const aCos = A_EARTH * cosPhi;
-        const iN = Math.max(0, i - 1);
-        const iS = Math.min(nlat - 1, i + 1);
-        const dPhi = (iS - iN) * D2R;
-        for (let k = 0; k < nlev; k++) {
+    for (let k = 0; k < nlev; k++) {
+        const kUp = Math.max(0, k - 1);
+        const kDn = Math.min(nlev - 1, k + 1);
+        const pDn = LEVELS[kDn];
+        const centred = kDn > k
+            ? { up: verticalFlux(V, TH, S, SP, kUp, pDn), dn: Fp.subarray(kDn * nlat, (kDn + 1) * nlat) }
+            : null;
+        const oneSided = kUp < k
+            ? { up: verticalFlux(V, TH, S, SP, kUp, LEVELS[k]), dn: Fp.subarray(k * nlat, (k + 1) * nlat) }
+            : null;
+        for (let i = 0; i < nlat; i++) {
             const idx = k * nlat + i;
-            const FphiN = Fphi[k * nlat + iN] * Math.cos((90 - iN) * D2R);
-            const FphiS = Fphi[k * nlat + iS] * Math.cos((90 - iS) * D2R);
-            // Note: latitude index increases southward, so iS is south of iN.
-            // ∂/∂φ in the *northward-positive* sense → (north - south) / (φN - φS),
-            // and φN - φS = (90 - iN) - (90 - iS) = iS - iN, i.e. dPhi itself.
-            // (Dividing by -dPhi flipped the sign of the whole meridional term:
-            // its momentum-flux part must equal the eddy momentum-flux
-            // convergence -(1/(a cos²φ)) ∂([u'v'] cos²φ)/∂φ that the M budget
-            // shows.)
-            let dFphi_dphi;
-            if (Number.isFinite(FphiN) && Number.isFinite(FphiS) && cosPhi > 1e-3 && dPhi > 0) {
-                dFphi_dphi = (FphiN - FphiS) / dPhi;
-            } else {
-                divF[idx] = NaN; continue;
-            }
-
-            let dFp_dp;
-            if (k === 0) {
-                const dp = (LEVELS[1] - LEVELS[0]) * 100;
-                dFp_dp = (Fp[1 * nlat + i] - Fp[0 * nlat + i]) / dp;
-            } else if (k === nlev - 1) {
-                const dp = (LEVELS[nlev - 1] - LEVELS[nlev - 2]) * 100;
-                dFp_dp = (Fp[(nlev - 1) * nlat + i] - Fp[(nlev - 2) * nlat + i]) / dp;
-            } else {
-                const dp = (LEVELS[k + 1] - LEVELS[k - 1]) * 100;
-                dFp_dp = (Fp[(k + 1) * nlat + i] - Fp[(k - 1) * nlat + i]) / dp;
-            }
-
-            if (!Number.isFinite(dFp_dp) || !Number.isFinite(aCos) || aCos === 0) {
+            // The pole rows have no F_φ, and the rows next to them take no
+            // one-sided difference across the pole either.
+            if (i < 2 || i > nlat - 3 || ground[idx]) { divF[idx] = NaN; continue; }
+            const cosPhi = Math.cos((90 - i) * D2R);
+            const aCos = A_EARTH * cosPhi;
+            const pair = centred && !ground[kDn * nlat + i] ? centred : oneSided;
+            const dFphi_dy = ddy(FphiCos, k, i);
+            const dFp_dp = pair
+                ? (pair.dn[i] - pair.up[i]) / ((LEVELS[pair === centred ? kDn : k] - LEVELS[kUp]) * 100)
+                : NaN;
+            if (!Number.isFinite(dFphi_dy) || !Number.isFinite(dFp_dp)) {
                 divF[idx] = NaN; continue;
             }
             // ∇·F in m² s⁻²; eddy momentum forcing on [u] = (∇·F)/(a cos φ) m/s²
             // Convert to m/s/day for readability.
-            const div_si = dFphi_dphi / aCos + dFp_dp;
-            const force_per_day = (div_si / aCos) * DAY_SEC / DIV_UNIT;
-            divF[idx] = force_per_day;
-            if (Number.isFinite(force_per_day)) {
-                if (force_per_day < vmin) vmin = force_per_day;
-                if (force_per_day > vmax) vmax = force_per_day;
-            }
+            const div_si = dFphi_dy / cosPhi + dFp_dp;
+            divF[idx] = (div_si / aCos) * DAY_SEC / DIV_UNIT;
         }
+    }
+    return { Fphi, Fp, divF, ground };
+}
+
+/**
+ * Stationary-eddy EP flux for `source` (null = active climatology).
+ * `anomaly: true` with a year / composite source returns the departure from
+ * the active climatology instead: F(source) − F(climatology), arrows and
+ * divergence alike (∇·F is linear in F).
+ */
+export function computeEPFlux(month, { seasonal = false, source = null, anomaly = false } = {}) {
+    const { nlat } = GRID;
+    const nlev = LEVELS.length;
+    const F = epFluxFields(month, seasonal, source);
+    if (!F) return null;
+    const { Fphi, Fp, divF, ground } = F;
+    const isAnomaly = anomaly && source != null;
+    if (isAnomaly) {
+        const ref = epFluxFields(month, seasonal, null);
+        if (!ref) return null;
+        for (let idx = 0; idx < Fphi.length; idx++) {
+            Fphi[idx] -= ref.Fphi[idx];
+            Fp[idx]   -= ref.Fp[idx];
+            divF[idx] -= ref.divF[idx];
+            ground[idx] |= ref.ground[idx];
+        }
+    }
+
+    let vmin = Infinity, vmax = -Infinity;
+    for (const v of divF) {
+        if (!Number.isFinite(v)) continue;
+        if (v < vmin) vmin = v;
+        if (v > vmax) vmax = v;
     }
     if (!Number.isFinite(vmin)) { vmin = -1; vmax = 1; }
     // Symmetric, clamped range so the divergent colormap centres on zero
@@ -307,6 +289,7 @@ export function computeEPFlux(month, { seasonal = false, source = null, anomaly 
         values: divF,
         vmin, vmax,
         levels: LEVELS.slice(),
+        ground,
         name: isAnomaly ? 'EP flux anomaly (stationary eddy)' : 'EP flux (stationary eddy)',
         units: 'm s⁻¹ day⁻¹',
         isSymmetric: true,
