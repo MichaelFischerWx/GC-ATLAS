@@ -26,22 +26,21 @@
 // and total surface+TOA atmospheric heating that should equal -[transport].
 // Trees built before the tsr tiles existed show the turbulent line only.
 //
-// Below ground (air_mask.js): the zonal means and eddy covariances count
-// only cells above the surface (Boer 1982), a level with less than a quarter
-// of its circle above ground is blank, and ∂/∂y, ∂/∂p are one-sided next to
-// one. Column views weight each level by the air it holds, down to the
-// surface: ∫dp/g is the zonal mean of the column integrals, and the column
-// mean divides by [p_s], not 1000 hPa. (ERA5's below-ground ω and h made the
-// unmasked Jan ∫dp/g "mean vertical" −590 W m⁻² at 30°N and −2400 near 70°S.)
+// The terms come from tracer_budget.js (shared with the Q budget): below
+// ground left out (Boer 1982), the mean circulation mass-corrected (zero net
+// mass flux, ω from continuity), finite volume on the air layers. A level
+// with less than a quarter of its circle above ground is blank. ∫dp/g of
+// the meridional terms is the convergence of the MMC and stationary-eddy
+// column transports; the vertical terms integrate to zero; the column mean
+// divides by [p_s]/g. (ERA5's below-ground ω and h had made the Jan ∫dp/g
+// "mean vertical" −590 W m⁻² at 30°N and −2400 near 70°S; the mass
+// imbalance then left −640 to +1340 W m⁻² in the Jul total poleward of 80°S.)
 
 import { sourceMonth } from './diag_source.js';
 import { LEVELS, GRID } from './data.js';
-import { airZonalMean, airZonalCov, airLayers, columnSum, columnMass,
-         ddy, ddp, smoothLat, smoothLev, groundCells } from './air_mask.js';
+import { tracerBudget, profileAbsMax } from './tracer_budget.js';
 
-const A_EARTH = 6.371e6;
 const G       = 9.80665;
-const D2R     = Math.PI / 180;
 const DAY_SEC = 86400;
 const CP      = 1004;          // J/(kg·K)
 const L_V     = 2.501e6;       // J/kg
@@ -95,83 +94,9 @@ function computeHBudgetTerms(month, seasonal = false, srcSlice = null) {
     const SP = sourceMonth('sp', month, null, srcSlice, seasonal);   // hPa
     if (!SP) return null;
 
-    const cosphi = new Float32Array(nlat);
-    for (let i = 0; i < nlat; i++) cosphi[i] = Math.cos((90 - i) * D2R);
-
-    // The fluxes the terms differentiate, [k * nlat + i], from zonal means and
-    // eddy covariances over the air (NaN where the level doesn't take part):
-    // [v][h] cos φ, [ω][h], [v*h*] cos φ, [ω*h*].
-    const fluxVH = new Float32Array(N * nlat);
-    const fluxWH = new Float32Array(N * nlat);
-    const fluxVHe = new Float32Array(N * nlat);
-    const fluxWHe = new Float32Array(N * nlat);
-    for (let k = 0; k < N; k++) {
-        const p = LEVELS[k];
-        const vb = airZonalMean(V[k], SP, p);
-        const wb = airZonalMean(W[k], SP, p);
-        const hb = airZonalMean(H[k], SP, p);
-        const vh = airZonalCov(V[k], H[k], vb, hb, SP, p);
-        const wh = airZonalCov(W[k], H[k], wb, hb, SP, p);
-        for (let i = 0; i < nlat; i++) {
-            const idx = k * nlat + i;
-            fluxVH[idx]  = vb[i] * hb[i] * cosphi[i];
-            fluxWH[idx]  = wb[i] * hb[i];
-            fluxVHe[idx] = vh[i] * cosphi[i];
-            fluxWHe[idx] = wh[i];
-        }
-    }
-
-    const meanY = new Float32Array(N * nlat);
-    const meanP = new Float32Array(N * nlat);
-    const eddyY = new Float32Array(N * nlat);
-    const eddyP = new Float32Array(N * nlat);
-
-    for (let k = 0; k < N; k++) {
-        for (let i = 0; i < nlat; i++) {
-            const c = cosphi[i];
-            const idx = k * nlat + i;
-            if (c < 1e-3 || !Number.isFinite(fluxVH[idx])) {
-                meanY[idx] = NaN; meanP[idx] = NaN;
-                eddyY[idx] = NaN; eddyP[idx] = NaN;
-                continue;
-            }
-            meanY[idx] = -ddy(fluxVH, k, i) / c;
-            meanP[idx] = -ddp(fluxWH, k, i);
-            eddyY[idx] = -ddy(fluxVHe, k, i) / c;
-            eddyP[idx] = -ddp(fluxWHe, k, i);
-        }
-    }
-
-    // Total = sum; implied heating = -total. Blank where no term is
-    // (underground, the poles).
-    const total  = new Float32Array(N * nlat);
-    const source = new Float32Array(N * nlat);
-    for (let i = 0; i < N * nlat; i++) {
-        let s = 0, any = false;
-        for (const t of [meanY[i], meanP[i], eddyY[i], eddyP[i]]) {
-            if (Number.isFinite(t)) { s += t; any = true; }
-        }
-        total[i]  = any ? s : NaN;
-        source[i] = any ? -s : NaN;
-    }
-
-    for (let pass = 0; pass < 3; pass++) {
-        smoothLat(meanY,  N, nlat);
-        smoothLat(meanP,  N, nlat);
-        smoothLat(eddyY,  N, nlat);
-        smoothLat(eddyP,  N, nlat);
-        smoothLat(total,  N, nlat);
-        smoothLat(source, N, nlat);
-    }
-    smoothLev(meanY,  N, nlat);
-    smoothLev(meanP,  N, nlat);
-    smoothLev(eddyY,  N, nlat);
-    smoothLev(eddyP,  N, nlat);
-    smoothLev(total,  N, nlat);
-    smoothLev(source, N, nlat);
-
-    return { meanY, meanP, eddyY, eddyP, total, source, N, nlat, cosphi,
-             layers: airLayers(SP), ground: groundCells(SP),
+    // Per unit mass (J/kg/s) and, in `col`, ∫dp/g over the air (W/m²);
+    // implied heating = −total.
+    return { ...tracerBudget(V, W, H, SP), N, nlat,
              _month: month, _seasonal: seasonal, _source: srcSlice };
 }
 
@@ -244,7 +169,7 @@ export function buildHBudgetView(month, opts = {}) {
 
     const t = computeHBudgetTerms(month, seasonal, opts.source ?? null);
     if (!t) return null;
-    const { N, nlat, cosphi } = t;
+    const { nlat } = t;
 
     if (term === 'all' && (mode === '1d_mean' || mode === '1d_int')) {
         return buildAllTermsProfile(t, form, mode === '1d_int' ? 'integral' : 'mean');
@@ -253,30 +178,19 @@ export function buildHBudgetView(month, opts = {}) {
     const arr_si = t[term];
     if (!arr_si) return null;
 
-    // arr_si is per-mass MSE tendency (J/kg/s). Convert to display unit.
-    //   form='h': K/day  ⇒  arr_si / cp · DAY_SEC
-    //   form='H': J/(kg·day) (display same form, vertical integral handles W/m²)
-    const out = new Float32Array(arr_si.length);
-    for (let i = 0; i < arr_si.length; i++) {
-        const v = arr_si[i];
-        if (form === 'h') {
-            out[i] = Number.isFinite(v) ? (v / CP) * DAY_SEC : NaN;
-        } else {
-            // H form: scale by 1e-3 to put per-day MSE in kJ/kg/day for readability.
-            out[i] = Number.isFinite(v) ? v * DAY_SEC / 1e3 : NaN;
-        }
-    }
+    // Per-mass MSE tendency (J/kg/s) → display unit:
+    //   form='h': K/day        (÷ c_p × day)
+    //   form='H': kJ/(kg·day)  (× day ÷ 10³; the vertical integral is in W/m²)
+    const toDisplay = (v) => !Number.isFinite(v) ? NaN
+        : (form === 'h' ? (v / CP) * DAY_SEC : v * DAY_SEC / 1e3);
     const unitsLabel = form === 'h' ? 'K day⁻¹' : 'kJ kg⁻¹ day⁻¹';
     const nameLabel  = `H budget · ${TERM_LABELS[term]}`;
 
     if (mode === '1d_mean') {
-        // Mass-weighted mean over the air column.
-        const sum = columnSum(out, t.layers);
-        const colMass = columnMass(t.layers);
+        // Mass-weighted mean over the air column: ∫dp/g ÷ [p_s]/g.
         const prof = new Float32Array(nlat);
-        for (let i = 0; i < nlat; i++) prof[i] = sum[i] / colMass[i];
-        let absMax = 0;
-        for (const v of prof) if (Number.isFinite(v) && Math.abs(v) > absMax) absMax = Math.abs(v);
+        for (let i = 0; i < nlat; i++) prof[i] = toDisplay(t.col[term][i] / t.colMass[i]);
+        let absMax = profileAbsMax([prof]);
         if (absMax < 0.1) absMax = 0.1;
         return {
             kind: 'zonal', type: 'sl',
@@ -288,15 +202,9 @@ export function buildHBudgetView(month, opts = {}) {
     }
 
     if (mode === '1d_int') {
-        // Vertical integral ∫ ∂h/∂t · (1/g) dp in W/m² (= J/m²/s), over the air.
-        const sum = columnSum(arr_si, t.layers);
-        const prof = new Float32Array(nlat);
-        let absMax = 0;
-        for (let i = 0; i < nlat; i++) {
-            const s = sum[i] * 100 / G;
-            prof[i] = s;          // already W/m² (J/(kg·s) · kg/m² = W/m²)
-            if (Number.isFinite(s) && Math.abs(s) > absMax) absMax = Math.abs(s);
-        }
+        // Vertical integral ∫ ∂h/∂t · (1/g) dp over the air, W/m².
+        const prof = Float32Array.from(t.col[term]);
+        let absMax = profileAbsMax([prof]);
         if (absMax < 5)   absMax = 5;
         if (absMax > 300) absMax = 300;
         return {
@@ -309,6 +217,7 @@ export function buildHBudgetView(month, opts = {}) {
     }
 
     // 2D
+    const out = arr_si.map(toDisplay);
     const finiteAbs = [];
     for (const v of out) if (Number.isFinite(v)) finiteAbs.push(Math.abs(v));
     finiteAbs.sort((a, b) => a - b);
@@ -329,30 +238,27 @@ export function buildHBudgetView(month, opts = {}) {
 }
 
 function buildAllTermsProfile(terms, form, agg) {
-    const { nlat, layers } = terms;
+    const { nlat, col, colMass } = terms;        // colMass = [p_s]/g, kg/m²
     const month = terms._month;
     const seasonal = terms._seasonal ?? false;   // false | true | annual window
     const srcSlice = terms._source ?? null;
-    const colMass = columnMass(layers);          // [p_s], hPa
 
-    const seriesKeys = ['meanY', 'meanP', 'eddyY', 'eddyP', 'total'];
+    // W/m² → the view's unit: as is (∫dp/g), or spread over the air column
+    // (÷ [p_s]/g): K/day if form='h', kJ/kg/day if form='H'.
+    const conv = (wm2, i) => {
+        if (!Number.isFinite(wm2)) return NaN;
+        if (agg === 'integral') return wm2;
+        const perMass = wm2 / colMass[i];        // J/kg/s
+        return form === 'h' ? perMass / CP * DAY_SEC : perMass * DAY_SEC / 1e3;
+    };
+
+    // The vertical terms integrate to zero over the column (nothing
+    // crosses the top or the ground): only the meridional ones are drawn.
+    const seriesKeys = ['meanY', 'eddyY', 'total'];
     const profiles = {};
-    let absMax = 0;
-
     for (const key of seriesKeys) {
-        // Σ ∂h/∂t · layers over the air column (J/kg/s × hPa).
-        const sum = columnSum(terms[key], layers);
         const prof = new Float32Array(nlat);
-        for (let i = 0; i < nlat; i++) {
-            if (agg === 'integral') {
-                prof[i] = sum[i] * 100 / G;          // → W/m²
-            } else {
-                // Column-mean K/day if form='h', kJ/kg/day if form='H'.
-                const m = sum[i] / colMass[i];
-                prof[i] = (form === 'h') ? (m / CP) * DAY_SEC : m * DAY_SEC / 1e3;
-            }
-            if (Number.isFinite(prof[i]) && Math.abs(prof[i]) > absMax) absMax = Math.abs(prof[i]);
-        }
+        for (let i = 0; i < nlat; i++) prof[i] = conv(col[key][i], i);
         profiles[key] = prof;
     }
 
@@ -360,15 +266,6 @@ function buildAllTermsProfile(terms, form, agg) {
     const surf = month ? surfaceHeatingProfiles(month, seasonal, srcSlice) : null;
     const surfaceLines = [];
     if (surf) {
-        const conv = (wm2, i) => {
-            if (!Number.isFinite(wm2)) return NaN;
-            if (agg === 'integral') return wm2;
-            const p_s = colMass[i] * 100;        // [p_s], Pa
-            // For column-mean K/day: wm2 (W/m²) ÷ (mass·cp) = wm2·g/(p_s·cp) (K/s) → ×DAY_SEC
-            if (form === 'h') return wm2 * G / (p_s * CP) * DAY_SEC;
-            // For kJ/kg/day: wm2 ÷ mass × DAY/1e3
-            return wm2 * G / p_s * DAY_SEC / 1e3;
-        };
         const make = (arr, key) => {
             const v = new Float32Array(nlat);
             for (let i = 0; i < nlat; i++) v[i] = conv(arr[i], i);
@@ -377,12 +274,9 @@ function buildAllTermsProfile(terms, form, agg) {
         make(surf.turb, 'turb');
         if (surf.rad) make(surf.rad, 'rad');
         if (surf.tot) make(surf.tot, 'qNet');
-        for (const s of surfaceLines) {
-            for (const v of s.values) {
-                if (Number.isFinite(v) && Math.abs(v) > absMax) absMax = Math.abs(v);
-            }
-        }
     }
+    let absMax = profileAbsMax([...seriesKeys.map((k) => profiles[k]),
+                                ...surfaceLines.map((s) => s.values)]);
 
     const units = (agg === 'integral')
         ? 'W m⁻²'

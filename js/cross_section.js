@@ -850,6 +850,12 @@ function drawLine(ctx, x0, y0, w, h, zm) {
         ? zm.series
         : [{ values, color: '#2DBDA0', label: zm.name }];
 
+    // Curves beyond the y-range (the budgets take it from within 85° of the
+    // equator) stop at the frame; hovering still reads them.
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(x0, y0, w, h);
+    ctx.clip();
     for (const s of series) {
         ctx.strokeStyle = s.color;
         ctx.lineWidth = (s.width ?? 2) * dpr;
@@ -867,6 +873,7 @@ function drawLine(ctx, x0, y0, w, h, zm) {
         }
         ctx.stroke();
     }
+    ctx.restore();
     ctx.setLineDash([]);
 
     // Legend (only if multi-series). Top-right of plot by default; plots
