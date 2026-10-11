@@ -44,7 +44,7 @@
 // spanned 250–500 hPa. So ∂θ/∂p = (θ/p) ∂ln θ/∂ln p, from the three-point
 // second-order derivative at the level, or the two-point secant at the top
 // and where the level below is underground (both exact for an isothermal
-// layer). ∂F_p/∂p = (1/p) ∂F_p/∂ln p, the centred secant in ln p: against
+// layer; air_mask.js columnStability, shared with N²). ∂F_p/∂p = (1/p) ∂F_p/∂ln p, the centred secant in ln p: against
 // the 37 levels it is within 0.05 m s⁻¹ day⁻¹ rms of the secant in p except
 // at 300 hPa, where it is better; the three-point form lost as often as won.
 // Checked against ERA5 on all 37 levels (NCAR GDEX d633001, 1991–2020): in
@@ -74,7 +74,8 @@
 
 import { sourceMonth, sourceLevels } from './diag_source.js';
 import { GRID } from './data.js';
-import { airShare, airZonalMean, airZonalCov, ddy, groundCells, MIN_AIR_SHARE } from './air_mask.js';
+import { airShare, airZonalMean, airZonalCov, ddy, groundCells, MIN_AIR_SHARE,
+         columnStability, thetaTiles } from './air_mask.js';
 
 /** Tiles the panel reads: u, v, T on every level it uses (diag_source.js
  *  sourceLevels: LEVELS, plus 400 and 600 hPa where the tree has them), and
@@ -107,40 +108,6 @@ const ARROW_LEV_STRIDE = 2;
 const RANGE_P_TOP = 100;
 const RANGE_P_BOT = 850;
 const RANGE_LAT   = 80;
-
-/** Static stability ∂θ/∂p (K / Pa) at level m of `P` (hPa) in each column,
- *  = (θ/p) ∂ln θ/∂ln p: the three-point second-order derivative in ln p at
- *  the level; the two-point secant at the top and where the level below is
- *  underground in that column; NaN where level m is. LNTH = ln θ.
- *  Float32Array(nlat × nlon). */
-function columnStability(TH, LNTH, SP, P, m) {
-    const nlev = P.length;
-    const out = new Float32Array(SP.length);
-    const x = P.map(Math.log);
-    let w0 = 0, w1 = 0, w2 = 0;
-    if (m > 0 && m + 1 < nlev) {
-        const h1 = x[m] - x[m - 1], h2 = x[m + 1] - x[m];
-        w0 = -h2 / (h1 * (h1 + h2));
-        w1 = (h2 - h1) / (h1 * h2);
-        w2 = h1 / (h2 * (h1 + h2));
-    }
-    const pm = P[m] * 100;
-    for (let idx = 0; idx < SP.length; idx++) {
-        const ps = SP[idx];
-        if (P[m] > ps) { out[idx] = NaN; continue; }
-        const below = m + 1 < nlev && !(P[m + 1] > ps);
-        let dl;
-        if (m > 0 && below) {
-            dl = w0 * LNTH[m - 1][idx] + w1 * LNTH[m][idx] + w2 * LNTH[m + 1][idx];
-        } else {
-            const kUp = m > 0 ? m - 1 : m;
-            const kDn = below ? m + 1 : m;
-            dl = kUp === kDn ? NaN : (LNTH[kDn][idx] - LNTH[kUp][idx]) / (x[kDn] - x[kUp]);
-        }
-        out[idx] = TH[m][idx] / pm * dl;
-    }
-    return out;
-}
 
 /** F_p = a cos φ · f · [v'θ'] / (∂θ/∂p) (Pa·m²·s⁻²) at level m, its zonal
  *  statistics over the columns with air at pressure pDom (≥ level m's); the
@@ -187,23 +154,15 @@ function epFluxFields(month, seasonal, source, P) {
     const SP = sourceMonth('sp', month, null, source, seasonal);   // hPa
     if (!SP) return null;
 
-    const U = [], V = [], TH = [], LNTH = [];
+    const U = [], V = [], T = [];
     for (let k = 0; k < nlev; k++) {
         const tU = sourceMonth('u', month, P[k], source, seasonal);
         const tV = sourceMonth('v', month, P[k], source, seasonal);
         const tT = sourceMonth('t', month, P[k], source, seasonal);
         if (!tU || !tV || !tT) return null;
-        const thetaFactor = Math.pow(1000 / P[k], KAPPA);
-        // θ and ln θ tiles.
-        const tTh = new Float32Array(tT.length);
-        const tLn = new Float32Array(tT.length);
-        for (let i = 0; i < tT.length; i++) {
-            const v = tT[i];
-            tTh[i] = Number.isFinite(v) ? v * thetaFactor : NaN;
-            tLn[i] = Math.log(tTh[i]);
-        }
-        U.push(tU); V.push(tV); TH.push(tTh); LNTH.push(tLn);
+        U.push(tU); V.push(tV); T.push(tT);
     }
+    const { TH, LNTH } = thetaTiles(T, P, KAPPA);
     const S = TH.map((_, m) => columnStability(TH, LNTH, SP, P, m));
     const ground = groundCells(SP, P);
     const edge = new Uint8Array(nlev * nlat);

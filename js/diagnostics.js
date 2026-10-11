@@ -29,9 +29,13 @@
 // own ∂z/∂y or ∂θ/∂p, and the panel shows their mean over the air — as the EP
 // flux's stratification does (ep_flux.js).
 
-import { sourceMonth } from './diag_source.js';
+import { sourceMonth, sourceLevels } from './diag_source.js';
 import { LEVELS, GRID } from './data.js';
-import { airZonalMean, groundCells } from './air_mask.js';
+import { airZonalMean, groundCells, columnStability, thetaTiles } from './air_mask.js';
+
+/** Tiles the N² panel reads: T on LEVELS, plus 400 and 600 hPa where the
+ *  tree has them (diag_source.js sourceLevels), and the surface pressure. */
+export const N2_INGREDIENTS = { pl: ['t'], sl: ['sp'], extraLevels: true };
 
 const A_EARTH = 6.371e6;         // m
 const G       = 9.80665;         // m s⁻²
@@ -314,9 +318,17 @@ export function computeGeostrophicWind(month, { seasonal = false, source = null 
  *
  *   N² = (g / θ) · ∂θ/∂z = -(g² p / (R T θ)) · ∂θ/∂p
  *
- * where θ = T·(1000/p)^κ, with centred differences in p (one-sided at the
- * top and bottom levels). Output in 10⁻⁴ s⁻² (tropospheric N² ≈ 1,
+ * where θ = T·(1000/p)^κ. Output in 10⁻⁴ s⁻² (tropospheric N² ≈ 1,
  * stratospheric ≈ 4 in these units).
+ *
+ * ∂θ/∂p = (θ/p) ∂ln θ/∂ln p in each column (air_mask.js columnStability, as
+ * the EP flux's stratification): the three-point derivative in ln p at the
+ * level, two-point at the top and above the ground. Against ERA5 on all 37
+ * levels (1991–2020) the centred differences in p it replaces were 3½× too
+ * small at 10 hPa (one-sided across 10–50 hPa: January rms error 3.5 ×
+ * 10⁻⁴ s⁻², now 0.3), 1.6× too large at 50 hPa (2.6 → 0.4) and spanned
+ * 250–500 hPa at 300 hPa (0.7 → 0.2). Where the tree also holds 400 and
+ * 600 hPa (diag_source.js sourceLevels) the panel uses them: 300 hPa 0.1.
  *
  * Below ground (air_mask.js): ∂θ/∂p is the mean over the air of each
  * column's own ∂θ/∂p (one-sided where the level below is underground in
@@ -331,30 +343,32 @@ export function computeGeostrophicWind(month, { seasonal = false, source = null 
  */
 export function computeBruntVaisala(month, { seasonal = false, source = null } = {}) {
     const { nlat, nlon } = GRID;
-    const nlev = LEVELS.length;
+    const P = sourceLevels([source], N2_INGREDIENTS.pl);
+    const nlev = P.length;
     const SP = sourceMonth('sp', month, null, source, seasonal);   // hPa
     if (!SP) return null;
 
     const T = [];
     for (let k = 0; k < nlev; k++) {
-        const tile = sourceMonth('t', month, LEVELS[k], source, seasonal);
+        const tile = sourceMonth('t', month, P[k], source, seasonal);
         if (!tile) return null;
         T.push(tile);
     }
-    const thetaFactor = LEVELS.map((L) => Math.pow(1000 / L, KAPPA));
-    const ground = groundCells(SP);
+    const { TH, LNTH } = thetaTiles(T, P, KAPPA);
+    const ground = groundCells(SP, P);
 
-    // N² = -(g² p / (R T θ)) · ∂θ/∂p, ∂θ/∂p in K/Pa. LEVELS is ascending in p
+    // N² = -(g² p / (R T θ)) · ∂θ/∂p, ∂θ/∂p in K/Pa. P is ascending in p
     // (top of atmosphere at index 0, surface at last).
     const N2 = new Float32Array(nlev * nlat);
     let vmin = Infinity, vmax = -Infinity;
     for (let k = 0; k < nlev; k++) {
-        const p = LEVELS[k] * 100;     // hPa → Pa
-        const Tzm = airZonalMean(T[k], SP, LEVELS[k]);
-        const kUp = k > 0 ? k - 1 : k;
+        const p = P[k] * 100;     // hPa → Pa
+        const Tzm = airZonalMean(T[k], SP, P[k]);
+        const thetaFactor = Math.pow(1000 / P[k], KAPPA);
+        const S = columnStability(TH, LNTH, SP, P, k);   // NaN under the ground
         for (let i = 0; i < nlat; i++) {
             const Tm = Tzm[i];
-            const Th = Tm * thetaFactor[k];
+            const Th = Tm * thetaFactor;
             if (ground[k * nlat + i] || !Number.isFinite(Tm)) {
                 N2[k * nlat + i] = NaN;
                 continue;
@@ -362,12 +376,7 @@ export function computeBruntVaisala(month, { seasonal = false, source = null } =
             // [∂θ/∂p] over the columns with air at this level.
             let s = 0, n = 0;
             for (let j = 0; j < nlon; j++) {
-                const c = i * nlon + j;
-                const ps = SP[c];
-                if (LEVELS[k] > ps) continue;
-                const kDn = k + 1 < nlev && !(LEVELS[k + 1] > ps) ? k + 1 : k;
-                const d = (T[kDn][c] * thetaFactor[kDn] - T[kUp][c] * thetaFactor[kUp])
-                        / ((LEVELS[kDn] - LEVELS[kUp]) * 100);
+                const d = S[i * nlon + j];
                 if (Number.isFinite(d)) { s += d; n += 1; }
             }
             if (n === 0) { N2[k * nlat + i] = NaN; continue; }
@@ -390,7 +399,7 @@ export function computeBruntVaisala(month, { seasonal = false, source = null } =
         type: 'pl',
         values: N2,
         vmin, vmax,
-        levels: LEVELS.slice(),
+        levels: P.slice(),
         ground,
         name: 'Brunt–Väisälä N²',
         units: '10⁻⁴ s⁻²',

@@ -39,6 +39,13 @@
 // smoothed transports. (The vertical smoothing the budgets had is gone: it
 // moved the flux-form terms between layers of different mass.)
 //
+// Levels: LEVELS, plus 400 and 600 hPa where the tree has them
+// (diag_source.js sourceLevels; the transport panel reads the same). Against
+// the same budget on all 37 ERA5 levels they help: January 2-D total, rms
+// error at 300 hPa 0.050 → 0.014 g kg⁻¹ day⁻¹ (Q), 0.14 → 0.08 K day⁻¹ (H);
+// Q column total 0.11 → 0.05 mm day⁻¹. Interface values interpolated in ln p
+// instead of halfway made no difference.
+//
 // The transport panel lets its MMC carry the net vapour flux instead
 // (Trenberth 1997). A net mass flux carries energy that depends on the zero
 // of the energy scale (Ē ≈ 3 × 10⁵ J/kg with T in kelvin), matched in the
@@ -57,8 +64,6 @@ const D2R     = Math.PI / 180;
 const SMOOTH_PASSES = 3;
 
 const { nlat: NLAT, nlon: NLON } = GRID;
-const NLEV = LEVELS.length;
-const HALF = LEVELS.slice(0, -1).map((p, k) => 0.5 * (p + LEVELS[k + 1]));   // layer edges, hPa
 const COS = new Float64Array(NLAT);
 for (let i = 0; i < NLAT; i++) COS[i] = (i === 0 || i === NLAT - 1) ? 0 : Math.cos((90 - i) * D2R);
 
@@ -86,8 +91,9 @@ function smoothRows(arr, nrows) {
 
 /**
  * Budget terms of tracer S (per-level tiles, per unit mass) carried by V
- * (m/s) and W (ω, Pa/s), below ground masked with the surface pressure tile
- * `sp` (hPa).
+ * (m/s) and W (ω, Pa/s) on `levels` (hPa; LEVELS, or with 400 and 600 hPa
+ * where the tree has them, diag_source.js sourceLevels), below ground masked
+ * with the surface pressure tile `sp` (hPa).
  *
  * Returns
  *   meanY, meanP, eddyY, eddyP   per unit mass (S units s⁻¹), [k * nlat + i];
@@ -102,9 +108,11 @@ function smoothRows(arr, nrows) {
  *                                S units × kg s⁻¹, smoothed as differenced
  *   massRemoved                  net northward mass flux of the uncorrected
  *                                mean meridional wind, kg s⁻¹
- *   ground                       groundCells(sp)
+ *   ground                       groundCells(sp, levels)
  */
-export function tracerBudget(V, W, S, sp) {
+export function tracerBudget(V, W, S, sp, levels = LEVELS) {
+    const NLEV = levels.length;
+    const HALF = levels.slice(0, -1).map((p, k) => 0.5 * (p + levels[k + 1]));   // layer edges, hPa
     const NK = NLEV * NLAT;
     // Mass-weighted sums over each layer's air (weights in hPa).
     const sW = new Float64Array(NK), sV = new Float64Array(NK), sS = new Float64Array(NK);
@@ -114,9 +122,9 @@ export function tracerBudget(V, W, S, sp) {
         const row = i * NLON;
         for (let j = 0; j < NLON; j++) {
             const ps = sp[row + j];
-            if (!(ps > LEVELS[0])) continue;
+            if (!(ps > levels[0])) continue;
             let kb = 0;
-            while (kb + 1 < NLEV && LEVELS[kb + 1] <= ps) kb++;
+            while (kb + 1 < NLEV && levels[kb + 1] <= ps) kb++;
             for (let k = 0; k <= kb; k++) {
                 const x = k * NLAT + i;
                 nAir[x] += 1;
@@ -179,7 +187,7 @@ export function tracerBudget(V, W, S, sp) {
     };
     const colMass = new Float32Array(NLAT);
     const transport = { mmc: new Float64Array(NLAT), se: new Float64Array(NLAT) };
-    const ground = groundCells(sp);
+    const ground = groundCells(sp, levels);
     const dM = new Float64Array(NLEV), dF = new Float64Array(NLEV), dE = new Float64Array(NLEV);
     const toKgS = 2 * Math.PI * A_EARTH * 100 / G;
     for (let i = 0; i < NLAT; i++) {

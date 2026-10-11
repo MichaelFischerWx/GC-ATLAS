@@ -36,8 +36,8 @@
 // "mean vertical" −590 W m⁻² at 30°N and −2400 near 70°S; the mass
 // imbalance then left −640 to +1340 W m⁻² in the Jul total poleward of 80°S.)
 
-import { sourceMonth } from './diag_source.js';
-import { LEVELS, GRID } from './data.js';
+import { sourceMonth, sourceLevels } from './diag_source.js';
+import { GRID } from './data.js';
 import { tracerBudget, profileAbsMax } from './tracer_budget.js';
 
 const G       = 9.80665;
@@ -78,15 +78,17 @@ function composeMSETile(t, z, q) {
 
 function computeHBudgetTerms(month, seasonal = false, srcSlice = null) {
     const { nlat } = GRID;
-    const N = LEVELS.length;
+    // LEVELS, plus 400 and 600 hPa where the tree has them (diag_source.js).
+    const P = sourceLevels([srcSlice], ['v', 'w', 't', 'z', 'q']);
+    const N = P.length;
 
     const V = [], W = [], H = [];
     for (let k = 0; k < N; k++) {
-        const v = sourceMonth('v', month, LEVELS[k], srcSlice, seasonal);
-        const w = sourceMonth('w', month, LEVELS[k], srcSlice, seasonal);
-        const t = sourceMonth('t', month, LEVELS[k], srcSlice, seasonal);
-        const z = sourceMonth('z', month, LEVELS[k], srcSlice, seasonal);
-        const q = sourceMonth('q', month, LEVELS[k], srcSlice, seasonal);
+        const v = sourceMonth('v', month, P[k], srcSlice, seasonal);
+        const w = sourceMonth('w', month, P[k], srcSlice, seasonal);
+        const t = sourceMonth('t', month, P[k], srcSlice, seasonal);
+        const z = sourceMonth('z', month, P[k], srcSlice, seasonal);
+        const q = sourceMonth('q', month, P[k], srcSlice, seasonal);
         if (!v || !w || !t || !z || !q) return null;
         V.push(v); W.push(w);
         H.push(composeMSETile(t, z, q));
@@ -96,7 +98,7 @@ function computeHBudgetTerms(month, seasonal = false, srcSlice = null) {
 
     // Per unit mass (J/kg/s) and, in `col`, ∫dp/g over the air (W/m²);
     // implied heating = −total.
-    return { ...tracerBudget(V, W, H, SP), N, nlat,
+    return { ...tracerBudget(V, W, H, SP, P), N, nlat, levels: P,
              _month: month, _seasonal: seasonal, _source: srcSlice };
 }
 
@@ -229,7 +231,7 @@ export function buildHBudgetView(month, opts = {}) {
     return {
         kind: 'zonal', type: 'pl',
         values: out, vmin: -absMax, vmax: absMax,
-        levels: LEVELS.slice(),
+        levels: t.levels.slice(),
         ground: t.ground,
         name: nameLabel,
         units: unitsLabel,

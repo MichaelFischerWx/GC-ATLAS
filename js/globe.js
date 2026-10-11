@@ -21,7 +21,7 @@ import { greatCircleArc, linearLatLonArc, latLonToVec3, gcDistanceKm, greatCircl
 import { loadManifest, onFieldLoaded, onTileProgress, isReady as era5Ready, prefetchField, cachedMonth, registerClamps, setActivePeriod, getActivePeriod, getManifest, perYearHasMonth, latestPerYearMonth, activePeriodLabel, windowMonths, windowSlots, windowYearsLabel } from './era5.js';
 import { decompose, annualMeanFrom, aggregatedDecompositionRange } from './decompose.js';
 import { HoverProbe } from './hover.js';
-import { computeMassStreamfunction, computeAngularMomentum, computeBruntVaisala, computeGeostrophicWind } from './diagnostics.js';
+import { computeMassStreamfunction, computeAngularMomentum, computeBruntVaisala, computeGeostrophicWind, N2_INGREDIENTS } from './diagnostics.js';
 import { computeEPFlux, EP_FLUX_INGREDIENTS } from './ep_flux.js';
 import { computeLorenzCycle, LORENZ_INGREDIENTS } from './lorenz.js';
 import { buildMBudgetView } from './m_budget.js';
@@ -72,11 +72,11 @@ const XS_DIAG_INGREDIENTS = {
     psi:     { pl: ['v'],                          sl: ['sp'] },
     M:       { pl: ['u'],                          sl: ['sp'] },
     ug:      { pl: ['z'],                          sl: ['sp'] },
-    N2:      { pl: ['t'],                          sl: ['sp'] },
+    N2:      N2_INGREDIENTS,
     epflux:  EP_FLUX_INGREDIENTS,
-    mbudget: { pl: ['u', 'v', 'w'],                sl: ['sp', 'ews', 'oro'] },
-    qbudget: { pl: ['v', 'w', 'q'],                sl: ['sp', 'slhf', 'tp'] },
-    hbudget: { pl: ['v', 'w', 't', 'z', 'q'],      sl: ['sp', 'slhf', 'sshf', 'ssr', 'str', 'tsr', 'ttr'] },
+    mbudget: { pl: ['u', 'v', 'w'],                sl: ['sp', 'ews', 'oro'], extraLevels: true },
+    qbudget: { pl: ['v', 'w', 'q'],                sl: ['sp', 'slhf', 'tp'], extraLevels: true },
+    hbudget: { pl: ['v', 'w', 't', 'z', 'q'],      sl: ['sp', 'slhf', 'sshf', 'ssr', 'str', 'tsr', 'ttr'], extraLevels: true },
     transport: TRANSPORT_INGREDIENTS,
 };
 // Method popovers in the cross-section panel, opened by its ⓘ button (for
@@ -3025,19 +3025,23 @@ class GlobeApp {
             if (zm.isDiagnostic) {
                 // Accurate footer per diagnostic.
                 const ref = activePeriodLabel();
+                // Diagnostics that read 400 and 600 hPa where the tree has them.
+                const extra = zm.type === 'pl' && zm.levels.length > LEVELS.length ? ' · with 400 and 600 hPa' : '';
                 const desc = {
                     psi: anomaly
                         ? `ψ′ = ψ(selection) − ψ(${ref}) · ψ = (2π a cos φ / g) · ∫₀ᵖ [v] dp`
                         : 'ψ(φ, p) = (2π a cos φ / g) · ∫₀ᵖ [v] dp',
                     M:   'M = (Ω a cos φ + [u]) · a cos φ · [u] over the air · hatched: below ground',
                     ug:  '[u_g] = -(g/f) · [∂z/∂y] over the air · masked |φ| < 5° (f → 0) · hatched: below ground',
-                    N2:  'N² = -(g²p / R T θ) · [∂θ/∂p] over the air · static stability · hatched: below ground',
+                    N2:  `N² = -(g²p / R T θ) · [∂θ/∂p] over the air · ∂θ/∂p in ln p${extra} · static stability · hatched: below ground`,
                     epflux: (anomaly
                         ? `ΔF = F(selection) − F(${ref}) — stationary eddies; shading: ∇·ΔF (m s⁻¹ day⁻¹)`
                         : 'F = (-a cos φ [u′v′], a cos φ f [v′θ′] / ∂[θ]/∂p) — stationary eddies; shading: ∇·F (m s⁻¹ day⁻¹)')
-                        + ` · ∂/∂p in ln p${zm.levels.length > LEVELS.length ? ', with 400 and 600 hPa' : ''}`
+                        + ` · ∂/∂p in ln p${extra ? ', with 400 and 600 hPa' : ''}`
                         + ' · hatched: grid top (10 hPa), below ground',
-                    mbudget: '∂[M]/∂t = -∇·([v][M]) - ∇·([v*M*]) + torque · stationary eddies only · 1° monthly means',
+                    mbudget: `∂[M]/∂t = -∇·([v][M]) - ∇·([v*M*]) + torque · stationary eddies only · 1° monthly means${extra}`,
+                    qbudget: `Zonal-mean diagnostic${extra}`,
+                    hbudget: `Zonal-mean diagnostic${extra}`,
                     transport: this.state.trQty === 'moisture'
                         ? 'atmosphere = ∮∫ q v dp/g (ERA5 hourly) · E − P implied = ∫∫ (E − P − ∂W/∂t) dA · ×L_v'
                         : 'total = ∫∫ (R_TOA − ⟨R_TOA⟩) dA · atmosphere = ∮∫ E v dp/g (ERA5 hourly) · ocean = total − atmosphere',
