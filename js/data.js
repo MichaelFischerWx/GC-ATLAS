@@ -168,10 +168,10 @@ const VI_ENERGY_NOTE = 'Monthly mean of hourly column fluxes, transients include
     + 'read energy transport from the zonal integral (cross-section panel → Meridional '
     + 'transport) or from the divergence field, not from this map.';
 export const FIELDS = {
-    t:    { type: 'pl', group: 'Dynamics',           name: 'Temperature',              units: 'K',       cmap: 'turbo',   defaultLevel: 500, contour: 10, clamp: { lo: 0.005, hi: 0.995 } },
+    t:    { type: 'pl', group: 'Dynamics',           name: 'Temperature',              units: 'K',       cmap: 'plasma',   defaultLevel: 500, contour: 10, clamp: { lo: 0.005, hi: 0.995 } },
     u:    { type: 'pl', group: 'Dynamics',           name: 'Zonal wind (u)',           units: 'm s⁻¹',   cmap: 'RdBu_r',  defaultLevel: 200, contour: 10, symmetric: true },
     v:    { type: 'pl', group: 'Dynamics',           name: 'Meridional wind (v)',      units: 'm s⁻¹',   cmap: 'RdBu_r',  defaultLevel: 200, contour: 5, symmetric: true },
-    wspd: { type: 'pl', group: 'Dynamics',           name: 'Wind speed (|V|)',         units: 'm s⁻¹',   cmap: 'turbo',   defaultLevel: 200, derived: true, contour: 10 },
+    wspd: { type: 'pl', group: 'Dynamics',           name: 'Wind speed (|V|)',         units: 'm s⁻¹',   cmap: 'viridis',   defaultLevel: 200, derived: true, contour: 10 },
     vo:   { type: 'pl', group: 'Dynamics',           name: 'Relative vorticity (ζ)',   units: '10⁻⁵ s⁻¹', cmap: 'RdBu_r', defaultLevel: 500, contour: 2,  clamp: { lo: 0.03, hi: 0.97 }, symmetric: true },
     d:    { type: 'pl', group: 'Dynamics',           name: 'Horizontal divergence',    units: '10⁻⁵ s⁻¹', cmap: 'RdBu_r', defaultLevel: 200, contour: 1,  clamp: { lo: 0.03, hi: 0.97 }, symmetric: true },
     w:    { type: 'pl', group: 'Dynamics',           name: 'Vertical velocity (ω)',    units: 'Pa s⁻¹',  cmap: 'RdBu_r',  defaultLevel: 500, contour: 0.05, clamp: { lo: 0.05, hi: 0.95 }, symmetric: true },
@@ -184,9 +184,9 @@ export const FIELDS = {
     // tropospheric ribbon and the 2-PVU tropopause readable (globe + sections).
     pv:   { type: 'pl', group: 'Derived & PV',       name: 'Ertel PV',                 units: 'PVU',     cmap: 'RdBu_r',  defaultLevel: 330, contour: 1, derived: true, thetaOnly: true, symmetric: true, displayCap: 10 },
     mse:  { type: 'pl', group: 'Derived & PV',       name: 'Moist static energy (h/c_p)', units: 'K',    cmap: 'magma',   defaultLevel: 850, contour: 5, derived: true, clamp: { lo: 0.005, hi: 0.995 } },
-    t2m:  { type: 'sl', group: 'Surface',            name: '2-m temperature',          units: 'K',       cmap: 'turbo',   contour: 5 },
-    d2m:  { type: 'sl', group: 'Surface',            name: '2-m dewpoint',             units: 'K',       cmap: 'turbo',   contour: 5 },
-    sst:  { type: 'sl', group: 'Surface',            name: 'Sea surface temperature',  units: 'K',       cmap: 'turbo',   contour: 2 },
+    t2m:  { type: 'sl', group: 'Surface',            name: '2-m temperature',          units: 'K',       cmap: 'plasma',   contour: 5 },
+    d2m:  { type: 'sl', group: 'Surface',            name: '2-m dewpoint',             units: 'K',       cmap: 'plasma',   contour: 5 },
+    sst:  { type: 'sl', group: 'Surface',            name: 'Sea surface temperature',  units: 'K',       cmap: 'plasma',   contour: 2 },
     msl:  { type: 'sl', group: 'Surface',            name: 'Mean sea-level pressure',  units: 'hPa',     cmap: 'plasma',  contour: 4 },
     // Deep-layer shear: |⟨V_200⟩ − ⟨V_850⟩|, magnitude of the difference of
     // the monthly-mean wind vectors at 200 hPa minus 850 hPa. Useful for TC

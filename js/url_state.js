@@ -160,6 +160,8 @@ const SPEC = [
         s => ['field','psi','M','ug','N2','epflux','mbudget','qbudget','hbudget','transport'].includes(s) ? s : undefined],
     // ψ / EP-flux panel as (year or composite) − active climatology.
     ['xsAnom',             'xa',  v => v ? '1' : null, s => s === '1'],
+    // ψ / budget sections: show the stratosphere (else 1000–100 hPa).
+    ['xsStrat',            'xst', v => v ? '1' : null, s => s === '1'],
     // Meridional transport panel: energy | moisture, displayed month | annual mean.
     ['trQty',              'tq',  v => v === 'moisture' ? 'm' : null, s => s === 'm' ? 'moisture' : 'energy'],
     ['trAvg',              'ta',  v => v === 'annual' ? 'a' : null,   s => s === 'a' ? 'annual' : 'month'],
@@ -169,6 +171,8 @@ const SPEC = [
 export function encodeStateToHash(state) {
     const params = new URLSearchParams();
     for (const [stateKey, urlKey, serialize] of SPEC) {
+        // The field's own colormap is implied, so only a user's pick is written.
+        if (stateKey === 'cmap' && state.cmap === FIELDS[state.field]?.cmap) continue;
         const s = serialize(state[stateKey]);
         if (s != null) params.set(urlKey, s);
     }
@@ -187,6 +191,11 @@ export function decodeHashToPatch(hash) {
         const raw = params.get(urlKey);
         const v = deserialize(raw);
         if (v !== undefined) patch[stateKey] = v;
+    }
+    // A link that names a field but no colormap gets the field's default,
+    // not whatever map the page happened to start with.
+    if (patch.field && patch.cmap === undefined && FIELDS[patch.field]?.cmap) {
+        patch.cmap = FIELDS[patch.field].cmap;
     }
     return patch;
 }

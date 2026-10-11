@@ -357,6 +357,7 @@ export function computeEPFlux(month, { seasonal = false, source = null, anomaly 
             dx:    Float32Array.from(arrowDx),
             dy:    Float32Array.from(arrowDy),
             maxLen,
+            vGain,      // dy = F_p · vGain, for the reference arrow's F_p
         },
     };
 }

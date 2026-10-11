@@ -16,7 +16,7 @@ import { ContourField } from './contours.js';
 import { ContourLabels } from './contour_labels.js';
 import { SunLight } from './sun.js';
 import { OrbitScene, ORBIT_RADIUS } from './orbit.js';
-import { computeZonalMean, computeArcCrossSection, renderCrossSection, samplePanel, sampleSeries, niceTicks } from './cross_section.js';
+import { computeZonalMean, computeArcCrossSection, renderCrossSection, samplePanel, sampleSeries, niceTicks, cropSectionTop } from './cross_section.js';
 import { greatCircleArc, linearLatLonArc, latLonToVec3, gcDistanceKm, greatCircleMidpoint, linearLatLonMidpoint, threePointArc } from './arc.js';
 import { loadManifest, onFieldLoaded, onTileProgress, isReady as era5Ready, prefetchField, cachedMonth, registerClamps, setActivePeriod, getActivePeriod, getManifest, perYearHasMonth, latestPerYearMonth, activePeriodLabel, windowMonths, windowSlots, windowYearsLabel } from './era5.js';
 import { decompose, annualMeanFrom, aggregatedDecompositionRange } from './decompose.js';
@@ -81,6 +81,8 @@ const XS_DIAG_INGREDIENTS = {
 };
 // Method popovers in the cross-section panel, opened by its ⓘ button (for
 // field sections, of pressure-level fields only).
+// Sections that open on the troposphere, with a stratosphere toggle.
+const STRAT_TOGGLE_DIAGS = new Set(['psi', 'mbudget', 'qbudget', 'hbudget']);
 const XS_INFO = { field: 'field-info', psi: 'psi-info', M: 'm-info', ug: 'ug-info', N2: 'n2-info',
                   epflux: 'ep-info', mbudget: 'mb-info', qbudget: 'qh-info', hbudget: 'qh-info' };
 function xsDiagUses(diag, name) {
@@ -182,6 +184,7 @@ class GlobeApp {
             lorenzRef: 'lorenz',     // 'lorenz' (sorted) | 'simple' (area-mean)
             xsArc: null,             // { start:{lat,lon}, end:{lat,lon} } or null for zonal-mean
             xsDiag: 'field',         // 'field' | 'psi' | 'M' | 'N2' | 'epflux' | 'mbudget'
+            xsStrat: false,          // ψ / M, Q, H budgets: show the stratosphere (else 1000–100 hPa)
             // ψ / EP-flux panel shows (selection − active climatology) while
             // the globe shows a single year or a composite.
             xsAnom: false,
@@ -2988,6 +2991,11 @@ class GlobeApp {
         if (zm.contourInterval == null) {
             zm.contourInterval = FIELDS[field]?.contour || 0;
         }
+        // ψ and the M/Q/H budgets open on 1000–100 hPa, the stratosphere a
+        // toggle away; EP flux starts at 50 hPa, below the 10 hPa row whose
+        // ∇·F it leaves out.
+        const pTop = this._xsPlotTop(xsDiag, zm);
+        if (pTop) zm = cropSectionTop(zm, pTop);
         // User colorbar overrides, applied post-compute so renderCrossSection
         // and the colorbar DOM both reflect the same clamped range.
         if (this.state.xsUserVmin != null) zm.vmin = this.state.xsUserVmin;
@@ -3038,7 +3046,13 @@ class GlobeApp {
                         ? `ΔF = F(selection) − F(${ref}) — stationary eddies; shading: ∇·ΔF (m s⁻¹ day⁻¹)`
                         : 'F = (-a cos φ [u′v′], a cos φ f [v′θ′] / ∂[θ]/∂p) — stationary eddies; shading: ∇·F (m s⁻¹ day⁻¹)')
                         + ` · ∂/∂p in ln p${extra ? ', with 400 and 600 hPa' : ''}`
-                        + ' · hatched: grid top (10 hPa), below ground',
+                        + ' · from 50 hPa (∇·F at 10 hPa left out) · arrow length ∝ √|F|'
+                        + (zm._arrowKey
+                            ? ` · reference arrow: F_φ = ${fmtSci(zm._arrowKey.fphi)} m³ s⁻²`
+                              + (Number.isFinite(zm._arrowKey.fp)
+                                  ? ` (the same length vertically: F_p = ${fmtSci(zm._arrowKey.fp)} m² Pa s⁻²)` : '')
+                            : '')
+                        + ' · hatched: below ground',
                     mbudget: `∂[M]/∂t = -∇·([v][M]) - ∇·([v*M*]) + torque · stationary eddies only · 1° monthly means${extra}`,
                     qbudget: `Zonal-mean diagnostic${extra}`,
                     hbudget: `Zonal-mean diagnostic${extra}`,
@@ -3062,6 +3076,13 @@ class GlobeApp {
             }
         }
         if (reset) reset.hidden = zm.kind !== 'arc';
+        const strat = document.getElementById('xs-strat');
+        if (strat) {
+            const can = STRAT_TOGGLE_DIAGS.has(this.state.xsDiag) && zm.kind === 'zonal' && zm.type === 'pl';
+            strat.hidden = !can;
+            strat.textContent = this.state.xsStrat ? 'Troposphere only' : 'Show stratosphere';
+            strat.setAttribute('aria-pressed', String(!!this.state.xsStrat));
+        }
         // "Unpin midpoint" only makes sense when the user has actually
         // pinned one — hide otherwise so the footer stays lean.
         const resetMid = document.getElementById('xs-reset-mid');
@@ -3069,6 +3090,14 @@ class GlobeApp {
             resetMid.hidden = !(zm.kind === 'arc' && this.state.xsArc?.mid);
         }
         this.updateArcLine();
+    }
+
+    /** Top of the plotted section (hPa), or 0 for the full grid. */
+    _xsPlotTop(xsDiag, zm) {
+        if (zm.kind !== 'zonal' || zm.type !== 'pl') return 0;
+        if (xsDiag === 'epflux') return 50;
+        if (STRAT_TOGGLE_DIAGS.has(xsDiag) && !this.state.xsStrat) return 100;
+        return 0;
     }
 
     updateXSectionColorbar(zm, cmap) {
@@ -4946,6 +4975,9 @@ class GlobeApp {
         document.getElementById('xs-reset')?.addEventListener('click', () => {
             this.setState({ xsArc: null });
         });
+        document.getElementById('xs-strat')?.addEventListener('click', () => {
+            this.setState({ xsStrat: !this.state.xsStrat });
+        });
         document.getElementById('xs-reset-mid')?.addEventListener('click', () => {
             const a = this.state.xsArc;
             if (!a) return;
@@ -6388,6 +6420,15 @@ function fmtValue(v) {
     if (Math.abs(v) >= 1000) return v.toFixed(0);
     if (Math.abs(v) >= 10)   return v.toFixed(1);
     return v.toFixed(2);
+}
+
+/** 2e8 → "2×10⁸" (one significant figure is all the reference arrow needs). */
+function fmtSci(x) {
+    if (!(x > 0)) return String(x);
+    const e = Math.floor(Math.log10(x));
+    const m = Math.round(x / Math.pow(10, e));
+    const sup = String(e).replace(/[-0-9]/g, (c) => '⁻⁰¹²³⁴⁵⁶⁷⁸⁹'['-0123456789'.indexOf(c)]);
+    return `${m}×10${sup}`;
 }
 
 /** Round-number ticks under a colorbar strip. The strip's exact ends live in

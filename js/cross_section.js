@@ -24,6 +24,8 @@ import { airZonalMean, groundCells } from './air_mask.js';
 const LAT_TICKS = [-90, -60, -30, 0, 30, 60, 90];
 const latLabel = (lat) => lat === 0 ? 'EQ' : `${Math.abs(lat)}°${lat < 0 ? 'S' : 'N'}`;
 const P_TICKS   = [1000, 500, 200, 100, 50, 10];
+// A troposphere-only section (top at or below 100 hPa) spans one decade; label it more finely.
+const pTicksFor = (pMin) => (pMin >= 100 ? [1000, 700, 500, 300, 200, 100] : P_TICKS);
 
 const KAPPA = 0.2854;   // R / c_p, as in data.js's θ cube
 
@@ -149,6 +151,29 @@ function sliceOf(f) {
 
 /** Sample the cross-section heatmap data at fractional panel coordinates. Used
  *  by the hover tooltip — keeps the inverse mapping in one place. */
+/** The part of a zonal pressure section above `pTop` left out: ψ and the
+ *  budgets open on the troposphere, EP flux starts below the 10 hPa row it
+ *  can't compute. A shallow copy with the levels, values, masks and arrows
+ *  trimmed, so drawing and hover read the same grid. */
+export function cropSectionTop(zm, pTop) {
+    if (!zm || zm.kind !== 'zonal' || zm.type !== 'pl' || !zm.levels) return zm;
+    const k0 = zm.levels.findIndex((p) => p >= pTop);
+    if (k0 <= 0) return zm;
+    const { nlat } = GRID;
+    const cut = (a) => (a ? a.slice(k0 * nlat) : a);
+    const out = { ...zm, levels: zm.levels.slice(k0), values: cut(zm.values),
+                  ground: cut(zm.ground), edge: cut(zm.edge) };
+    if (zm.arrows) {
+        const keep = [];
+        zm.arrows.pressures.forEach((p, i) => { if (p >= pTop) keep.push(i); });
+        const pick = (a) => Float32Array.from(keep, (i) => a[i]);
+        out.arrows = { ...zm.arrows, lats: pick(zm.arrows.lats),
+                       pressures: pick(zm.arrows.pressures),
+                       dx: pick(zm.arrows.dx), dy: pick(zm.arrows.dy) };
+    }
+    return out;
+}
+
 export function samplePanel(zm, fracX, fracY) {
     if (!zm) return null;
     if (zm.kind === 'zonal') {
@@ -665,7 +690,7 @@ function drawPanelGrid(ctx, x0, y0, w, h, zm) {
         const pMax = zm.levels[zm.levels.length - 1];
         const pMin = zm.levels[0];
         const logSpan = Math.log(pMax / pMin);
-        for (const p of P_TICKS) {
+        for (const p of pTicksFor(pMin)) {
             if (p < pMin || p > pMax) continue;
             const y = y0 + h * (Math.log(p / pMin) / logSpan);
             ctx.moveTo(x0, y + 0.5);
@@ -741,7 +766,7 @@ function drawArcAxes(ctx, x0, y0, w, h, zm) {
         const pMax = zm.levels[zm.levels.length - 1];
         const pMin = zm.levels[0];
         const logSpan = Math.log(pMax / pMin);
-        for (const p of P_TICKS) {
+        for (const p of pTicksFor(pMin)) {
             if (p < pMin || p > pMax) continue;
             const y = y0 + h * (Math.log(p / pMin) / logSpan);
             ctx.beginPath();
@@ -996,17 +1021,17 @@ export function niceTicks(vmin, vmax, n = 5) {
 
 /**
  * Edmon–Hoskins–McIntyre arrows on the (lat, log-p) panel. zm.arrows holds
- * pre-balanced (dx, dy) so visual length is proportional in (φ, log p) space.
- * We rescale so the longest arrow occupies ~LONG_FRAC of the panel width —
- * the longest of the panel's interior when ep_flux.js gives it (maxLen), in
- * which case longer arrows (near the ground, at the top) saturate there.
+ * pre-balanced (dx, dy), so direction is true in (φ, log p) space. Length
+ * goes as √|F|: the longest of the panel's interior (maxLen from ep_flux.js)
+ * fills ~LONG_FRAC of the panel width, longer arrows (near the ground)
+ * saturate there, and a boxed reference arrow gives the scale.
  */
 function drawEPArrows(ctx, x0, y0, w, h, zm) {
     const dpr = zm._dpr || 1;
     const { arrows, levels } = zm;
     const pMin = levels[0], pMax = levels[levels.length - 1];
     const logSpan = Math.log(pMax / pMin);
-    const LONG_FRAC = 0.14;     // longest arrow ≈ 14% of plot width
+    const LONG_FRAC = 0.08;     // longest arrow ≈ 8% of plot width, about the arrow spacing
 
     let maxLen = arrows.maxLen || 0;
     if (!(maxLen > 0)) {
@@ -1017,7 +1042,10 @@ function drawEPArrows(ctx, x0, y0, w, h, zm) {
     }
     if (maxLen === 0) return;
     const targetPx = LONG_FRAC * w;
-    const scale = targetPx / maxLen;
+    // Length ∝ √|F|: the interior's longest arrow keeps the standard length,
+    // weak ones stay readable instead of shrinking to dust, and the strong
+    // near-surface ones saturate at it instead of spiking.
+    const lengthPx = (m) => targetPx * Math.sqrt(Math.min(m / maxLen, 1));
 
     ctx.save();
     // Dark ink with thin white halo for legibility on both pale (∇·F ≈ 0) and
@@ -1047,11 +1075,11 @@ function drawEPArrows(ctx, x0, y0, w, h, zm) {
     for (let i = 0; i < arrows.lats.length; i++) {
         const lat = arrows.lats[i];
         const p   = arrows.pressures[i];
-        let dx  = arrows.dx[i] * scale;
-        let dy  = arrows.dy[i] * scale;
-        const len = Math.hypot(dx, dy);
-        if (len < dustThresh) continue;
-        if (len > targetPx) { dx *= targetPx / len; dy *= targetPx / len; }
+        const m = Math.hypot(arrows.dx[i], arrows.dy[i]);
+        const len = lengthPx(m);
+        if (!(len >= dustThresh)) continue;
+        const dx = arrows.dx[i] / m * len;
+        const dy = arrows.dy[i] / m * len;
         const x  = x0 + ((lat + 90) / 180) * w;
         const y  = y0 + h * (Math.log(p / pMin) / logSpan);
         const x2 = x + dx;
@@ -1065,7 +1093,36 @@ function drawEPArrows(ctx, x0, y0, w, h, zm) {
         ctx.fillStyle   = 'rgba(10, 18, 14, 0.95)';
         drawArrow(x, y, x2, y2, lineW, headSize);
     }
+
+    // Reference arrow, boxed in the bottom-left corner (Antarctic ground):
+    // a round F_φ near a quarter of the longest, i.e. about half its length.
+    // Its value goes in the caption through zm._arrowKey.
+    const fRef = roundDown(maxLen / 4);
+    const refLen = lengthPx(fRef);
+    if (refLen >= dustThresh) {
+        ctx.font = `${10 * dpr}px 'DM Sans', system-ui, sans-serif`;
+        ctx.textBaseline = 'middle';
+        ctx.textAlign = 'left';
+        const label = 'reference';
+        const boxW = refLen + ctx.measureText(label).width + 22 * dpr;
+        const boxH = 18 * dpr;
+        const bx = x0 + 5 * dpr, by = y0 + h - boxH - 5 * dpr;
+        ctx.fillStyle = 'rgba(6, 22, 18, 0.82)';
+        ctx.fillRect(bx, by, boxW, boxH);
+        const ay = by + boxH / 2;
+        ctx.strokeStyle = ctx.fillStyle = 'rgba(230, 239, 233, 0.95)';
+        drawArrow(bx + 7 * dpr, ay, bx + 7 * dpr + refLen, ay, lineW, headSize);
+        ctx.fillText(label, bx + refLen + 14 * dpr, ay);
+        zm._arrowKey = { fphi: fRef, fp: arrows.vGain > 0 ? fRef / arrows.vGain : NaN };
+    }
     ctx.restore();
+}
+
+/** The largest 1, 2 or 5 × 10ⁿ not above x. */
+function roundDown(x) {
+    const mag = Math.pow(10, Math.floor(Math.log10(x)));
+    const n = x / mag;
+    return (n >= 5 ? 5 : n >= 2 ? 2 : 1) * mag;
 }
 
 function drawAxes(ctx, x0, y0, w, h, zm) {
@@ -1095,7 +1152,7 @@ function drawAxes(ctx, x0, y0, w, h, zm) {
         const pMax = zm.levels[zm.levels.length - 1];
         const pMin = zm.levels[0];
         const logSpan = Math.log(pMax / pMin);
-        for (const p of P_TICKS) {
+        for (const p of pTicksFor(pMin)) {
             if (p < pMin || p > pMax) continue;
             const y = y0 + h * (Math.log(p / pMin) / logSpan);
             ctx.beginPath();

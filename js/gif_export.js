@@ -413,14 +413,22 @@ export class GifExporter {
         const cbMaxEl = document.getElementById('xs-cb-max');
         const cbUnEl  = document.getElementById('xs-cb-units');
 
-        // Lay out: title bar · xs canvas · colorbar · caption footer.
+        // Lay out: title bar · xs canvas · colorbar (+ ticks) · caption footer.
+        // Line plots hide the strip on screen, so the export leaves it out too.
+        const stripOn = !!cbCanvas && !cbCanvas.hidden;
+        const tickRow = document.getElementById('xs-cb-tickrow');
+        const ticks = stripOn && tickRow
+            ? [...tickRow.children].map((el) => ({ text: el.textContent, f: parseFloat(el.style.left) / 100 }))
+            : [];
         const padX = 18, padY = 16;
         const titleH = 34;
-        const cbH = cbCanvas ? 18 : 0;
-        const cbLabelH = cbCanvas ? 18 : 0;
+        const cbH = stripOn ? 18 : 0;
+        const tickH = ticks.length ? 16 : 0;
+        const cbLabelH = stripOn ? 18 : 0;
         const footerH = 22;
+        const watermarkH = 40;   // its own band, so it never sits on the caption
         const w = xsCanvas.width + padX * 2;
-        const h = titleH + xsCanvas.height + cbH + cbLabelH + footerH + padY * 2 + 10;
+        const h = titleH + xsCanvas.height + cbH + tickH + cbLabelH + footerH + watermarkH + padY * 2 + 10;
 
         const cap = document.createElement('canvas');
         cap.width = w;
@@ -439,15 +447,31 @@ export class GifExporter {
         // Field panel
         ctx.drawImage(xsCanvas, padX, y);
         y += xsCanvas.height + 8;
-        // Colorbar + min/units/max labels
-        if (cbCanvas) {
+        // Colorbar + round-number ticks + min/units/max labels
+        if (stripOn) {
             ctx.drawImage(cbCanvas, padX, y, xsCanvas.width, cbH);
             y += cbH + 2;
             ctx.font = '12px JetBrains Mono, monospace';
             ctx.fillStyle = '#8bb0a1';
-            const min = cbMinEl?.textContent?.trim() || '';
+            if (ticks.length) {
+                ctx.strokeStyle = '#8bb0a1';
+                ctx.lineWidth = 1;
+                ctx.textAlign = 'center';
+                for (const t of ticks) {
+                    const x = Math.round(padX + t.f * xsCanvas.width) + 0.5;
+                    ctx.beginPath();
+                    ctx.moveTo(x, y - 2);
+                    ctx.lineTo(x, y + 2);
+                    ctx.stroke();
+                    ctx.fillText(t.text, x, y + 3);
+                }
+                y += tickH;
+            }
+            // xs-cb-min / max are <input>s: their text is the value.
+            const valOf = (el) => (el ? (el.value ?? el.textContent ?? '') : '').trim();
+            const min = valOf(cbMinEl);
             const units = cbUnEl?.textContent?.trim() || '';
-            const max = cbMaxEl?.textContent?.trim() || '';
+            const max = valOf(cbMaxEl);
             ctx.textAlign = 'left';   ctx.fillText(min, padX, y);
             ctx.textAlign = 'center'; ctx.fillText(units, padX + xsCanvas.width / 2, y);
             ctx.textAlign = 'right';  ctx.fillText(max, padX + xsCanvas.width, y);
