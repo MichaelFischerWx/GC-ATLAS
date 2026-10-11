@@ -81,6 +81,8 @@ const XS_DIAG_INGREDIENTS = {
 };
 // Method popovers in the cross-section panel, opened by its ⓘ button (for
 // field sections, of pressure-level fields only).
+// State keys that change only the cross-section panel (see setState).
+const XS_ONLY_KEYS = new Set(['xsArc', 'xsStrat', 'xsUserVmin', 'xsUserVmax']);
 // Sections that open on the troposphere, with a stratosphere toggle.
 const STRAT_TOGGLE_DIAGS = new Set(['psi', 'mbudget', 'qbudget', 'hbudget']);
 const XS_INFO = { field: 'field-info', psi: 'psi-info', M: 'm-info', ug: 'ug-info', N2: 'n2-info',
@@ -766,20 +768,24 @@ class GlobeApp {
                 if (chk) chk.checked = true;
                 this.setState({ showXSection: true });
             }
-            // Re-drawing from scratch wipes any pinned midpoint.
-            this.setState({ xsArc: { start: p, end: p, mid: null } });
+            // The new arc (which wipes any pinned midpoint) lands on the first
+            // move: a zero-length arc can't be sampled, and setting one here
+            // flashed the zonal mean in the panel at the start of every drag.
         });
 
         el.addEventListener('pointermove', (e) => {
             if (!dragging) return;
             const p = pointToLatLon(e);
             if (!p) return;
-            this.setState({ xsArc: { start: startPt, end: p, mid: null } });
+            // A great circle needs two distinct points (identical ones give NaN).
+            if (Math.abs(p.lat - startPt.lat) < 0.05 && Math.abs(p.lon - startPt.lon) < 0.05) return;
+            this._setArcSoon({ start: startPt, end: p, mid: null });
         });
 
         const endDrag = (e) => {
             if (!dragging) return;
             dragging = false;
+            this._flushArc();
             this.controls.enabled = true;
             try { el.releasePointerCapture(e.pointerId); } catch { /* ignore */ }
         };
@@ -836,7 +842,7 @@ class GlobeApp {
             }
             const p = pointToLatLon(e);
             if (!p) return;
-            const a = this.state.xsArc;
+            const a = this._pendingArc || this.state.xsArc;
             if (!a) return;
             const patch = { ...a };
             if (handleDrag.which === 'start') {
@@ -849,11 +855,12 @@ class GlobeApp {
             } else { // 'mid'
                 patch.mid = p;   // pin it
             }
-            this.setState({ xsArc: patch });
+            this._setArcSoon(patch);
         });
         const endHandleDrag = (e) => {
             if (!handleDrag) return;
             handleDrag = null;
+            this._flushArc();
             this.controls.enabled = true;
             el.style.cursor = '';
             try { el.releasePointerCapture(e.pointerId); } catch { /* ignore */ }
@@ -2575,9 +2582,17 @@ class GlobeApp {
             this.barbs.rebuild(this.state.viewMode);
         }
 
-        this.updateField();
+        // A patch that only touches the cross-section (an arc being drawn or
+        // reshaped, its colour range, the stratosphere toggle) leaves the globe
+        // and the Lorenz panel as they are. Re-running updateField on every
+        // pointer move of an arc drag re-uploaded the field and flickered the
+        // globe and its particles.
+        const keys = Object.keys(patch);
+        const xsOnly = keys.length > 0 && keys.every((k) => XS_ONLY_KEYS.has(k));
+        if (!xsOnly) this.updateField();
         if (this.state.showXSection) this.updateXSection();
-        if (this.state.showLorenz)   this.updateLorenz();
+        else if ('showXSection' in patch) this.updateArcLine();   // hide the arc with the panel
+        if (this.state.showLorenz && !xsOnly) this.updateLorenz();
 
         // Persist the current view into the URL hash so back/forward + copy-
         // paste both work. Debounced so rapid month/year scrubs don't thrash
@@ -3141,6 +3156,20 @@ class GlobeApp {
         const autoBtn = document.getElementById('xs-cb-auto');
         if (autoBtn) autoBtn.classList.toggle('is-active',
             this.state.xsUserVmin != null || this.state.xsUserVmax != null);
+    }
+
+    /** Arc edits arrive with every pointer move, faster than the section
+     *  can redraw; keep the latest and apply at most one per frame. */
+    _setArcSoon(arc) {
+        this._pendingArc = arc;
+        if (!this._arcRaf) this._arcRaf = requestAnimationFrame(() => this._flushArc());
+    }
+
+    _flushArc() {
+        if (this._arcRaf) { cancelAnimationFrame(this._arcRaf); this._arcRaf = 0; }
+        const arc = this._pendingArc;
+        this._pendingArc = null;
+        if (arc) this.setState({ xsArc: arc });
     }
 
     updateArcLine() {

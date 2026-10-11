@@ -737,6 +737,12 @@ select optgroup option {
     border-radius: var(--r-lg);
     padding: 12px 14px 12px;
     z-index: 60;
+    /* The big panels sit over the globe while its particles animate every
+       frame: a backdrop blur there is re-computed each frame and can flicker,
+       or drop the panel, under load (an arc being dragged). Opaque instead. */
+    background: rgba(9, 20, 16, 0.97);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
 }
 .xsection { right: var(--gap); bottom: var(--gap); }
 .lorenz {
