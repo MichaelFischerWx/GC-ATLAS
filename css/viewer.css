@@ -95,17 +95,24 @@ select {
 select:hover  { border-color: var(--line-3); }
 select:focus  { outline: none; border-color: var(--accent-text); box-shadow: 0 0 0 3px var(--accent-ring); }
 select:disabled { cursor: not-allowed; color: var(--text-3); }
+/* Opaque option colours for every select, the panels' translucent ones
+   included: Windows draws the drop-down list with them, and a see-through
+   background there comes out as light text on white. */
+select option {
+    color: var(--text);
+    background-color: var(--surface-2);
+}
 select optgroup {
     font-family: var(--font-sans);
     font-size: var(--fs-xs);
     font-weight: 600;
     color: var(--text-3);
-    background: var(--surface);
+    background-color: var(--surface);
 }
 select optgroup option {
     font-weight: 400;
     color: var(--text);
-    background: var(--surface-2);
+    background-color: var(--surface-2);
 }
 .select-sm { height: 32px; font-size: var(--fs-sm); padding: 0 28px 0 10px; }
 
