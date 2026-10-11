@@ -69,17 +69,19 @@ const MAP_H = 2;
 // check.
 const XS_DIAG_INGREDIENTS = {
     psi:     { pl: ['v'],                          sl: ['sp'] },
-    M:       { pl: ['u'] },
-    ug:      { pl: ['z'] },
-    N2:      { pl: ['t'] },
+    M:       { pl: ['u'],                          sl: ['sp'] },
+    ug:      { pl: ['z'],                          sl: ['sp'] },
+    N2:      { pl: ['t'],                          sl: ['sp'] },
     epflux:  { pl: ['u', 'v', 'w', 't'],           sl: ['sp'] },
     mbudget: { pl: ['u', 'v', 'w'],                sl: ['sp', 'ews', 'oro'] },
     qbudget: { pl: ['v', 'w', 'q'],                sl: ['sp', 'slhf', 'tp'] },
     hbudget: { pl: ['v', 'w', 't', 'z', 'q'],      sl: ['sp', 'slhf', 'sshf', 'ssr', 'str', 'tsr', 'ttr'] },
     transport: TRANSPORT_INGREDIENTS,
 };
-// Method popovers in the cross-section panel, opened by its ⓘ button.
-const XS_INFO = { psi: 'psi-info', epflux: 'ep-info', mbudget: 'mb-info', qbudget: 'qh-info', hbudget: 'qh-info' };
+// Method popovers in the cross-section panel, opened by its ⓘ button (for
+// field sections, of pressure-level fields only).
+const XS_INFO = { field: 'field-info', psi: 'psi-info', M: 'm-info', ug: 'ug-info', N2: 'n2-info',
+                  epflux: 'ep-info', mbudget: 'mb-info', qbudget: 'qh-info', hbudget: 'qh-info' };
 function xsDiagUses(diag, name) {
     const ing = XS_DIAG_INGREDIENTS[diag];
     return !!ing && ((ing.pl || []).includes(name) || (ing.sl || []).includes(name));
@@ -583,7 +585,10 @@ class GlobeApp {
             // tile lands so it sharpens as the cache warms up — with the
             // seasonal mean on, the neighbouring months' tiles count too.
             const diagMonth = this._diagMonthMatches(month);
-            const xsNeeds = s.xsDiag === 'field' ? feedsCurrentField : xsDiagUses(s.xsDiag, name);
+            // Pressure-level field sections mask below ground with sp.
+            const xsNeeds = s.xsDiag === 'field'
+                ? feedsCurrentField || (name === 'sp' && FIELDS[s.field]?.type === 'pl')
+                : xsDiagUses(s.xsDiag, name);
             // The transport panel can average the whole year, and its storage
             // terms read the neighbouring months too.
             const xsMonth = s.xsDiag === 'transport' ? this._transportNeedsMonth(month) : diagMonth;
@@ -1872,8 +1877,10 @@ class GlobeApp {
                 + rows.map(r => `<br><span style="color:${r.color}">${r.label}</span> `
                     + `<span class="hv-value">${fmt(r.value, 2)}</span>`).join('');
         }
+        // Arc sections know the surface pressure under the cursor.
+        const surface = Number.isFinite(sample.ps) ? ` (surface ${Math.round(sample.ps)} hPa)` : '';
         const valHtml = sample.ground
-            ? '<span class="hv-unit">below ground</span>'
+            ? `<span class="hv-unit">below ground${surface}</span>`
             : `<span class="hv-value">${fmt(sample.value, 2)}</span>` +
               `<span class="hv-unit">${zm.units || ''}</span>`;
         return parts.join('<span class="hv-sep">·</span>') +
@@ -2820,7 +2827,16 @@ class GlobeApp {
         const anomRow = document.getElementById('xs-anom-row');
         if (anomRow) anomRow.hidden = !((xsDiag === 'psi' || xsDiag === 'epflux') && source);
         const infoBtn = document.getElementById('xs-info-btn');
-        if (infoBtn) infoBtn.hidden = !XS_INFO[xsDiag];
+        // A field section's popover is about its levels below ground, which
+        // single-level fields don't have.
+        const infoId = xsDiag === 'field' && FIELDS[field]?.type !== 'pl' ? null : XS_INFO[xsDiag];
+        if (infoBtn) {
+            infoBtn.hidden = !infoId;
+            if (!infoId) {
+                document.getElementById('field-info')?.setAttribute('hidden', '');
+                infoBtn.classList.remove('active');
+            }
+        }
         this._syncTransportControls();
         let zm;
         let effCmap = cmap;
@@ -2992,9 +3008,9 @@ class GlobeApp {
                     psi: anomaly
                         ? `ψ′ = ψ(selection) − ψ(${ref}) · ψ = (2π a cos φ / g) · ∫₀ᵖ [v] dp`
                         : 'ψ(φ, p) = (2π a cos φ / g) · ∫₀ᵖ [v] dp',
-                    M:   'M = (Ω a cos φ + u) · a cos φ · from zonal-mean u',
-                    ug:  '[u_g] = -(g/f) · ∂[z]/∂y · masked |φ| < 5° (f → 0)',
-                    N2:  'N² = -(g²p / R T θ) · ∂θ/∂p · static stability',
+                    M:   'M = (Ω a cos φ + [u]) · a cos φ · [u] over the air · hatched: below ground',
+                    ug:  '[u_g] = -(g/f) · [∂z/∂y] over the air · masked |φ| < 5° (f → 0) · hatched: below ground',
+                    N2:  'N² = -(g²p / R T θ) · [∂θ/∂p] over the air · static stability · hatched: below ground',
                     epflux: anomaly
                         ? `ΔF = F(selection) − F(${ref}) — stationary eddies; shading: ∇·ΔF (m s⁻¹ day⁻¹)`
                         : 'F = (-a cos φ [u′v′], a cos φ f [v′θ′] / ∂[θ]/∂p) — stationary eddies; shading: ∇·F (m s⁻¹ day⁻¹)',
@@ -3010,7 +3026,10 @@ class GlobeApp {
                     ? `Lines: isentropes ${THETA_LEVELS[0]}–${THETA_LEVELS[THETA_LEVELS.length - 1]} K, `
                       + `the globe's ${zm.isentropes.mark} K bold · `
                     : '';
-                hint.innerHTML = lines + (zm.kind === 'arc'
+                const ground = zm.type !== 'pl' ? ''
+                    : zm.kind === 'arc' ? 'hatched: below the surface · '
+                    : 'means over the air · hatched: below ground · ';
+                hint.innerHTML = lines + ground + (zm.kind === 'arc'
                     ? '<span class="xs-kbd">⇧</span> + drag to redraw'
                     : '<span class="xs-kbd">⇧</span> + drag globe to draw an arc');
             }
@@ -3389,12 +3408,13 @@ class GlobeApp {
     }
 
     /** _annualBudgetNotice for the field section: every level of the field
-     *  (plus T for the isentropes in θ coordinates). */
+     *  (plus T for the isentropes in θ coordinates) and the surface pressure
+     *  that masks them. */
     _fieldSectionBudgetNotice() {
         const { field, level, vCoord } = this.state;
         const ing = fieldIngredients(field, level).length;
         const perMonth = FIELDS[field]?.type === 'pl'
-            ? LEVELS.length * (ing + (vCoord === 'theta' ? 1 : 0))
+            ? LEVELS.length * (ing + (vCoord === 'theta' ? 1 : 0)) + 1
             : ing;
         return this._annualBudgetNotice(perMonth);
     }

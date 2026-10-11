@@ -2464,6 +2464,33 @@ F_p =  a cosφ f [v*θ*] / (∂θ/∂p)
                 <p style="color: var(--ochre);"><b>Read the mean terms together.</b> In flux form the mean meridional and mean vertical terms each carry [X] times the divergence of the mass flux, which the monthly pressure-level winds don't close; h ≈ 3 × 10⁵ J/kg turns a small mass residual into hundreds of W/m². Their sum is meaningful, each alone much less so. Poleward of 80°S the H column view is dominated by this residual (totals of −650 to +1340 W/m², single terms beyond ±2000) until a mass correction like the transport panel's (Trenberth 1997) is added.</p>
                 <p style="color: var(--paper-dim); font-size: 0.74rem;">References: Peixoto &amp; Oort (1992) ch. 12–13; Trenberth (1991, 1997, <i>J. Climate</i>); Boer (1982, <i>MWR</i>) for pressure levels below the surface.</p>
             </div>
+            <div class="lz-info" id="field-info" hidden>
+                <p><b>Below ground.</b> ERA5 fills pressure levels under the surface with extrapolated values (a third of the 1000 hPa surface in January: Antarctica, Greenland, the high plateaus, the circumpolar trough). Field sections leave them out, like ψ, the EP flux and the budgets (Boer 1982).</p>
+                <p><b>Zonal mean</b> = mean over the air: each level averages the columns whose surface lies below it, and a level with less than a quarter of its latitude circle above ground is hatched (1000 hPa poleward of ~55°S, the levels under the Antarctic plateau). Near the ground those columns differ from level to level, mostly ocean at 1000 hPa. January, 50°N, 1000 hPa: [T] 273.6 K over the air, 269.6 K with the extrapolations; [u] 3.0 against 1.7 m s⁻¹. July, 45–50°N: [T] 289.0–285.1 K against 293.7–290.8 K. The extrapolated ω (+0.12 Pa s⁻¹ in January, +0.22 in July at 1000 hPa, 85°S) no longer sets the colour range.</p>
+                <p><b>Arc sections</b> hatch everything below the surface pressure along the arc and outline the terrain. Between the lowest level above the ground and the surface the shading interpolates toward ERA5's extrapolated value at the next level down. The colour range comes from the levels above ground: July T along 90°E across Tibet now peaks at 301 K, not 310 K.</p>
+                <p>In θ coordinates the isentropes come from the same temperatures and end at the hatching.</p>
+                <p style="color: var(--paper-dim); font-size: 0.74rem;">Reference: Boer (1982, <i>MWR</i>) for pressure levels below the surface.</p>
+            </div>
+            <div class="lz-info" id="m-info" hidden>
+                <p><b>Absolute angular momentum</b> per unit mass of the zonal-mean flow:</p>
+                <pre>M = (Ω a cosφ + [u]) a cosφ</pre>
+                <p>A ring of air that left the equator at rest and kept its M would have u = Ω a sin²φ / cosφ, 134 m s⁻¹ at 30°: where the contours of M tilt away from the vertical, M is not conserved.</p>
+                <p><b>Below ground.</b> [u] averages the above-ground part of each latitude circle (Boer 1982); a level with less than a quarter of its circle above ground is hatched. Near the ground [u] moves by up to 2 m s⁻¹ equatorward of 60° (January, 40°N, 1000 hPa: 2.6 → 3.9), which changes M by at most 0.012 × 10⁹ m² s⁻¹, 0.5 %: Ω a cosφ is hundreds of m s⁻¹.</p>
+            </div>
+            <div class="lz-info" id="ug-info" hidden>
+                <p><b>Zonal-mean geostrophic wind</b>, blank within 5° of the equator (f → 0):</p>
+                <pre>[u_g] = −(g/f) [∂z/∂y]</pre>
+                <p>Compare with the field section of u: they agree in the extratropical free troposphere; near the ground friction slows [u] below [u_g].</p>
+                <p><b>Below ground.</b> Each column with air at the level takes its own ∂z/∂y (one-sided where the point north or south of it is underground), and [u_g] is their mean over the air, the columns the field section's [u] averages. A level with less than a quarter of its circle above ground is hatched. Differencing the air-part [z] between latitudes would compare different longitudes; at 500–850 hPa, 25–45°N in July it departs from the air-part [u] by 1.1 m s⁻¹ rms, the column mean by 0.26 (the old all-circle panel: 0.55). At 1000 hPa, 35–40°N in January the extrapolated heights had made [u_g] 2.1–2.2 m s⁻¹, slower than [u] (2.6–2.7); over the air it is 4.7–4.8 against [u] 3.8–3.9. At 925 hPa, 70°S in January: −4.4 → −1.8 m s⁻¹ ([u] −1.7).</p>
+                <p style="color: var(--paper-dim); font-size: 0.74rem;">Reference: Boer (1982, <i>MWR</i>) for pressure levels below the surface.</p>
+            </div>
+            <div class="lz-info" id="n2-info" hidden>
+                <p><b>Static stability</b> of the zonal-mean state, in 10⁻⁴ s⁻² (troposphere ≈ 1, stratosphere ≈ 4):</p>
+                <pre>N² = (g/θ) ∂θ/∂z = −(g² p / (R T θ)) ∂θ/∂p</pre>
+                <p>Centred differences in p, one-sided at 10 and 1000 hPa.</p>
+                <p><b>Below ground.</b> ∂θ/∂p is the mean over the air of each column's own ∂θ/∂p (one-sided where the level below is underground in that column); T and θ are air-part zonal means; a level with less than a quarter of its circle above ground is hatched. Differencing the air-part [θ] between levels would compare different places: at 1000 hPa, 50°N in January the air is mostly the warm oceans', at 925 hPa it includes the cold continents, and N² came out −0.57, an unstable layer that isn't there. The column mean gives 1.54 (1.72 with the extrapolations). Without the extrapolated profiles the low-level air is more stable in July at 925 hPa, 60–75°S (1.6–2.9 → 2.1–4.2) and at 1000 hPa, 45–60°N (1.8 → 2.5–2.7), where the air at 1000 hPa is mostly over the oceans.</p>
+                <p style="color: var(--paper-dim); font-size: 0.74rem;">Reference: Boer (1982, <i>MWR</i>) for pressure levels below the surface.</p>
+            </div>
             <div class="xs-diag">
                 <label class="xs-diag-label" for="xs-diag-select">Variable</label>
                 <select id="xs-diag-select">

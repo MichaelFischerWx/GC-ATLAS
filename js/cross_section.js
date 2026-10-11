@@ -4,30 +4,27 @@
 //           "lat × pressure" heatmap, pole-to-pole).
 //   arc:    vertical section along a user-drawn great circle on the globe.
 // Renders into a plain <canvas> — no D3 dependency.
+//
+// Below ground. ERA5 fills pressure levels under the surface with
+// extrapolated values; pressure-level field sections leave them out, as the
+// diagnostics do (air_mask.js). Zonal sections average each level over the
+// columns with air at that level and hatch a level with less than a quarter
+// of its circle above ground: at 1000 hPa, 50°N in January [T] is 273.6 K
+// over the air, 269.6 K with the extrapolations. Arc sections hatch
+// everything below the surface pressure along the arc; between the lowest
+// level above the ground and the surface the shading interpolates toward
+// ERA5's extrapolated value at the next level down. Both wait for the
+// surface pressure of the same time slice before drawing the levels.
 
 import { getField, LEVELS, GRID, FIELDS } from './data.js';
 import { sample } from './colormap.js';
 import { gcDistanceKm, arcPathLengthKm } from './arc.js';
+import { airZonalMean, groundCells } from './air_mask.js';
 
 const LAT_TICKS = [-90, -60, -30, 0, 30, 60, 90];
 const P_TICKS   = [1000, 500, 200, 100, 50, 10];
 
 const KAPPA = 0.2854;   // R / c_p, as in data.js's θ cube
-
-/** Zonal mean of a (nlat × nlon) grid, NaN-aware — Float32Array(nlat). */
-function zonalMeanRow(values) {
-    const { nlat, nlon } = GRID;
-    const out = new Float32Array(nlat);
-    for (let i = 0; i < nlat; i++) {
-        let s = 0, n = 0;
-        for (let j = 0; j < nlon; j++) {
-            const v = values[i * nlon + j];
-            if (Number.isFinite(v)) { s += v; n += 1; }
-        }
-        out[i] = n > 0 ? s / n : NaN;
-    }
-    return out;
-}
 
 /** Symmetric ±displayCap colour range for fields that declare one (PV:
  *  stratospheric values reach hundreds of PVU). */
@@ -44,8 +41,10 @@ function capRange(zm, meta) {
  *  every column (NaN where the surface is below 1000 hPa or above 10 hPa).
  *  `tempAt(k)` returns the column temperatures at LEVELS[k] — zonal means,
  *  or samples along the arc — or null while T is loading (no overlay yet).
- *  Linear in θ between levels, like the globe's isentropic interpolation. */
-function isentropeOverlay(thetas, mark, tempAt) {
+ *  Linear in θ between levels, like the globe's isentropic interpolation.
+ *  `floor` (hPa per column, the surface along an arc) ends an isentrope
+ *  where it meets the ground. */
+function isentropeOverlay(thetas, mark, tempAt, floor = null) {
     const th = [];
     for (let k = 0; k < LEVELS.length; k++) {
         const T = tempAt(k);
@@ -62,7 +61,8 @@ function isentropeOverlay(thetas, mark, tempAt) {
                 const a = th[k][j], b = th[k + 1][j];
                 if (Number.isFinite(a) && Number.isFinite(b) && a >= theta && theta > b) {
                     const f = (a - theta) / (a - b);
-                    p[j] = Math.exp(Math.log(LEVELS[k]) + f * Math.log(LEVELS[k + 1] / LEVELS[k]));
+                    const pc = Math.exp(Math.log(LEVELS[k]) + f * Math.log(LEVELS[k + 1] / LEVELS[k]));
+                    p[j] = floor && pc > floor[j] ? NaN : pc;
                     break;
                 }
             }
@@ -106,19 +106,20 @@ export function computeZonalMean(fieldName, month, { seasonal = false, year = nu
     }
 
     const nlev = LEVELS.length;
-    const zm = new Float32Array(nlev * nlat);
+    // Each level averaged over its air (air_mask.js), blank until the
+    // surface pressure of the same slice is in.
+    const sp = getField('sp', { month, seasonal, year, customRange });
+    const SP = sp.isReal ? sp.values : null;
+    const zm = new Float32Array(nlev * nlat).fill(NaN);
     let vmin = Infinity, vmax = -Infinity;
     let slice = null;
     for (let k = 0; k < nlev; k++) {
         const f = getField(fieldName, { month, level: LEVELS[k], seasonal, year, customRange });
         if (f.isReal) slice ??= sliceOf(f);
+        if (!SP) continue;
+        const row = airZonalMean(f.values, SP, LEVELS[k]);
         for (let i = 0; i < nlat; i++) {
-            let s = 0, n = 0;
-            for (let j = 0; j < nlon; j++) {
-                const v = f.values[i * nlon + j];
-                if (Number.isFinite(v)) { s += v; n += 1; }
-            }
-            const m = n > 0 ? s / n : NaN;
+            const m = row[i];
             zm[k * nlat + i] = m;
             if (Number.isFinite(m)) {
                 if (m < vmin) vmin = m;
@@ -128,11 +129,12 @@ export function computeZonalMean(fieldName, month, { seasonal = false, year = nu
     }
     if (!Number.isFinite(vmin)) { vmin = 0; vmax = 1; }
     const out = capRange({ kind: 'zonal', type: 'pl', values: zm, vmin, vmax,
-                           levels: LEVELS.slice(), name: meta.name, units: meta.units, slice }, meta);
+                           levels: LEVELS.slice(), ground: SP ? groundCells(SP) : null,
+                           name: meta.name, units: meta.units, slice }, meta);
     if (isentropes) {
         out.isentropes = isentropeOverlay(isentropes, markTheta, (k) => {
             const t = getField('t', { month, level: LEVELS[k], seasonal, year, customRange });
-            return t.isReal ? zonalMeanRow(t.values) : null;
+            return t.isReal && SP ? airZonalMean(t.values, SP, LEVELS[k]) : null;
         });
     }
     return out;
@@ -177,7 +179,9 @@ export function samplePanel(zm, fracX, fracY) {
             const pMin = zm.levels[0];
             const pMax = zm.levels[zm.levels.length - 1];
             const p = pMin * Math.exp(fracY * Math.log(pMax / pMin));
-            return { lat, lon, p, value: sampleArcPL(zm, sIdx, p) };
+            const ps = surfaceAt(zm, sIdx);
+            const ground = p > ps;
+            return { lat, lon, p, ps, ground, value: ground ? NaN : sampleArcPL(zm, sIdx, p) };
         }
         return { lat, lon, value: sampleArcSL(zm, sIdx) };
     }
@@ -258,6 +262,17 @@ function sampleArcPL(zm, sIdx, p) {
     return vT * (1 - fK) + vB * fK;
 }
 
+/** Surface pressure (hPa) at fractional sample index sIdx of an arc
+ *  section, linear between samples; NaN when the section has none. */
+function surfaceAt(zm, sIdx) {
+    const s = zm.surface;
+    if (!s) return NaN;
+    const j0 = Math.max(0, Math.min(zm.nSamples - 1, Math.floor(sIdx)));
+    const j1 = Math.min(zm.nSamples - 1, j0 + 1);
+    const fJ = sIdx - j0;
+    return s[j0] * (1 - fJ) + s[j1] * fJ;
+}
+
 function sampleArcSL(zm, sIdx) {
     const { values, nSamples } = zm;
     const j0 = Math.max(0, Math.min(nSamples - 1, Math.floor(sIdx)));
@@ -329,16 +344,23 @@ export function computeArcCrossSection(fieldName, month, arc, { seasonal = false
     }
 
     const nlev = LEVELS.length;
-    const values = new Float32Array(nlev * nSamples);
+    // The surface pressure along the arc (same slice) is the terrain the
+    // renderer hatches. Samples under it keep ERA5's extrapolated values for
+    // the interpolation down to the surface but set no colour range. Blank
+    // until p_s is in.
+    const sp = getField('sp', { month, seasonal, year, customRange });
+    const surface = sp.isReal ? Float32Array.from(arc, (pt) => bilinearSample(sp.values, pt.lat, pt.lon)) : null;
+    const values = new Float32Array(nlev * nSamples).fill(NaN);
     let vmin = Infinity, vmax = -Infinity;
     let slice = null;
     for (let k = 0; k < nlev; k++) {
         const f = getField(fieldName, { month, level: LEVELS[k], seasonal, year, customRange });
         if (f.isReal) slice ??= sliceOf(f);
+        if (!surface) continue;
         for (let j = 0; j < nSamples; j++) {
             const v = bilinearSample(f.values, arc[j].lat, arc[j].lon);
             values[k * nSamples + j] = v;
-            if (Number.isFinite(v)) {
+            if (Number.isFinite(v) && !(LEVELS[k] > surface[j])) {
                 if (v < vmin) vmin = v;
                 if (v > vmax) vmax = v;
             }
@@ -346,13 +368,13 @@ export function computeArcCrossSection(fieldName, month, arc, { seasonal = false
     }
     if (!Number.isFinite(vmin)) { vmin = 0; vmax = 1; }
     const out = capRange({ kind: 'arc', type: 'pl', values, vmin, vmax,
-                           nSamples, arc, distanceKm, levels: LEVELS.slice(),
+                           nSamples, arc, distanceKm, levels: LEVELS.slice(), surface,
                            name: meta.name, units: meta.units, slice }, meta);
     if (isentropes) {
         out.isentropes = isentropeOverlay(isentropes, markTheta, (k) => {
             const t = getField('t', { month, level: LEVELS[k], seasonal, year, customRange });
-            return t.isReal ? Float32Array.from(arc, (pt) => bilinearSample(t.values, pt.lat, pt.lon)) : null;
-        });
+            return t.isReal && surface ? Float32Array.from(arc, (pt) => bilinearSample(t.values, pt.lat, pt.lon)) : null;
+        }, surface);
     }
     return out;
 }
@@ -481,6 +503,9 @@ function drawArcHeatmap(ctx, x0, y0, w, h, zm, cmap) {
     const span = (vmax - vmin) || 1;
     const showContours = !!zm.showContours;
     const interval = zm.contourInterval || 0;
+    const dpr = zm._dpr || 1;
+    const hatchPeriod = Math.max(4, Math.round(6 * dpr));
+    const hatchWidth  = Math.max(1, Math.round(1.25 * dpr));
 
     const iw = Math.floor(w), ih = Math.floor(h);
     const img = ctx.createImageData(iw, ih);
@@ -489,6 +514,11 @@ function drawArcHeatmap(ctx, x0, y0, w, h, zm, cmap) {
     // neighbours in one pass without re-sampling.
     const prevRow = showContours && interval ? new Float32Array(iw) : null;
     if (prevRow) prevRow.fill(NaN);
+    // Surface pressure under each pixel column: below it is ground, hatched
+    // like the zonal sections' below-ground cells.
+    const psCol = zm.surface
+        ? Float32Array.from({ length: iw }, (_, px) => surfaceAt(zm, (px / (iw - 1)) * (nSamples - 1)))
+        : null;
 
     for (let py = 0; py < ih; py++) {
         const p = pMin * Math.exp((py / (ih - 1)) * logSpan);
@@ -499,6 +529,17 @@ function drawArcHeatmap(ctx, x0, y0, w, h, zm, cmap) {
             : Math.log(p / levels[k0]) / Math.log(levels[k1] / levels[k0]);
         let vLeft = NaN;
         for (let px = 0; px < iw; px++) {
+            const k = (py * iw + px) * 4;
+            if (psCol && p > psCol[px]) {
+                if ((px + py) % hatchPeriod < hatchWidth) {
+                    data[k] = 66; data[k+1] = 84; data[k+2] = 74; data[k+3] = 255;
+                } else {
+                    data[k] = 18; data[k+1] = 26; data[k+2] = 22; data[k+3] = 255;
+                }
+                if (prevRow) prevRow[px] = NaN;
+                vLeft = NaN;
+                continue;
+            }
             const sIdx = (px / (iw - 1)) * (nSamples - 1);
             const j0 = Math.floor(sIdx);
             const j1 = Math.min(nSamples - 1, j0 + 1);
@@ -508,7 +549,6 @@ function drawArcHeatmap(ctx, x0, y0, w, h, zm, cmap) {
             const vT = v00 * (1 - fS) + v01 * fS;
             const vB = v10 * (1 - fS) + v11 * fS;
             const v  = vT * (1 - fLev) + vB * fLev;
-            const k = (py * iw + px) * 4;
             if (!Number.isFinite(v)) {
                 data[k] = 18; data[k+1] = 26; data[k+2] = 22; data[k+3] = 255;
                 if (prevRow) prevRow[px] = NaN;
@@ -538,8 +578,26 @@ function drawArcHeatmap(ctx, x0, y0, w, h, zm, cmap) {
     }
     ctx.putImageData(img, x0, y0);
     drawPanelGrid(ctx, x0, y0, w, h, zm);
+    // Terrain outline along the surface pressure.
+    if (psCol) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(x0, y0, w, h);
+        ctx.clip();
+        ctx.strokeStyle = 'rgba(174, 195, 182, 0.9)';
+        ctx.lineWidth = 1.25 * dpr;
+        ctx.lineJoin = 'round';
+        ctx.beginPath();
+        for (let px = 0; px < iw; px++) {
+            const y = y0 + (Math.log(psCol[px] / pMin) / logSpan) * (ih - 1);
+            if (px === 0) ctx.moveTo(x0 + px, y);
+            else          ctx.lineTo(x0 + px, y);
+        }
+        ctx.stroke();
+        ctx.restore();
+    }
     ctx.strokeStyle = 'rgba(255,255,255,0.22)';
-    ctx.lineWidth = zm._dpr || 1;
+    ctx.lineWidth = dpr;
     ctx.strokeRect(x0 + 0.5, y0 + 0.5, w, h);
 }
 
