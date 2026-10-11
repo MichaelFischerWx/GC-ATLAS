@@ -330,11 +330,10 @@ const COLORS = {
     total:   '#E6EFE9',   // paper
     atmos:   '#2DBDA0',   // emerald-bright
     ocean:   '#D4A84B',   // ochre
-    mmc:     '#C97AC2',   // violet
+    mmc:     '#B597F2',   // violet
     se:      '#E08A4D',   // clay
-    te:      '#D44E5E',   // rose
+    te:      '#7DB3E8',   // sky
 };
-const DASH = [5, 3];
 
 function averaged(terms, pick) {
     const out = new Float64Array(NLAT);
@@ -408,9 +407,10 @@ export function buildTransportView(month, { quantity = 'energy', average = 'mont
         add('implied', 'E − P implied', { width: 2.5 });
         add('atmos', 'atmosphere', { width: 2.5 });
     }
-    add('mmc', 'mean merid. circ.', { width: 1.5, dash: DASH });
-    add('se',  'stationary eddies', { width: 1.5, dash: DASH });
-    add('te',  'transient (resid.)', { width: 1.5, dash: DASH });
+    // Three hues and three dash patterns, so the parts separate in greyscale too.
+    add('mmc', 'mean merid. circ.', { width: 1.75, dash: [7, 3] });
+    add('se',  'stationary eddies', { width: 1.75, dash: [2, 2.5] });
+    add('te',  'transient (resid.)', { width: 1.75, dash: [7, 2, 2, 2] });
 
     let absMax = 0;
     for (const s of series) {

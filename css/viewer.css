@@ -615,6 +615,32 @@ select optgroup option {
     margin-top: 6px;
     gap: 6px;
 }
+/* Round-number ticks under a colorbar strip; its exact ends stay in the
+   editable min / max inputs below. */
+.cb-tickrow {
+    position: relative;
+    height: 15px;
+    font: 10px/1 var(--font-mono);
+    color: var(--p-text-2);
+    pointer-events: none;
+}
+.cb-tickrow span {
+    position: absolute;
+    top: 5px;
+    transform: translateX(-50%);
+    white-space: nowrap;
+}
+.cb-tickrow span::before {
+    content: '';
+    position: absolute;
+    left: 50%;
+    top: -5px;
+    width: 1px;
+    height: 4px;
+    background: currentColor;
+    opacity: 0.8;
+}
+.cb-tickrow[hidden], .xs-cb[hidden] { display: none; }
 .cb-tick-input {
     font-family: var(--font-mono);
     font-size: var(--fs-sm);

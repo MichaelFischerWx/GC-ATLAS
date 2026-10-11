@@ -22,6 +22,7 @@ import { gcDistanceKm, arcPathLengthKm } from './arc.js';
 import { airZonalMean, groundCells } from './air_mask.js';
 
 const LAT_TICKS = [-90, -60, -30, 0, 30, 60, 90];
+const latLabel = (lat) => lat === 0 ? 'EQ' : `${Math.abs(lat)}°${lat < 0 ? 'S' : 'N'}`;
 const P_TICKS   = [1000, 500, 200, 100, 50, 10];
 
 const KAPPA = 0.2854;   // R / c_p, as in data.js's θ cube
@@ -513,10 +514,9 @@ function drawArcHeatmap(ctx, x0, y0, w, h, zm, cmap) {
     const iw = Math.floor(w), ih = Math.floor(h);
     const img = ctx.createImageData(iw, ih);
     const data = img.data;
-    // Cache current row + previous row's v so the contour pass can compare
-    // neighbours in one pass without re-sampling.
-    const prevRow = showContours && interval ? new Float32Array(iw) : null;
-    if (prevRow) prevRow.fill(NaN);
+    // Per-pixel values for the contour pass (NaN where nothing is drawn).
+    const grid = showContours && interval > 0 ? new Float32Array(iw * ih).fill(NaN) : null;
+    let hasNeg = false, hasPos = false;
     // Surface pressure under each pixel column: below it is ground, hatched
     // like the zonal sections' below-ground cells.
     const psCol = zm.surface
@@ -530,7 +530,6 @@ function drawArcHeatmap(ctx, x0, y0, w, h, zm, cmap) {
         const k1 = Math.min(nlev - 1, k0 + 1);
         const fLev = (k0 === k1) ? 0
             : Math.log(p / levels[k0]) / Math.log(levels[k1] / levels[k0]);
-        let vLeft = NaN;
         for (let px = 0; px < iw; px++) {
             const k = (py * iw + px) * 4;
             if (psCol && p > psCol[px]) {
@@ -539,8 +538,6 @@ function drawArcHeatmap(ctx, x0, y0, w, h, zm, cmap) {
                 } else {
                     data[k] = 18; data[k+1] = 26; data[k+2] = 22; data[k+3] = 255;
                 }
-                if (prevRow) prevRow[px] = NaN;
-                vLeft = NaN;
                 continue;
             }
             const sIdx = (px / (iw - 1)) * (nSamples - 1);
@@ -554,8 +551,6 @@ function drawArcHeatmap(ctx, x0, y0, w, h, zm, cmap) {
             const v  = vT * (1 - fLev) + vB * fLev;
             if (!Number.isFinite(v)) {
                 data[k] = 18; data[k+1] = 26; data[k+2] = 22; data[k+3] = 255;
-                if (prevRow) prevRow[px] = NaN;
-                vLeft = NaN;
                 continue;
             }
             const t = (v - vmin) / span;
@@ -564,21 +559,13 @@ function drawArcHeatmap(ctx, x0, y0, w, h, zm, cmap) {
             data[k + 1] = g * 255;
             data[k + 2] = b * 255;
             data[k + 3] = 255;
-            // Contour overlay: paint dark where the floor(v/interval) bucket
-            // differs from the neighbour on the left or above.
-            if (prevRow) {
-                const kSelf = Math.floor(v / interval);
-                const vUp   = prevRow[px];
-                const hitX = Number.isFinite(vLeft) && Math.floor(vLeft / interval) !== kSelf;
-                const hitY = Number.isFinite(vUp)   && Math.floor(vUp   / interval) !== kSelf;
-                if (hitX || hitY) {
-                    data[k] = 10; data[k + 1] = 18; data[k + 2] = 14;
-                }
-                prevRow[px] = v;
+            if (grid) {
+                grid[py * iw + px] = v;
+                if (v < 0) hasNeg = true; else if (v > 0) hasPos = true;
             }
-            vLeft = v;
         }
     }
+    if (grid) paintContours(data, grid, iw, ih, interval, hasNeg && hasPos, dpr);
     ctx.putImageData(img, x0, y0);
     drawPanelGrid(ctx, x0, y0, w, h, zm);
     // Terrain outline along the surface pressure.
@@ -602,6 +589,68 @@ function drawArcHeatmap(ctx, x0, y0, w, h, zm, cmap) {
     ctx.strokeStyle = 'rgba(255,255,255,0.22)';
     ctx.lineWidth = dpr;
     ctx.strokeRect(x0 + 0.5, y0 + 0.5, w, h);
+}
+
+/** Contour lines over a rendered heatmap, anti-aliased the way the globe's
+ *  contour shader draws them: a pixel's distance to the nearest multiple of
+ *  `interval` is |v − level| / |∇v| in pixels, and a line `lw` wide fades out
+ *  over one pixel. A level counts only where it is crossed within a few
+ *  pixels, so near-flat regions don't smear; the zero line of a field with
+ *  both signs is drawn bold. `grid` holds v per pixel (NaN = no data). */
+function paintContours(data, grid, iw, ih, interval, zeroBold, dpr) {
+    const lw = 1.1 * dpr, lwZ = 2.2 * dpr;
+    const R = Math.max(1, Math.ceil(lwZ / 2 + 1));
+    const A = 0.75, AZ = 0.9;
+    for (let py = 0; py < ih; py++) {
+        for (let px = 0; px < iw; px++) {
+            const idx = py * iw + px;
+            const v = grid[idx];
+            if (!Number.isFinite(v)) continue;
+            const g = Math.hypot(slope(grid, idx, px, iw, 1), slope(grid, idx, py, ih, iw));
+            if (!(g > 0)) continue;
+            const kSelf = Math.floor(v / interval);
+            let crossed = false, flips = false, nbMax = 0;
+            for (const j of [px >= R ? idx - R : -1, px + R < iw ? idx + R : -1,
+                             py >= R ? idx - R * iw : -1, py + R < ih ? idx + R * iw : -1]) {
+                if (j < 0 || !Number.isFinite(grid[j])) continue;
+                if (Math.floor(grid[j] / interval) !== kSelf) crossed = true;
+                if ((grid[j] < 0) !== (v < 0)) flips = true;
+                nbMax = Math.max(nbMax, Math.abs(grid[j]));
+            }
+            // A zero crossing where the field is negligible (ψ in the
+            // stratosphere) is noise, not a contour.
+            if (Math.round(v / interval) === 0 && nbMax < 0.15 * interval) continue;
+            let a = 0;
+            if (crossed) {
+                const f = v / interval - kSelf;
+                a = A * (1 - smoothstep(lw / 2 - 0.5, lw / 2 + 0.5, Math.min(f, 1 - f) * interval / g));
+            }
+            if (zeroBold && flips) {
+                a = Math.max(a, AZ * (1 - smoothstep(lwZ / 2 - 0.5, lwZ / 2 + 0.5, Math.abs(v) / g)));
+            }
+            if (a > 0.01) {
+                const k = idx * 4;
+                data[k]     += (12 - data[k])     * a;
+                data[k + 1] += (20 - data[k + 1]) * a;
+                data[k + 2] += (16 - data[k + 2]) * a;
+            }
+        }
+    }
+}
+
+/** Centred difference of grid along one axis, one-sided beside an edge or a gap. */
+function slope(grid, idx, pos, n, stride) {
+    const a = pos > 0 ? grid[idx - stride] : NaN;
+    const b = pos < n - 1 ? grid[idx + stride] : NaN;
+    if (Number.isFinite(a) && Number.isFinite(b)) return (b - a) / 2;
+    if (Number.isFinite(b)) return b - grid[idx];
+    if (Number.isFinite(a)) return grid[idx] - a;
+    return 0;
+}
+
+function smoothstep(e0, e1, x) {
+    const t = Math.min(1, Math.max(0, (x - e0) / (e1 - e0)));
+    return t * t * (3 - 2 * t);
 }
 
 /** Faint gridlines inside the plot area: horizontal at pressure ticks,
@@ -740,8 +789,9 @@ function drawHeatmap(ctx, x0, y0, w, h, zm, cmap) {
     const iw = Math.floor(w), ih = Math.floor(h);
     const img = ctx.createImageData(iw, ih);
     const data = img.data;
-    const prevRow = showContours && interval ? new Float32Array(iw) : null;
-    if (prevRow) prevRow.fill(NaN);
+    // Per-pixel values for the contour pass (NaN where nothing is drawn).
+    const grid = showContours && interval > 0 ? new Float32Array(iw * ih).fill(NaN) : null;
+    let hasNeg = false, hasPos = false;
 
     // Atmospheric convention: py=0 (top of panel) → low pressure (stratosphere);
     // py=ih-1 (bottom) → high pressure (surface).
@@ -781,7 +831,6 @@ function drawHeatmap(ctx, x0, y0, w, h, zm, cmap) {
                 } else {
                     data[k] = 18; data[k+1] = 26; data[k+2] = 22; data[k+3] = 255;
                 }
-                if (prevRow) prevRow[px] = NaN;
                 continue;
             }
             const t = (v - vmin) / span;
@@ -790,20 +839,13 @@ function drawHeatmap(ctx, x0, y0, w, h, zm, cmap) {
             data[k + 1] = g * 255;
             data[k + 2] = b * 255;
             data[k + 3] = 255;
-            if (prevRow) {
-                const kSelf = Math.floor(v / interval);
-                const vUp   = prevRow[px];
-                // vLeft: previous pixel in same row — we can read back from data via vmin/span, but
-                // cheaper to just hold a local; the neighbour-comparison cost is a few per-pixel floats.
-                // We only check the up-neighbour here; one-direction detection still looks like a grid.
-                const hit = Number.isFinite(vUp) && Math.floor(vUp / interval) !== kSelf;
-                if (hit) {
-                    data[k] = 10; data[k + 1] = 18; data[k + 2] = 14;
-                }
-                prevRow[px] = v;
+            if (grid) {
+                grid[py * iw + px] = v;
+                if (v < 0) hasNeg = true; else if (v > 0) hasPos = true;
             }
         }
     }
+    if (grid) paintContours(data, grid, iw, ih, interval, hasNeg && hasPos, dpr);
     ctx.putImageData(img, x0, y0);
     drawPanelGrid(ctx, x0, y0, w, h, zm);
     ctx.strokeStyle = 'rgba(255,255,255,0.22)';
@@ -818,7 +860,7 @@ function drawLine(ctx, x0, y0, w, h, zm) {
     const dpr = zm._dpr || 1;
 
     // Faint horizontal gridlines at "nice" tick positions.
-    const ticks = niceTicks(vmin, vmax, 5);
+    const ticks = niceTicks(vmin, vmax, 7);
     ctx.save();
     ctx.lineWidth = Math.max(1, dpr * 0.75);
     for (const t of ticks) {
@@ -889,13 +931,13 @@ function drawLine(ctx, x0, y0, w, h, zm) {
     // whose curves fill that corner (northward transports) ask for the
     // top-left with zm.legendPos = 'tl'.
     if (zm.series && zm.series.length > 1) {
-        const fs = 10 * dpr;
-        ctx.font = `${fs}px 'JetBrains Mono', monospace`;
+        const fs = 11 * dpr;
+        ctx.font = `${fs}px 'DM Sans', system-ui, sans-serif`;
         ctx.textBaseline = 'middle';
         ctx.textAlign = 'left';
         const padPx = 8 * dpr;
-        const swatch = 14 * dpr;
-        const lineH  = 14 * dpr;
+        const swatch = 18 * dpr;
+        const lineH  = 15 * dpr;
         // Measure widest label.
         let maxLabel = 0;
         for (const s of zm.series) maxLabel = Math.max(maxLabel, ctx.measureText(s.label).width);
@@ -927,7 +969,7 @@ function drawLine(ctx, x0, y0, w, h, zm) {
 }
 
 /** Pick ~n "nice" round-number ticks inside [vmin, vmax] including 0 if in range. */
-function niceTicks(vmin, vmax, n = 5) {
+export function niceTicks(vmin, vmax, n = 5) {
     const span = vmax - vmin;
     if (!(span > 0)) return [vmin];
     const rough = span / Math.max(1, n - 1);
@@ -1028,7 +1070,7 @@ function drawEPArrows(ctx, x0, y0, w, h, zm) {
 
 function drawAxes(ctx, x0, y0, w, h, zm) {
     const dpr = zm._dpr || 1;
-    ctx.font = `${10 * dpr}px 'JetBrains Mono', monospace`;
+    ctx.font = `${11 * dpr}px 'JetBrains Mono', monospace`;
     ctx.fillStyle = '#AEC3B6';
     ctx.strokeStyle = 'rgba(255,255,255,0.25)';
     ctx.lineWidth = dpr;
@@ -1041,8 +1083,11 @@ function drawAxes(ctx, x0, y0, w, h, zm) {
         ctx.moveTo(x, y0 + h);
         ctx.lineTo(x, y0 + h + 3 * dpr);
         ctx.stroke();
-        ctx.fillText(`${lat}°`, x, y0 + h + 5 * dpr);
+        // Hemisphere-style labels; the end ticks hug the frame so they don't spill past it.
+        ctx.textAlign = lat === -90 ? 'left' : lat === 90 ? 'right' : 'center';
+        ctx.fillText(latLabel(lat), x, y0 + h + 5 * dpr);
     }
+    ctx.textAlign = 'center';
 
     ctx.textAlign = 'right';
     ctx.textBaseline = 'middle';
@@ -1060,7 +1105,7 @@ function drawAxes(ctx, x0, y0, w, h, zm) {
             ctx.fillText(`${p}`, x0 - 5 * dpr, y);
         }
         ctx.save();
-        ctx.translate(x0 - 30 * dpr, y0 + h / 2);
+        ctx.translate(x0 - 34 * dpr, y0 + h / 2);
         ctx.rotate(-Math.PI / 2);
         ctx.textAlign = 'center';
         ctx.fillText('hPa', 0, 0);
@@ -1072,7 +1117,7 @@ function drawAxes(ctx, x0, y0, w, h, zm) {
         const ticks = zm._yTicks || [zm.vmin, zm.vmax];
         const span  = (zm.vmax - zm.vmin) || 1;
         const tStep = ticks.length > 1 ? Math.abs(ticks[1] - ticks[0]) : 1;
-        const decimals = tStep >= 10 ? 0 : tStep >= 1 ? 1 : 2;
+        const decimals = tStep >= 1 ? 0 : Math.min(4, Math.ceil(-Math.log10(tStep) - 1e-9));
         for (const t of ticks) {
             const y = y0 + h - ((t - zm.vmin) / span) * h;
             ctx.beginPath();
@@ -1086,7 +1131,7 @@ function drawAxes(ctx, x0, y0, w, h, zm) {
         // Y-axis units label (rotated, on the left).
         if (zm.units) {
             ctx.save();
-            ctx.translate(x0 - 32 * dpr, y0 + h / 2);
+            ctx.translate(x0 - 35 * dpr, y0 + h / 2);
             ctx.rotate(-Math.PI / 2);
             ctx.textAlign = 'center';
             ctx.fillText(zm.units, 0, 0);

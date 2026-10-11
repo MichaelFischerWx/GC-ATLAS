@@ -16,7 +16,7 @@ import { ContourField } from './contours.js';
 import { ContourLabels } from './contour_labels.js';
 import { SunLight } from './sun.js';
 import { OrbitScene, ORBIT_RADIUS } from './orbit.js';
-import { computeZonalMean, computeArcCrossSection, renderCrossSection, samplePanel, sampleSeries } from './cross_section.js';
+import { computeZonalMean, computeArcCrossSection, renderCrossSection, samplePanel, sampleSeries, niceTicks } from './cross_section.js';
 import { greatCircleArc, linearLatLonArc, latLonToVec3, gcDistanceKm, greatCircleMidpoint, linearLatLonMidpoint, threePointArc } from './arc.js';
 import { loadManifest, onFieldLoaded, onTileProgress, isReady as era5Ready, prefetchField, cachedMonth, registerClamps, setActivePeriod, getActivePeriod, getManifest, perYearHasMonth, latestPerYearMonth, activePeriodLabel, windowMonths, windowSlots, windowYearsLabel } from './era5.js';
 import { decompose, annualMeanFrom, aggregatedDecompositionRange } from './decompose.js';
@@ -3073,7 +3073,16 @@ class GlobeApp {
 
     updateXSectionColorbar(zm, cmap) {
         const cb = document.getElementById('xs-cb-canvas');
-        if (cb) {
+        // A colour strip means nothing under a line plot; its min / max inputs
+        // still set the y-range there.
+        const isLine = zm.type !== 'pl';
+        const tickRow = document.getElementById('xs-cb-tickrow');
+        if (cb) cb.hidden = isLine;
+        if (tickRow) {
+            tickRow.hidden = isLine;
+            if (!isLine) renderColorbarTicks(tickRow, zm.vmin, zm.vmax);
+        }
+        if (cb && !isLine) {
             // Retina-crisp mini bar, same DPR logic as the main canvas.
             const DPR = Math.min(window.devicePixelRatio || 1, 2);
             const cssW = cb.clientWidth || 380;
@@ -6259,6 +6268,7 @@ class GlobeApp {
         // matches the painted globe (forced to RdBu_r in eddy/anomaly).
         const effCmap = field.effCmap || this.state.cmap;
         if (cb) fillColorbar(cb, effCmap);
+        renderColorbarTicks(document.getElementById('cb-tickrow'), field.vmin, field.vmax);
         const set = (id, text) => { const el = document.getElementById(id); if (el) el.textContent = text; };
         // cb-min / cb-max are now <input>s — write to .value (skip when the
         // input is focused so we don't yank a mid-edit cursor) and toggle
@@ -6378,6 +6388,27 @@ function fmtValue(v) {
     if (Math.abs(v) >= 1000) return v.toFixed(0);
     if (Math.abs(v) >= 10)   return v.toFixed(1);
     return v.toFixed(2);
+}
+
+/** Round-number ticks under a colorbar strip. The strip's exact ends live in
+ *  the editable min / max inputs, so ticks crowding them are left out. */
+function renderColorbarTicks(row, vmin, vmax) {
+    if (!row) return;
+    row.textContent = '';
+    const span = vmax - vmin;
+    if (!(span > 0) || !Number.isFinite(span)) return;
+    const ticks = niceTicks(vmin, vmax, 5);
+    const step = ticks.length > 1 ? Math.abs(ticks[1] - ticks[0]) : span;
+    const decimals = step >= 1 ? 0 : Math.min(4, Math.ceil(-Math.log10(step) - 1e-9));
+    for (const t of ticks) {
+        const f = (t - vmin) / span;
+        if (f < 0.06 || f > 0.94) continue;
+        const el = document.createElement('span');
+        el.style.left = `${(f * 100).toFixed(2)}%`;
+        el.textContent = Math.abs(t) < step * 1e-6 ? '0'
+            : Math.abs(t) >= 1e5 ? t.toExponential(1).replace('e+', 'e') : t.toFixed(decimals);
+        row.appendChild(el);
+    }
 }
 
 const mount = document.getElementById('globe-mount');
