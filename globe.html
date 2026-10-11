@@ -31,34 +31,33 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 
+    <link rel="stylesheet" href="css/atlas.css">
     <link rel="stylesheet" href="css/viewer.css">
 </head>
 <body>
 
 <header class="topbar">
     <div class="topbar-inner">
-        <a href="index.html" style="text-decoration:none">
-            <div class="topbar-brand">
-                <div class="topbar-mark">
-                    <!-- Mini GC-ATLAS brand glyph: tilted globe with two
-                         emerald subtropical-jet bands. Simplified from
-                         assets/favicon.svg — trades dropped, ellipses
-                         dropped for legibility at 22-px display size. -->
-                    <svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" aria-label="GC-ATLAS">
-                        <defs>
-                            <clipPath id="tbm-sphere"><circle cx="32" cy="32" r="28"/></clipPath>
-                        </defs>
-                        <g clip-path="url(#tbm-sphere)" transform="rotate(18 32 32)">
-                            <line x1="4" y1="32" x2="60" y2="32" stroke="#5a9a7a" stroke-width="1.4" opacity="0.85"/>
-                            <line x1="32" y1="4" x2="32" y2="60" stroke="#5a9a7a" stroke-width="1.1" opacity="0.6"/>
-                            <line x1="12" y1="11.6" x2="52" y2="11.6" stroke="#5fe0a5" stroke-width="3.4" opacity="0.95" stroke-linecap="round"/>
-                            <line x1="12" y1="52.4" x2="52" y2="52.4" stroke="#5fe0a5" stroke-width="3.4" opacity="0.95" stroke-linecap="round"/>
-                        </g>
-                        <circle cx="32" cy="32" r="28" fill="none" stroke="#5fe0a5" stroke-width="2"/>
-                    </svg>
-                </div>
-                <div class="topbar-logo">GC<span class="accent">-</span>ATLAS</div>
+        <a href="index.html" class="topbar-brand" title="GC-ATLAS home">
+            <div class="topbar-mark">
+                <!-- Mini GC-ATLAS brand glyph: tilted globe with two
+                     emerald subtropical-jet bands. Simplified from
+                     assets/favicon.svg — trades dropped, ellipses
+                     dropped for legibility at 22-px display size. -->
+                <svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" aria-label="GC-ATLAS">
+                    <defs>
+                        <clipPath id="tbm-sphere"><circle cx="32" cy="32" r="28"/></clipPath>
+                    </defs>
+                    <g clip-path="url(#tbm-sphere)" transform="rotate(18 32 32)">
+                        <line x1="4" y1="32" x2="60" y2="32" stroke="#5a9a7a" stroke-width="1.4" opacity="0.85"/>
+                        <line x1="32" y1="4" x2="32" y2="60" stroke="#5a9a7a" stroke-width="1.1" opacity="0.6"/>
+                        <line x1="12" y1="11.6" x2="52" y2="11.6" stroke="#5fe0a5" stroke-width="3.4" opacity="0.95" stroke-linecap="round"/>
+                        <line x1="12" y1="52.4" x2="52" y2="52.4" stroke="#5fe0a5" stroke-width="3.4" opacity="0.95" stroke-linecap="round"/>
+                    </g>
+                    <circle cx="32" cy="32" r="28" fill="none" stroke="#5fe0a5" stroke-width="2"/>
+                </svg>
             </div>
+            <div class="topbar-logo">GC<span class="accent">-</span>ATLAS</div>
         </a>
         <nav>
             <ul class="topbar-nav">
@@ -88,8 +87,7 @@
 
         <section class="control-group">
             <label class="field-label" for="level-select" id="level-label">Pressure level</label>
-            <div class="segmented" id="vcoord-toggle" role="tablist" aria-label="Vertical coordinate"
-                 style="margin-bottom: 8px;">
+            <div class="segmented" id="vcoord-toggle" role="tablist" aria-label="Vertical coordinate">
                 <button type="button" data-coord="pressure" class="active">Pressure</button>
                 <button type="button" data-coord="theta">θ (isentropic)</button>
             </div>
@@ -103,7 +101,7 @@
                 <button type="button" data-kind="std" title="Inter-annual standard deviation across the 30-year window — highlights ENSO, monsoon variability, storm-track regions">±1σ variability</button>
             </div>
             <!-- Top-level mode toggle: a 30-year window, one year, or a custom range -->
-            <div class="segmented" id="time-mode-toggle" style="margin-top:10px;" role="tablist" aria-label="Time mode">
+            <div class="segmented" id="time-mode-toggle" role="tablist" aria-label="Time mode">
                 <button type="button" data-time-mode="climo" class="active"
                         title="View the 30-year climatological mean for the chosen window">Climatology</button>
                 <button type="button" data-time-mode="year"
@@ -112,8 +110,8 @@
                         title="Average over a custom [start, end] range of years (e.g. 2010-2024, or 1979-2000)">Custom range</button>
             </div>
             <!-- Climatology-mode options: which 30-year window -->
-            <div id="time-climo-options" style="margin-top:10px;">
-                <label class="field-label" for="climo-period-select" style="margin-bottom:4px; font-size:0.66rem;">Period</label>
+            <div id="time-climo-options">
+                <label class="field-label" for="climo-period-select">Period</label>
                 <select id="climo-period-select" title="Which 30-year window to use as the active climatology — drives the Mean tile, the ±1σ tile, and the decomposition reference.">
                     <option value="1996-2025">1996–2025</option>
                     <option value="default" selected>1991–2020 (WMO standard)</option>
@@ -126,9 +124,9 @@
                 </select>
             </div>
             <!-- Single-year-mode options: slider over available years -->
-            <div id="time-year-options" hidden style="margin-top:10px;">
+            <div id="time-year-options" hidden>
                 <div class="year-row">
-                    <label class="field-label" style="margin:0; font-size:0.66rem;">Year</label>
+                    <label class="field-label">Year</label>
                     <span id="year-display" class="year-display" aria-live="polite">—</span>
                 </div>
                 <input id="year-slider" class="slider" type="range"
@@ -137,26 +135,26 @@
                        title="Drag to pick a year. ← / → keys also step through years.">
             </div>
             <!-- Custom-range-mode options: start/end year + Compute button -->
-            <div id="time-range-options" hidden style="margin-top:10px;">
+            <div id="time-range-options" hidden>
                 <div class="range-row">
                     <label class="field-label" for="range-start">Start</label>
                     <input id="range-start" type="number" class="range-input"
                            min="1961" max="2026" step="1" value="2010">
-                    <label class="field-label" for="range-end" style="margin-left:6px;">End</label>
+                    <label class="field-label" for="range-end">End</label>
                     <input id="range-end" type="number" class="range-input"
                            min="1961" max="2026" step="1" value="2024">
                 </div>
                 <button id="range-compute-btn" type="button" class="range-compute">
                     <span id="range-compute-label">Compute mean</span>
                 </button>
-                <p class="field-help" id="range-status" style="margin-top:6px; line-height:1.45;">
+                <p class="field-help" id="range-status">
                     Pick a year range. "Compute mean" fetches the per-year tiles and averages them in the browser — the result acts like a climatology (can be anomaly-referenced, compared, etc.).
                 </p>
             </div>
             <!-- Composite builder: parametric event-year compositing from a
                  chosen climate index + threshold. Collapsed by default so the
                  panel stays lean for casual users. -->
-            <details id="composite-details" class="composite-details" style="margin-top:12px;">
+            <details id="composite-details" class="composite-details">
                 <summary>Composite builder <span class="composite-badge">advanced</span></summary>
                 <div class="composite-body">
                     <label class="field-label" for="composite-index">Index</label>
@@ -187,11 +185,11 @@
                             <option value="iod">IOD — Indian Ocean Dipole</option>
                         </optgroup>
                     </select>
-                    <p class="field-help" id="composite-index-desc" style="margin-top:4px;"></p>
+                    <p class="field-help" id="composite-index-desc"></p>
                     <div class="composite-thresh-row">
                         <label class="field-label" for="composite-cmp">Keep years where index is</label>
-                        <div style="display:flex; gap:6px; align-items:center;">
-                            <select id="composite-cmp" style="flex:0 0 auto;" title="Comparison direction.">
+                        <div class="inline-row">
+                            <select id="composite-cmp" title="Comparison direction.">
                                 <option value="ge" selected>≥</option>
                                 <option value="le">≤</option>
                             </select>
@@ -200,15 +198,15 @@
                                    title="Threshold value in the index's native units (°C for ONI/RONI, m/s for QBO, standardized for most others).">
                         </div>
                     </div>
-                    <p class="field-help" style="margin-top:6px;">
+                    <p class="field-help">
                         Threshold applies to the index value in the <strong>current Month</strong>
                         (below). ONI/RONI are 3-month running means anchored to their central
                         month, so e.g. <em>January</em> corresponds to DJF.
                     </p>
-                    <label class="check" style="font-size:0.7rem; margin-top:6px;">
+                    <label class="check check-sm">
                         <input type="checkbox" id="toggle-sliding-climo" checked>
                         Best-match climo per year
-                        <span class="field-help" style="display:block; margin-left:24px; margin-top:2px; font-size:0.62rem;">
+                        <span class="check-help">
                             Each event year subtracts its closest 30-yr climatology
                             (8 windows, stepped 5 yr) instead of one fixed period.
                             Removes warming-trend bias when events span many decades.
@@ -218,7 +216,7 @@
                     <button id="composite-apply-btn" type="button" class="range-compute">
                         <span id="composite-apply-label">Apply composite</span>
                     </button>
-                    <p class="field-help" id="composite-source" style="margin-top:6px; opacity:0.7;"></p>
+                    <p class="field-help" id="composite-source"></p>
                 </div>
             </details>
         </section>
@@ -230,10 +228,10 @@
                 <button id="month-play" class="icon-btn" type="button" aria-label="play through months" title="Play through the seasonal cycle">▶</button>
                 <input id="month-slider" class="slider" type="range" min="1" max="12" step="1" value="1" aria-label="scrub month">
             </div>
-            <label class="toggle-row" style="margin-top:8px; display:flex; align-items:center; gap:8px; font-size:0.78rem; cursor:pointer;"
+            <label class="toggle-row"
                    title="Average the selected month with the months on either side. Jan → DJF, Jul → JJA, Dec → NDJ. Wraps through December.">
                 <input id="toggle-seasonal" type="checkbox">
-                <span>3-month seasonal mean <span id="seasonal-label" style="color: var(--sage); margin-left: 6px;"></span></span>
+                <span>3-month seasonal mean <span id="seasonal-label"></span></span>
             </label>
         </section>
 
@@ -247,8 +245,8 @@
                 <button type="button" data-decompose="zscore"
                         title="Standardized anomaly: (value − climo mean) ÷ climo σ. Unit-less z-score; |z| > 2 is unusual, > 3 is rare. Makes regions with different absolute variability (tropics vs midlatitudes) directly comparable.">σ-anom</button>
             </div>
-            <div id="ref-period-row" hidden style="margin-top:10px;">
-                <label class="field-label" for="ref-period-select" style="margin-bottom:4px; font-size:0.66rem;">Reference period</label>
+            <div id="ref-period-row" hidden>
+                <label class="field-label" for="ref-period-select">Reference period</label>
                 <select id="ref-period-select" title="Drives three things: in Anomaly mode → anomaly target (year-vs-climo, climate-change anomaly, or self); in ±1σ mode → Δσ (current σ minus reference σ); when Compare is on (Map view) → the period painted on the right half of the swipe.">
                     <option value="default">Self · 12-month mean</option>
                     <option value="best-match"
@@ -261,7 +259,7 @@
         </section>
 
         <section class="control-group" id="compare-group" hidden>
-            <h4>Compare <span style="color:var(--paper-dim); font-weight:400; text-transform:none; letter-spacing:0; font-size:0.7rem;">— Map view</span></h4>
+            <h4>Compare <span class="h4-note">— Map view</span></h4>
             <label class="check">
                 <input type="checkbox" id="toggle-compare">
                 Compare with...
@@ -269,7 +267,7 @@
             <!-- Compare-target sub-controls — mirror the main Climatology
                  mode toggle so users can compare two 30-year windows
                  OR two specific years (or one of each). -->
-            <div id="compare-target" style="margin-top:8px;">
+            <div id="compare-target">
                 <div class="segmented" id="compare-mode-toggle" role="tablist" aria-label="Compare target">
                     <button type="button" data-compare-mode="ref" class="active"
                             title="Compare against the Reference period chosen in the Decomposition section">Reference period</button>
@@ -278,16 +276,15 @@
                 </div>
                 <!-- Comparison style: swipe (two halves of the same map) OR
                      diff (single map showing active − reference). -->
-                <div class="segmented" id="compare-style-toggle" role="tablist" aria-label="Comparison style"
-                     style="margin-top:8px;">
+                <div class="segmented" id="compare-style-toggle" role="tablist" aria-label="Comparison style">
                     <button type="button" data-compare-style="swipe" class="active"
                             title="Split map: left = active view, right = target. Drag on the map to slide the divider.">Swipe</button>
                     <button type="button" data-compare-style="diff"
                             title="Single map showing active − target as an anomaly-style field. Good for seeing the full 2-D difference pattern at a glance without dragging the divider.">Difference</button>
                 </div>
-                <div id="compare-year-options" hidden style="margin-top:8px;">
+                <div id="compare-year-options" hidden>
                     <div class="year-row">
-                        <label class="field-label" style="margin:0; font-size:0.66rem;">Compare-against year</label>
+                        <label class="field-label">Compare-against year</label>
                         <span id="compare-year-display" class="year-display">—</span>
                     </div>
                     <input id="compare-year-slider" class="slider" type="range"
@@ -296,11 +293,11 @@
                            title="Drag to pick the year painted on the right half of the swipe.">
                 </div>
             </div>
-            <p class="field-help" style="margin-top:6px; line-height:1.45;">
+            <p class="field-help">
                 Drag anywhere on the map to slide the divider. Left half = active view, right half = the target chosen above. Toggling Compare suppresses the climate-change anomaly and Δσ transforms (the swipe IS the comparison).
             </p>
-            <div id="map-center-group" hidden style="margin-top:10px;">
-                <label class="field-label" for="map-center-slider" style="font-size:0.66rem; margin-bottom:4px;">
+            <div id="map-center-group" hidden>
+                <label class="field-label" for="map-center-slider">
                     Central meridian: <span id="map-center-value">0°</span>
                 </label>
                 <input id="map-center-slider" class="slider" type="range"
@@ -313,9 +310,9 @@
             <h4>Overlays</h4>
             <!-- Data overlays — change with what you're studying. -->
             <label class="check"><input type="checkbox" id="toggle-contours"> Contours</label>
-            <div id="contour-field-row" hidden style="margin: 4px 0 8px 24px;">
-                <label class="field-label" for="contour-field-select" style="margin: 0 0 3px 0; font-size: 0.62rem;">Overlay field</label>
-                <select id="contour-field-select" style="font-size: 0.74rem; padding: 5px 8px;"
+            <div id="contour-field-row" hidden>
+                <label class="field-label" for="contour-field-select">Overlay field</label>
+                <select id="contour-field-select" class="select-sm"
                         title="Pick a SECOND field for the contour overlay so the heatmap shades one variable while the contours track another (e.g. shade T anomaly, contour z; shade SST, contour MSLP).">
                     <option value="">Same as displayed</option>
                 </select>
@@ -331,9 +328,9 @@
             <!-- Map chrome — set-once-and-forget toggles tucked behind a
                  disclosure so the Overlays section keeps focus on the
                  data-overlay choices above. -->
-            <details class="map-chrome-details" style="margin-top:10px;">
+            <details class="map-chrome-details">
                 <summary>Map chrome</summary>
-                <div style="margin-top:8px;">
+                <div>
                     <label class="check"><input type="checkbox" id="toggle-coastlines" checked> Coastlines</label>
                     <label class="check"><input type="checkbox" id="toggle-graticule" checked> Graticule</label>
                     <label class="check"><input type="checkbox" id="toggle-sun" checked> Sun &amp; day/night</label>
@@ -356,20 +353,20 @@
         <section class="control-group">
             <details class="advanced-details" id="advanced-details">
                 <summary>Advanced <span class="composite-badge">expert</span></summary>
-                <div id="parcels-section" style="margin-top:10px;">
-                    <h4 style="margin-top:0;">Parcels</h4>
+                <div id="parcels-section">
+                    <h4>Parcels</h4>
                     <p class="field-help">
                         <span class="xs-kbd">⌥</span> + click globe to release parcels at 200 hPa.
                         They follow the monthly-mean 3-D wind.
                     </p>
-                    <button type="button" class="xs-reset" id="parcels-clear" style="width:100%">Clear all parcels</button>
+                    <button type="button" class="xs-reset btn-block" id="parcels-clear">Clear all parcels</button>
                 </div>
             </details>
         </section>
 
         <section class="control-group">
             <h4>Share</h4>
-            <button type="button" class="xs-reset" id="export-gif" style="width:100%">Export image / GIF…</button>
+            <button type="button" class="xs-reset btn-block" id="export-gif">Export image / GIF…</button>
         </section>
 
         <div class="sidebar-footer" id="sidebar-status">
@@ -377,9 +374,9 @@
             Fetching the ERA5 tile for this field.
         </div>
 
-        <div class="sidebar-footer" style="margin-top:0; border-top:1px solid var(--border); padding-top:14px; font-size:0.72rem; line-height:1.55;">
+        <div class="sidebar-footer sidebar-attribution">
             <strong>Data attribution</strong>
-            Contains modified Copernicus Climate Change Service information (2026). Built on ERA5 monthly-mean reanalysis (Hersbach et al., 2020, <em>QJRMS</em> 146, 1999–2049, <a href="https://doi.org/10.1002/qj.3803" target="_blank" rel="noopener" style="color:var(--emerald-bright); text-decoration:none;">doi:10.1002/qj.3803</a>). Neither the European Commission nor ECMWF is responsible for any use of this information.
+            Contains modified Copernicus Climate Change Service information (2026). Built on ERA5 monthly-mean reanalysis (Hersbach et al., 2020, <em>QJRMS</em> 146, 1999–2049, <a href="https://doi.org/10.1002/qj.3803" target="_blank" rel="noopener">doi:10.1002/qj.3803</a>). Neither the European Commission nor ECMWF is responsible for any use of this information.
         </div>
     </aside>
 
@@ -416,7 +413,7 @@
             <button id="save-view-btn" class="share-btn" type="button"
                     title="Save this view as a PNG or GIF">
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                     stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;">
+                     stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                     <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
                     <polyline points="7 10 12 15 17 10"/>
                     <line x1="12" y1="15" x2="12" y2="3"/>
@@ -426,7 +423,7 @@
             <button id="share-link-btn" class="share-btn" type="button"
                     title="Copy a URL that reproduces this exact view (field, year, month, level, compare state, …)">
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                     stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;">
+                     stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                     <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
                     <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
                 </svg>
@@ -442,8 +439,7 @@
                     <summary class="cb-cmap-btn" title="Change colormap"
                              aria-label="Change colormap">⋯</summary>
                     <div class="cb-cmap-pop">
-                        <label class="field-label" for="cmap-select"
-                               style="margin-bottom:4px;">Colormap</label>
+                        <label class="field-label" for="cmap-select">Colormap</label>
                         <select id="cmap-select"></select>
                     </div>
                 </details>
@@ -465,7 +461,7 @@
         <div class="lorenz" id="lorenz-panel" hidden>
             <div class="xs-header">
                 <span id="lorenz-title">Lorenz energy cycle · stationary eddies</span>
-                <span style="display:flex; gap:6px; align-items:center;">
+                <span class="xs-actions">
                     <button class="lz-info-btn" id="lorenz-info-btn" aria-label="About this diagnostic" title="About this diagnostic">i</button>
                     <button class="xs-close" id="lorenz-close" aria-label="Close panel">&times;</button>
                 </span>
@@ -558,13 +554,13 @@ C(P_M→K_M) = -(R/g) ∫ ⟨[ω]″[T]″⟩ / p dp
                     <rect x="230" y="30"  width="100" height="60" rx="8" class="lz-box"/>
                     <rect x="30"  y="170" width="100" height="60" rx="8" class="lz-box"/>
                     <rect x="230" y="170" width="100" height="60" rx="8" class="lz-box"/>
-                    <text x="80"  y="48" text-anchor="middle" class="lz-name">P_M</text>
+                    <text x="80"  y="48" text-anchor="middle" class="lz-name">P<tspan class="lz-sub" dy="4">M</tspan></text>
                     <text x="80"  y="74" text-anchor="middle" class="lz-val" id="lz-PM">—</text>
-                    <text x="280" y="48" text-anchor="middle" class="lz-name">P_E</text>
+                    <text x="280" y="48" text-anchor="middle" class="lz-name">P<tspan class="lz-sub" dy="4">E</tspan></text>
                     <text x="280" y="74" text-anchor="middle" class="lz-val" id="lz-PE">—</text>
-                    <text x="80"  y="188" text-anchor="middle" class="lz-name">K_M</text>
+                    <text x="80"  y="188" text-anchor="middle" class="lz-name">K<tspan class="lz-sub" dy="4">M</tspan></text>
                     <text x="80"  y="214" text-anchor="middle" class="lz-val" id="lz-KM">—</text>
-                    <text x="280" y="188" text-anchor="middle" class="lz-name">K_E</text>
+                    <text x="280" y="188" text-anchor="middle" class="lz-name">K<tspan class="lz-sub" dy="4">E</tspan></text>
                     <text x="280" y="214" text-anchor="middle" class="lz-val" id="lz-KE">—</text>
                 </g>
                 <!-- arrows: P_M→P_E, P_E→K_E, K_E→K_M, P_M→K_M -->
@@ -593,7 +589,7 @@ C(P_M→K_M) = -(R/g) ∫ ⟨[ω]″[T]″⟩ / p dp
         <div class="xsection" id="xsection-panel" hidden>
             <div class="xs-header">
                 <span id="xs-title">Zonal-mean cross-section</span>
-                <span style="display:flex; gap:6px; align-items:center;">
+                <span class="xs-actions">
                     <button class="lz-info-btn" id="xs-info-btn" aria-label="About this diagnostic" title="About this diagnostic" hidden>i</button>
                     <button class="xs-expand" id="xs-expand" aria-label="Expand panel" title="Expand to fullscreen">⛶</button>
                     <button class="xs-close"  id="xs-close"  aria-label="Close panel">&times;</button>
@@ -776,8 +772,7 @@ transient  = atmosphere − MMC − stationary      (s = c_pT + gz + L_v q)</pre
             <div class="xs-footer">
                 <span id="xs-hint"><span class="xs-kbd">⇧</span> + drag globe to draw an arc</span>
                 <button class="xs-reset" id="xs-reset-mid" type="button" hidden
-                        title="Unpin the midpoint and revert the arc to a straight great-circle / linear path"
-                        style="margin-right:6px;">Unpin midpoint</button>
+                        title="Unpin the midpoint and revert the arc to a straight great-circle / linear path">Unpin midpoint</button>
                 <button class="xs-reset" id="xs-reset" type="button" hidden>Reset to zonal mean</button>
             </div>
         </div>
@@ -786,18 +781,17 @@ transient  = atmosphere − MMC − stationary      (s = c_pT + gz + L_v q)</pre
         <div class="xsection timeseries" id="timeseries-panel" hidden>
             <div class="xs-header">
                 <span id="ts-title">Area-mean time series</span>
-                <span style="display:flex; gap:6px; align-items:center;">
+                <span class="xs-actions">
                     <button class="xs-reset" id="ts-pick-btn" type="button"
-                            style="padding:4px 10px; margin:0; width:auto; font-size:0.68rem;"
                             title="Click, then drag a rectangle on the Map view to define the area.">Pick region</button>
                     <button class="xs-expand" id="ts-download-btn" type="button"
                             aria-label="Download CSV" title="Download the time series as CSV">⬇</button>
                     <button class="xs-close"  id="ts-close" aria-label="Close panel">&times;</button>
                 </span>
             </div>
-            <div style="display:flex; gap:8px; align-items:center; margin-bottom:6px;">
-                <span id="ts-region-label" class="xs-kbd" style="font-size:0.66rem; letter-spacing:0.03em;">no region selected</span>
-                <div class="segmented" id="ts-mode-toggle" style="margin-left:auto; font-size:0.62rem;" role="tablist" aria-label="Series mode">
+            <div class="ts-head-row">
+                <span id="ts-region-label" class="xs-kbd">no region selected</span>
+                <div class="segmented" id="ts-mode-toggle" role="tablist" aria-label="Series mode">
                     <button type="button" data-ts-mode="total" class="active">Total</button>
                     <button type="button" data-ts-mode="anomaly" title="Subtract the same-month 30-year climatology from each month">Anomaly</button>
                 </div>
@@ -810,13 +804,13 @@ transient  = atmosphere − MMC − stationary      (s = c_pT + gz + L_v q)</pre
                 <input id="ts-lat1" type="number" class="range-input ts-bounds-input" step="1" aria-label="min latitude">
                 <span class="ts-bounds-sep">→</span>
                 <input id="ts-lat2" type="number" class="range-input ts-bounds-input" step="1" aria-label="max latitude">
-                <span class="ts-bounds-label" style="margin-left:6px;">lon</span>
+                <span class="ts-bounds-label">lon</span>
                 <input id="ts-lon1" type="number" class="range-input ts-bounds-input" step="1" aria-label="west longitude">
                 <span class="ts-bounds-sep">→</span>
                 <input id="ts-lon2" type="number" class="range-input ts-bounds-input" step="1" aria-label="east longitude">
                 <button id="ts-bounds-apply" type="button" class="xs-reset ts-bounds-apply">Apply</button>
             </div>
-            <div style="position:relative;">
+            <div class="ts-chart">
                 <canvas id="ts-canvas" width="520" height="230"></canvas>
                 <div class="ts-loading-overlay hidden" id="ts-loading">
                     <div class="ts-loading-spin"></div>
@@ -824,9 +818,9 @@ transient  = atmosphere − MMC − stationary      (s = c_pT + gz + L_v q)</pre
                     <div class="ts-loading-bar"><div class="ts-loading-fill" id="ts-loading-fill" style="width:0%"></div></div>
                 </div>
             </div>
-            <div class="xs-footer" style="margin-top:6px;">
+            <div class="xs-footer">
                 <span id="ts-hint">Click <b>Pick region</b>, then drag on the Map view to set bounds.</span>
-                <span id="ts-stats" style="margin-left:auto;"></span>
+                <span id="ts-stats"></span>
             </div>
         </div>
     </section>
