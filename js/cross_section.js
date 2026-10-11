@@ -157,7 +157,9 @@ export function samplePanel(zm, fracX, fracY) {
             const pMax = zm.levels[zm.levels.length - 1];
             const p = pMin * Math.exp(fracY * Math.log(pMax / pMin));
             const value = sampleZonalPL(zm, lat, p);
-            return { lat, p, value, ground: !Number.isFinite(value) && onGround(zm, lat, p) };
+            const blank = !Number.isFinite(value);
+            return { lat, p, value, ground: blank && onGround(zm, lat, p),
+                     edge: blank && onGround(zm, lat, p, zm.edge) };
         }
         return { lat, value: sampleZonalSL(zm, lat) };
     }
@@ -209,11 +211,12 @@ function sampleZonalPL(zm, lat, p) {
 }
 
 /** Does the (lat, p) point of a zonal diagnostic touch a cell that is
- *  blank as ground (zm.ground, air_mask.js)? The heatmap hatches it. */
-function onGround(zm, lat, p) {
-    if (!zm.ground) return false;
+ *  blank as ground (zm.ground, air_mask.js), or with `mask` = zm.edge as
+ *  the top of the grid (EP flux)? The heatmap hatches it. */
+function onGround(zm, lat, p, mask = zm.ground) {
+    if (!mask) return false;
     const { nlat } = GRID;
-    const { levels, ground } = zm;
+    const { levels } = zm;
     const rLat = 90 - lat;
     if (rLat < 0 || rLat > nlat - 1) return false;
     const i0 = Math.max(0, Math.min(nlat - 1, Math.floor(rLat)));
@@ -221,8 +224,8 @@ function onGround(zm, lat, p) {
     let k0 = 0;
     while (k0 < levels.length - 1 && levels[k0 + 1] < p) k0++;
     const k1 = Math.min(levels.length - 1, k0 + 1);
-    return !!(ground[k0 * nlat + i0] || ground[k0 * nlat + i1]
-            || ground[k1 * nlat + i0] || ground[k1 * nlat + i1]);
+    return !!(mask[k0 * nlat + i0] || mask[k0 * nlat + i1]
+            || mask[k1 * nlat + i0] || mask[k1 * nlat + i1]);
 }
 
 /** Every curve of a multi-series zonal line plot at `lat` — for the hover
@@ -725,8 +728,11 @@ function drawHeatmap(ctx, x0, y0, w, h, zm, cmap) {
     const interval = zm.contourInterval || 0;
     // Diagnostics mark the cells that are underground (air_mask.js) in
     // zm.ground; blank pixels touching one get a diagonal hatch, the rest of
-    // the missing data (the poles, …) the plain dark fill.
+    // the missing data (the poles, …) the plain dark fill. zm.edge marks a
+    // row left out as the top of the grid (EP flux at 10 hPa), hatched
+    // along the other diagonal.
     const ground = zm.ground || null;
+    const edge = zm.edge || null;
     const dpr = zm._dpr || 1;
     const hatchPeriod = Math.max(4, Math.round(6 * dpr));
     const hatchWidth  = Math.max(1, Math.round(1.25 * dpr));
@@ -767,7 +773,10 @@ function drawHeatmap(ctx, x0, y0, w, h, zm, cmap) {
             if (!Number.isFinite(v)) {
                 const isGround = ground && (ground[k0 * nlat + i0] || ground[k0 * nlat + i1]
                                          || ground[k1 * nlat + i0] || ground[k1 * nlat + i1]);
-                if (isGround && (px + py) % hatchPeriod < hatchWidth) {
+                const isEdge = !isGround && edge && (edge[k0 * nlat + i0] || edge[k0 * nlat + i1]
+                                         || edge[k1 * nlat + i0] || edge[k1 * nlat + i1]);
+                if ((isGround && (px + py) % hatchPeriod < hatchWidth)
+                    || (isEdge && (px + ih - py) % hatchPeriod < hatchWidth)) {
                     data[k] = 66; data[k+1] = 84; data[k+2] = 74; data[k+3] = 255;
                 } else {
                     data[k] = 18; data[k+1] = 26; data[k+2] = 22; data[k+3] = 255;
@@ -946,7 +955,9 @@ function niceTicks(vmin, vmax, n = 5) {
 /**
  * Edmon–Hoskins–McIntyre arrows on the (lat, log-p) panel. zm.arrows holds
  * pre-balanced (dx, dy) so visual length is proportional in (φ, log p) space.
- * We rescale so the longest arrow occupies ~LONG_FRAC of the panel width.
+ * We rescale so the longest arrow occupies ~LONG_FRAC of the panel width —
+ * the longest of the panel's interior when ep_flux.js gives it (maxLen), in
+ * which case longer arrows (near the ground, at the top) saturate there.
  */
 function drawEPArrows(ctx, x0, y0, w, h, zm) {
     const dpr = zm._dpr || 1;
@@ -955,10 +966,12 @@ function drawEPArrows(ctx, x0, y0, w, h, zm) {
     const logSpan = Math.log(pMax / pMin);
     const LONG_FRAC = 0.14;     // longest arrow ≈ 14% of plot width
 
-    let maxLen = 0;
-    for (let i = 0; i < arrows.dx.length; i++) {
-        const m = Math.hypot(arrows.dx[i], arrows.dy[i]);
-        if (m > maxLen) maxLen = m;
+    let maxLen = arrows.maxLen || 0;
+    if (!(maxLen > 0)) {
+        for (let i = 0; i < arrows.dx.length; i++) {
+            const m = Math.hypot(arrows.dx[i], arrows.dy[i]);
+            if (m > maxLen) maxLen = m;
+        }
     }
     if (maxLen === 0) return;
     const targetPx = LONG_FRAC * w;
@@ -992,9 +1005,11 @@ function drawEPArrows(ctx, x0, y0, w, h, zm) {
     for (let i = 0; i < arrows.lats.length; i++) {
         const lat = arrows.lats[i];
         const p   = arrows.pressures[i];
-        const dx  = arrows.dx[i] * scale;
-        const dy  = arrows.dy[i] * scale;
-        if (Math.hypot(dx, dy) < dustThresh) continue;
+        let dx  = arrows.dx[i] * scale;
+        let dy  = arrows.dy[i] * scale;
+        const len = Math.hypot(dx, dy);
+        if (len < dustThresh) continue;
+        if (len > targetPx) { dx *= targetPx / len; dy *= targetPx / len; }
         const x  = x0 + ((lat + 90) / 180) * w;
         const y  = y0 + h * (Math.log(p / pMin) / logSpan);
         const x2 = x + dx;

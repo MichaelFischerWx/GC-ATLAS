@@ -26,9 +26,17 @@
 // one. Column views weight each level by the air it holds, down to the
 // surface: ∫dp/g is the zonal mean of the column integrals, and the column
 // mean divides by [p_s], not 1000 hPa.
+//
+// Levels: LEVELS, plus 400 and 600 hPa where the tree has them
+// (diag_source.js sourceLevels). ∂/∂p stays a centred difference in p: in
+// ln p it came no closer to the same budget on all 37 ERA5 levels, the extra
+// levels did (January 2-D total, rms error at 300 / 500 hPa: 3.7 / 2.1 → 1.5 /
+// 0.7 m s⁻¹ day⁻¹; ∫dp/g total 0.12 → 0.07 N/m²). The flux-form mean terms
+// nearly cancel, so the 2-D total stays a small residual: on 14 levels its
+// January error at 250–700 hPa is still 40–90 % of its own rms.
 
-import { sourceMonth } from './diag_source.js';
-import { LEVELS, GRID } from './data.js';
+import { sourceMonth, sourceLevels } from './diag_source.js';
+import { GRID } from './data.js';
 import { airZonalMean, airZonalCov, airLayers, columnSum, columnMass,
          ddy, ddp, smoothLat, smoothLev, groundCells } from './air_mask.js';
 
@@ -59,13 +67,15 @@ function zonalMean(tile, nlat, nlon) {
  */
 function computeMBudgetTerms(month, seasonal = false, srcSlice = null) {
     const { nlat } = GRID;
-    const N = LEVELS.length;
+    // LEVELS, plus 400 and 600 hPa where the tree has them (diag_source.js).
+    const P = sourceLevels([srcSlice], ['u', 'v', 'w']);
+    const N = P.length;
 
     const U = [], V = [], W = [];
     for (let k = 0; k < N; k++) {
-        const u = sourceMonth('u', month, LEVELS[k], srcSlice, seasonal);
-        const v = sourceMonth('v', month, LEVELS[k], srcSlice, seasonal);
-        const w = sourceMonth('w', month, LEVELS[k], srcSlice, seasonal);
+        const u = sourceMonth('u', month, P[k], srcSlice, seasonal);
+        const v = sourceMonth('v', month, P[k], srcSlice, seasonal);
+        const w = sourceMonth('w', month, P[k], srcSlice, seasonal);
         if (!u || !v || !w) return null;
         U.push(u); V.push(v); W.push(w);
     }
@@ -84,7 +94,7 @@ function computeMBudgetTerms(month, seasonal = false, srcSlice = null) {
     const fluxUV = new Float32Array(N * nlat);
     const fluxUW = new Float32Array(N * nlat);
     for (let k = 0; k < N; k++) {
-        const p = LEVELS[k];
+        const p = P[k];
         const ub = airZonalMean(U[k], SP, p);
         const vb = airZonalMean(V[k], SP, p);
         const wb = airZonalMean(W[k], SP, p);
@@ -123,7 +133,7 @@ function computeMBudgetTerms(month, seasonal = false, srcSlice = null) {
             meanY[idx] = -ddy(fluxVM, k, i) / c;
 
             // Mean vertical: -∂([ω][M])/∂p
-            meanP[idx] = -ddp(fluxWM, k, i);
+            meanP[idx] = -ddp(fluxWM, k, i, P);
 
             // Eddy meridional: -(1/(a cosφ))·∂([v*M*] cosφ)/∂φ
             //   With M* = a·cosφ·u*, [v*M*] cosφ = a·cos²φ·[v*u*].
@@ -131,7 +141,7 @@ function computeMBudgetTerms(month, seasonal = false, srcSlice = null) {
             eddyY[idx] = -A_EARTH * ddy(fluxUV, k, i) / c;
 
             // Eddy vertical: -∂([ω*M*])/∂p = -a·cosφ·∂[ω*u*]/∂p
-            eddyP[idx] = -A_EARTH * c * ddp(fluxUW, k, i);
+            eddyP[idx] = -A_EARTH * c * ddp(fluxUW, k, i, P);
         }
     }
 
@@ -169,8 +179,8 @@ function computeMBudgetTerms(month, seasonal = false, srcSlice = null) {
     smoothLev(total,  N, nlat);
     smoothLev(torque, N, nlat);
 
-    return { meanY, meanP, eddyY, eddyP, total, torque, N, nlat, cosphi,
-             layers: airLayers(SP), ground: groundCells(SP),
+    return { meanY, meanP, eddyY, eddyP, total, torque, N, nlat, cosphi, levels: P,
+             layers: airLayers(SP, P), ground: groundCells(SP, P),
              _month: month, _seasonal: seasonal, _source: srcSlice };
 }
 
@@ -549,7 +559,7 @@ export function buildMBudgetView(month, opts = {}) {
         values: out,
         vmin: -absMax,
         vmax:  absMax,
-        levels: LEVELS.slice(),
+        levels: t.levels.slice(),
         ground: t.ground,
         name: nameLabel,
         units: unitsLabel,

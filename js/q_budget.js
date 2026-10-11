@@ -30,8 +30,8 @@
 // column moisture transports; the vertical terms integrate to zero; the
 // column mean divides by [p_s]/g.
 
-import { sourceMonth } from './diag_source.js';
-import { LEVELS, GRID } from './data.js';
+import { sourceMonth, sourceLevels } from './diag_source.js';
+import { GRID } from './data.js';
 import { tracerBudget, profileAbsMax } from './tracer_budget.js';
 
 const DAY_SEC = 86400;
@@ -58,13 +58,15 @@ function zonalMean(tile, nlat, nlon) {
 
 function computeQBudgetTerms(month, seasonal = false, srcSlice = null) {
     const { nlat } = GRID;
-    const N = LEVELS.length;
+    // LEVELS, plus 400 and 600 hPa where the tree has them (diag_source.js).
+    const P = sourceLevels([srcSlice], ['v', 'w', 'q']);
+    const N = P.length;
 
     const V = [], W = [], Q = [];
     for (let k = 0; k < N; k++) {
-        const v = sourceMonth('v', month, LEVELS[k], srcSlice, seasonal);
-        const w = sourceMonth('w', month, LEVELS[k], srcSlice, seasonal);
-        const q = sourceMonth('q', month, LEVELS[k], srcSlice, seasonal);
+        const v = sourceMonth('v', month, P[k], srcSlice, seasonal);
+        const w = sourceMonth('w', month, P[k], srcSlice, seasonal);
+        const q = sourceMonth('q', month, P[k], srcSlice, seasonal);
         if (!v || !w || !q) return null;
         V.push(v); W.push(w);
         // Convert q from g/kg → kg/kg in-place into a temp tile.
@@ -79,7 +81,7 @@ function computeQBudgetTerms(month, seasonal = false, srcSlice = null) {
 
     // Per unit mass (kg/kg/s) and, in `col`, ∫dp/g over the air (kg/m²/s);
     // implied source (E − P) = −total.
-    return { ...tracerBudget(V, W, Q, SP), N, nlat,
+    return { ...tracerBudget(V, W, Q, SP, P), N, nlat, levels: P,
              _month: month, _seasonal: seasonal, _source: srcSlice };
 }
 
@@ -206,7 +208,7 @@ export function buildQBudgetView(month, opts = {}) {
     return {
         kind: 'zonal', type: 'pl',
         values: out, vmin: -absMax, vmax: absMax,
-        levels: LEVELS.slice(),
+        levels: t.levels.slice(),
         ground: t.ground,
         name: nameLabel,
         units: unitsLabel,

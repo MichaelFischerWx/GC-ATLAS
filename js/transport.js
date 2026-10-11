@@ -43,7 +43,7 @@
 
 import { cachedMonth, getManifest, getActivePeriod, activePeriodLabel, windowSlots } from './era5.js';
 import { LEVELS, GRID } from './data.js';
-import { sourceMonth, sourceKey, sourceWindow } from './diag_source.js';
+import { sourceMonth, sourceKey, sourceWindow, sourceLevels } from './diag_source.js';
 
 const A_EARTH = 6.371e6;
 const G       = 9.80665;
@@ -60,18 +60,20 @@ const KT_PER_M_S  = 1e3;           // viman:  kg m⁻¹ s⁻¹ → displayed in 
 const HPA         = 100;           // sp: Pa → hPa
 const Q_TO_SI     = 1e-3;          // q: kg/kg → g/kg
 
-/** Tiles the transport panel reads. sp + tcwv are also needed one month
- *  either side (climatology) for the mass and moisture storage tendencies. */
+/** Tiles the transport panel reads (pressure-level fields also at 400 and
+ *  600 hPa where the tree has them, as the Q/H budgets). sp + tcwv are also
+ *  needed one month either side (climatology) for the mass and moisture
+ *  storage tendencies. */
 export const TRANSPORT_INGREDIENTS = {
     pl: ['v', 't', 'z', 'q'],
     sl: ['tsr', 'ttr', 'vitoen', 'viman', 'viwvn', 'sp', 'tcwv', 'slhf', 'tp'],
+    extraLevels: true,
 };
 // Single-level tiles that only exist once the energy-transport pipeline has
 // run for a tree (configs/era5_variables.yaml, 2026-10).
 const NEW_SL = ['tsr', 'vitoen', 'viman', 'viwvn'];
 
 const { nlat: NLAT, nlon: NLON } = GRID;
-const NLEV = LEVELS.length;
 const DLAM = 2 * Math.PI / NLON;
 
 // Latitude-circle geometry. Row i is the point latitude 90 − i; its grid box
@@ -88,8 +90,6 @@ for (let i = 0; i < NLAT; i++) {
     CELL[i]   = A_EARTH * A_EARTH * DLAM * (Math.sin(n) - Math.sin(s));
     CELL_S[i] = A_EARTH * A_EARTH * DLAM * (Math.sin(lat * D2R) - Math.sin(s));
 }
-// Pressure-layer edges between the levels (hPa).
-const HALF = LEVELS.slice(0, -1).map((p, k) => 0.5 * (p + LEVELS[k + 1]));
 
 /** NaN-safe Σ_j of row i (missing points filled with the row mean). */
 function rowSum(tile, i) {
@@ -139,11 +139,14 @@ function rowsOf(tile, f = null) {
  *  column fluxes ∮∫ v·s dp/g and ∮∫ v·q dp/g, their mean-meridional parts,
  *  the net mass flux, and the cross-section means Ē and q̄.
  *
- *  Vertical quadrature: level k stands for the layer between the midpoints
- *  to its neighbours. Levels below the surface get no weight and the lowest
- *  level above it reaches down to p_s, so every column holds exactly p_s/g
- *  of air (ERA5 extrapolates below ground — those values never enter). */
-function pressureLevelFluxes(V, T, Z, Q, SP) {
+ *  Vertical quadrature: level k of `levels` (hPa) stands for the layer
+ *  between the midpoints to its neighbours. Levels below the surface get no
+ *  weight and the lowest level above it reaches down to p_s, so every column
+ *  holds exactly p_s/g of air (ERA5 extrapolates below ground — those values
+ *  never enter). */
+function pressureLevelFluxes(V, T, Z, Q, SP, levels) {
+    const NLEV = levels.length;
+    const HALF = levels.slice(0, -1).map((p, k) => 0.5 * (p + levels[k + 1]));   // layer edges
     const resS = new Float64Array(NLAT), resQ = new Float64Array(NLAT);
     const mmcS = new Float64Array(NLAT), mmcQ = new Float64Array(NLAT);
     const mRes = new Float64Array(NLAT);
@@ -157,9 +160,9 @@ function pressureLevelFluxes(V, T, Z, Q, SP) {
         for (let j = 0; j < NLON; j++) {
             const idx = off + j;
             const ps = SP[idx];                       // hPa
-            if (!(ps > LEVELS[0])) continue;
+            if (!(ps > levels[0])) continue;
             let kb = 0;
-            while (kb + 1 < NLEV && LEVELS[kb + 1] <= ps) kb++;
+            while (kb + 1 < NLEV && levels[kb + 1] <= ps) kb++;
             for (let k = 0; k <= kb; k++) {
                 const v = V[k][idx], t = T[k][idx], z = Z[k][idx], qg = Q[k][idx];
                 if (!Number.isFinite(v) || !Number.isFinite(t)
@@ -214,8 +217,11 @@ const climoMonth = (name, month) => cachedMonth(name, month);
 /** All transport terms for one month of `get(name, month, level)`, in W and
  *  kg s⁻¹ per latitude row, or null while a tile is missing. The storage
  *  tendencies come from `climo(name, month)` (the active climatology): the
- *  seasonal cycle, also when `get` reads a single year or a composite. */
-export function computeMonthTransport(month, get, climo = climoMonth) {
+ *  seasonal cycle, also when `get` reads a single year or a composite.
+ *  `levels` (hPa): the pressure levels of the resolved fluxes — the Q/H
+ *  budgets' (diag_source.js sourceLevels), so their column convergences
+ *  are this panel's MMC and stationary eddies. */
+export function computeMonthTransport(month, get, climo = climoMonth, levels = LEVELS) {
     const sl = {};
     for (const n of TRANSPORT_INGREDIENTS.sl) {
         if (n === 'tcwv') continue;                 // climatology only (tendencies)
@@ -223,7 +229,7 @@ export function computeMonthTransport(month, get, climo = climoMonth) {
         if (!sl[n]) return null;
     }
     const V = [], T = [], Z = [], Q = [];
-    for (const L of LEVELS) {
+    for (const L of levels) {
         const v = get('v', month, L), t = get('t', month, L);
         const z = get('z', month, L), q = get('q', month, L);
         if (!v || !t || !z || !q) return null;
@@ -252,7 +258,7 @@ export function computeMonthTransport(month, get, climo = climoMonth) {
     const fRaw = zonalIntegral(sl.vitoen, GW_PER_M);
     const mRaw = zonalIntegral(sl.viman, KT_PER_M_S);
     const wRaw = zonalIntegral(sl.viwvn);
-    const pl = pressureLevelFluxes(V, T, Z, Q, sl.sp);
+    const pl = pressureLevelFluxes(V, T, Z, Q, sl.sp, levels);
 
     const n = () => new Float64Array(NLAT);
     const e = { total: toa.transport, atmos: n(), atmosRaw: fRaw, ocean: n(),
@@ -294,7 +300,8 @@ const _monthCache = new Map();   // `${period}|${source}|${month}` → terms
 function monthTerms(month, src) {
     const key = `${getActivePeriod()}|${sourceKey(src)}|${month}`;
     if (_monthCache.has(key)) return _monthCache.get(key);
-    const r = computeMonthTransport(month, (name, mo, level) => sourceMonth(name, mo, level, src));
+    const r = computeMonthTransport(month, (name, mo, level) => sourceMonth(name, mo, level, src),
+        climoMonth, sourceLevels([src], TRANSPORT_INGREDIENTS.pl));
     if (r) _monthCache.set(key, r);
     return r;
 }

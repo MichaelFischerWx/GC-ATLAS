@@ -62,12 +62,22 @@
 // of the circle, normalised by the whole sphere, so ∫ dp/g stays a mass
 // integral over the air that's there.
 //
+// Levels. LEVELS, plus 400 and 600 hPa where the tree has them
+// (diag_source.js sourceLevels: the 1991–2020 climatology). Checked against
+// the same cycle on all 37 ERA5 levels (10–1000 hPa, NCAR GDEX d633001):
+// the extra levels help, differences in ln p (for γ and the vertical terms)
+// don't. January, 12 → 14 levels: C(P_M → K_M) −0.020 → −0.037 W/m² (37
+// levels: −0.049; the 500–700 hPa layer held most of the miss), P_M 3.69 →
+// 3.66 MJ/m² (3.62); July C(P_M → P_E) 0.22 → 0.20 (0.18). The slab reference
+// puts T_ref at 300 hPa 2.8 K too cold on 12 levels (its slab runs 275–400
+// hPa), 1.0 K on 14.
+//
 // Stationary-eddy only — transient terms (covariances of high-frequency
 // departures from the monthly mean) require daily data and are out of scope.
 // Returns SI numbers; caller renders them in a schematic.
 
-import { sourceMonth } from './diag_source.js';
-import { LEVELS, GRID } from './data.js';
+import { sourceMonth, sourceLevels } from './diag_source.js';
+import { GRID } from './data.js';
 
 const R_DRY = 287.04;
 const CP    = 1004;
@@ -77,20 +87,20 @@ const A_E   = 6.371e6;
 const D2R   = Math.PI / 180;
 
 /** Tiles the panel reads for the globe's time slice: u, v, ω, T on every
- *  level, plus the surface pressure that says which of them are underground. */
-export const LORENZ_INGREDIENTS = { pl: ['u', 'v', 'w', 't'], sl: ['sp'] };
+ *  level (LEVELS, plus 400 and 600 hPa where the tree has them:
+ *  diag_source.js sourceLevels), plus the surface pressure that says which
+ *  of them are underground. */
+export const LORENZ_INGREDIENTS = { pl: ['u', 'v', 'w', 't'], sl: ['sp'], extraLevels: true };
 
-function nlev() { return LEVELS.length; }
-
-/** Layer edges (hPa): level k stands for [edges[k], edges[k + 1]], half-way
- *  to its neighbours, from 10 hPa at the top to 1000 hPa — the layers the
- *  trapezoidal ∫dp gives each level. */
-function layerEdges() {
-    const N = nlev();
+/** Layer edges (hPa) of levels P: level k stands for [edges[k], edges[k + 1]],
+ *  half-way to its neighbours, from 10 hPa at the top to 1000 hPa — the
+ *  layers the trapezoidal ∫dp gives each level. */
+function layerEdges(P) {
+    const N = P.length;
     const edges = new Float64Array(N + 1);
-    edges[0] = LEVELS[0];
-    for (let k = 1; k < N; k++) edges[k] = (LEVELS[k - 1] + LEVELS[k]) / 2;
-    edges[N] = LEVELS[N - 1];
+    edges[0] = P[0];
+    for (let k = 1; k < N; k++) edges[k] = (P[k - 1] + P[k]) / 2;
+    edges[N] = P[N - 1];
     return edges;
 }
 
@@ -111,12 +121,12 @@ function layerEdges() {
  *      layer's thickness (drop constant dλ, dφ, a², 1/g — we only need ratios).
  *   2. Sort descending by θ.
  *   3. Level k stands for the slab [edges[k], edges[k + 1]] of the sorted
- *      column (cut at its bottom). θ_r(LEVELS[k]) is the mass-weighted mean θ
+ *      column (cut at its bottom). θ_r(P[k]) is the mass-weighted mean θ
  *      of that slab.
- *   4. Convert θ_r → T_r via T_r = θ_r · (LEVELS[k]/1000)^κ.
+ *   4. Convert θ_r → T_r via T_r = θ_r · (P[k]/1000)^κ.
  *
  * Step 3 used to take θ of the single parcel at cumulative mass
- * (LEVELS[k] / 1000 hPa) × total. At 1000 hPa that's the coldest parcel on
+ * (P[k] / 1000 hPa) × total. At 1000 hPa that's the coldest parcel on
  * the globe: Jan 233.5 K (the Yakutian cold pool), Jul 239 K (an
  * extrapolation 300 hPa under the Antarctic plateau). That gave γp/T = 1.3
  * at 925 hPa and 2.7 at 1000 hPa, so the lowest layer contributed almost
@@ -126,13 +136,13 @@ function layerEdges() {
  * pools there in the minimum-PE state. That's the reference state, not the
  * grid: the sorted column itself, differenced over 900–950 hPa, gives 0.58.
  *
- * `tiles` holds the T tile at each LEVELS[k] and `sp` the surface pressure
+ * `tiles` holds the T tile at each level P[k] and `sp` the surface pressure
  * (hPa), both already loaded by the caller.
  */
-function lorenzReferenceState(tiles, sp) {
+function lorenzReferenceState(tiles, sp, P) {
     const { nlat, nlon } = GRID;
-    const N = nlev();
-    const edges = layerEdges();
+    const N = P.length;
+    const edges = layerEdges(P);
 
     // Build flat (θ, w) arrays. cosφ < 1e-3 (poles) skipped — they carry no
     // mass anyway. Rough size: 12 levels × 181 lats × 360 lons ≈ 780k entries
@@ -149,8 +159,8 @@ function lorenzReferenceState(tiles, sp) {
     // pressure ps: 0 underground; the deepest level above the surface reaches
     // down to it. A missing p_s keeps the full 10–1000 hPa column.
     const thickness = (k, ps) => {
-        if (LEVELS[k] > ps) return 0;
-        const deeper = k + 1 < N && !(LEVELS[k + 1] > ps);
+        if (P[k] > ps) return 0;
+        const deeper = k + 1 < N && !(P[k + 1] > ps);
         const bottom = deeper || !Number.isFinite(ps) ? edges[k + 1] : ps;
         return bottom - edges[k];
     };
@@ -175,7 +185,7 @@ function lorenzReferenceState(tiles, sp) {
     let totalW = 0;
     for (let k = 0; k < N; k++) {
         const tile = tiles[k];
-        const thetaFactor = Math.pow(1000 / LEVELS[k], KAPPA);
+        const thetaFactor = Math.pow(1000 / P[k], KAPPA);
         for (let i = 0; i < nlat; i++) {
             const c = cosArr[i];
             if (c < 1e-3) continue;
@@ -224,7 +234,7 @@ function lorenzReferenceState(tiles, sp) {
         // An empty slab (a level below the column's bottom) can't happen for
         // a global mean p_s of ~986 hPa; fall back to the bottom parcel.
         const theta_r = sW > 0 ? sTheta / sW : thetas[order[nValid - 1]];
-        Tref[k] = theta_r * Math.pow(LEVELS[k] / 1000, KAPPA);
+        Tref[k] = theta_r * Math.pow(P[k] / 1000, KAPPA);
     }
     return Tref;
 }
@@ -246,14 +256,15 @@ function areaMean(values, nlat, nlon) {
     return w > 0 ? s / w : NaN;
 }
 
-/** Trapezoidal integral of f(p) over LEVELS in Pa, NaN-safe (skip NaN sub-intervals). */
-function trapInP(arr) {
+/** Trapezoidal integral of f(p) over the levels P (hPa) in Pa, NaN-safe
+ *  (skip NaN sub-intervals). */
+function trapInP(arr, P) {
     const n = arr.length;
     let s = 0;
     for (let k = 0; k < n - 1; k++) {
         const a = arr[k], b = arr[k + 1];
         if (!Number.isFinite(a) || !Number.isFinite(b)) continue;
-        const dp = (LEVELS[k + 1] - LEVELS[k]) * 100;
+        const dp = (P[k + 1] - P[k]) * 100;
         s += 0.5 * (a + b) * dp;
     }
     return s;
@@ -278,17 +289,17 @@ function dByDy(zm, nlat) {
     return out;
 }
 
-/** Centred-difference ∂X/∂p (Pa⁻¹) over the level dimension. arr indexed
+/** Centred-difference ∂X/∂p (Pa⁻¹) over the levels P (hPa). arr indexed
  *  [k * nlat + i]; one-sided at the top and bottom, and above a level with
  *  no air at this latitude (NaN). */
-function dByDp_levels(arr, nlat, k, i) {
-    const N = nlev();
+function dByDp_levels(arr, nlat, k, i, P) {
+    const N = P.length;
     let kUp = Math.max(0, k - 1);
     let kDn = Math.min(N - 1, k + 1);
     if (!Number.isFinite(arr[kUp * nlat + i])) kUp = k;
     if (!Number.isFinite(arr[kDn * nlat + i])) kDn = k;
     if (kUp === kDn) return NaN;
-    const dp = (LEVELS[kDn] - LEVELS[kUp]) * 100;
+    const dp = (P[kDn] - P[kUp]) * 100;
     return (arr[kDn * nlat + i] - arr[kUp * nlat + i]) / dp;
 }
 
@@ -309,17 +320,19 @@ function dByDp_levels(arr, nlat, k, i) {
  */
 export function computeLorenzCycle(month, refType = 'lorenz', { seasonal = false, source = null } = {}) {
     const { nlat, nlon } = GRID;
-    const N = nlev();
+    // LEVELS, plus 400 and 600 hPa where the tree has them (diag_source.js).
+    const P = sourceLevels([source], LORENZ_INGREDIENTS.pl);
+    const N = P.length;
 
     // Pull every needed tile up front. If anything is missing, the panel
     // can't render yet — return null and the caller will retry as tiles
     // arrive.
     const U = [], V = [], W = [], T = [];
     for (let k = 0; k < N; k++) {
-        const u = sourceMonth('u', month, LEVELS[k], source, seasonal);
-        const v = sourceMonth('v', month, LEVELS[k], source, seasonal);
-        const w = sourceMonth('w', month, LEVELS[k], source, seasonal);
-        const t = sourceMonth('t', month, LEVELS[k], source, seasonal);
+        const u = sourceMonth('u', month, P[k], source, seasonal);
+        const v = sourceMonth('v', month, P[k], source, seasonal);
+        const w = sourceMonth('w', month, P[k], source, seasonal);
+        const t = sourceMonth('t', month, P[k], source, seasonal);
         if (!u || !v || !w || !t) return null;
         U.push(u); V.push(v); W.push(w); T.push(t);
     }
@@ -330,7 +343,7 @@ export function computeLorenzCycle(month, refType = 'lorenz', { seasonal = false
     // Choice of reference state matters substantially — see refType arg.
     let Tref;
     if (refType === 'lorenz') {
-        Tref = lorenzReferenceState(T, SP);
+        Tref = lorenzReferenceState(T, SP, P);
         if (!Tref) return null;
     } else {
         // The mean over the whole isobaric surface, ERA5's below-ground values
@@ -345,14 +358,14 @@ export function computeLorenzCycle(month, refType = 'lorenz', { seasonal = false
     for (let k = 0; k < N; k++) {
         let dT;
         if (k === 0) {
-            dT = (Tref[1] - Tref[0]) / ((LEVELS[1] - LEVELS[0]) * 100);
+            dT = (Tref[1] - Tref[0]) / ((P[1] - P[0]) * 100);
         } else if (k === N - 1) {
-            dT = (Tref[N - 1] - Tref[N - 2]) / ((LEVELS[N - 1] - LEVELS[N - 2]) * 100);
+            dT = (Tref[N - 1] - Tref[N - 2]) / ((P[N - 1] - P[N - 2]) * 100);
         } else {
-            dT = (Tref[k + 1] - Tref[k - 1]) / ((LEVELS[k + 1] - LEVELS[k - 1]) * 100);
+            dT = (Tref[k + 1] - Tref[k - 1]) / ((P[k + 1] - P[k - 1]) * 100);
         }
         dTrefDp[k] = dT;
-        const p = LEVELS[k] * 100;
+        const p = P[k] * 100;
         // γ = κ T_ref/p - ∂T_ref/∂p   (positive in the troposphere)
         gamma[k] = KAPPA * Tref[k] / p - dT;
     }
@@ -372,7 +385,7 @@ export function computeLorenzCycle(month, refType = 'lorenz', { seasonal = false
     const Tzm = new Array(N), Uzm = new Array(N), Vzm = new Array(N), Wzm = new Array(N);
     const airFrac = new Array(N);
     for (let k = 0; k < N; k++) {
-        const pk = LEVELS[k];
+        const pk = P[k];
         const tz = new Float32Array(nlat), uz = new Float32Array(nlat);
         const vz = new Float32Array(nlat), wz = new Float32Array(nlat);
         const fr = new Float32Array(nlat);
@@ -420,7 +433,7 @@ export function computeLorenzCycle(month, refType = 'lorenz', { seasonal = false
     const ThatScaled = new Float64Array(N * nlat);
     const UzmFlat = new Float64Array(N * nlat);
     for (let k = 0; k < N; k++) {
-        const p = LEVELS[k] * 100;
+        const p = P[k] * 100;
         const s = Math.pow(p, KAPPA) / Math.max(gamma[k] * p, 1e-9);
         for (let i = 0; i < nlat; i++) {
             ThatScaled[k * nlat + i] = (Tzm[k][i] - Tref[k]) * s;
@@ -431,7 +444,7 @@ export function computeLorenzCycle(month, refType = 'lorenz', { seasonal = false
     // For the meridional gradient ∂[T]/∂y we need [T] at each level and lat;
     // for ∂[u]/∂p and ∂(p^κ T̂/(γp))/∂p we need vertical neighbours.
     for (let k = 0; k < N; k++) {
-        const p = LEVELS[k] * 100;
+        const p = P[k] * 100;
         const gp = gamma[k] * p;
         const pMinusKappa = Math.pow(p, -KAPPA);
         const fr = airFrac[k];
@@ -476,7 +489,7 @@ export function computeLorenzCycle(month, refType = 'lorenz', { seasonal = false
             const Tbar = Tzm[k][i], Ubar = Uzm[k][i], Vbar = Vzm[k][i], Wbar = Wzm[k][i];
             for (let j = 0; j < nlon; j++) {
                 const idx = i * nlon + j;
-                if (LEVELS[k] > SP[idx]) continue;
+                if (P[k] > SP[idx]) continue;
                 const Tv = Tk[idx], Uv = Uk[idx], Vv = Vk[idx], Wv = Wk[idx];
                 if (!Number.isFinite(Tv) || !Number.isFinite(Uv) ||
                     !Number.isFinite(Vv) || !Number.isFinite(Wv)) continue;
@@ -501,8 +514,8 @@ export function computeLorenzCycle(month, refType = 'lorenz', { seasonal = false
 
             // ∂[u]/∂p and p^-κ ∂(p^κ T̂/(γp))/∂p, centred where both
             // neighbours have air.
-            const dUbar_dp = dByDp_levels(UzmFlat, nlat, k, i);
-            const dThat_dp = pMinusKappa * dByDp_levels(ThatScaled, nlat, k, i);
+            const dUbar_dp = dByDp_levels(UzmFlat, nlat, k, i, P);
+            const dThat_dp = pMinusKappa * dByDp_levels(ThatScaled, nlat, k, i, P);
 
             // Reservoirs at this (k, i).
             acc_Tstar2 += T2_zon * c;
@@ -552,22 +565,23 @@ export function computeLorenzCycle(month, refType = 'lorenz', { seasonal = false
         cPMKM[k]   = -(R_DRY / G) * (acc_PMKM / cs) / p;
     }
 
-    const PM = trapInP(PM_int);
-    const PE = trapInP(PE_int);
-    const KM = trapInP(KM_int);
-    const KE = trapInP(KE_int);
+    const PM = trapInP(PM_int, P);
+    const PE = trapInP(PE_int, P);
+    const KM = trapInP(KM_int, P);
+    const KE = trapInP(KE_int, P);
 
-    const C_PM_PE = trapInP(cPMPE_y) + trapInP(cPMPE_p);
-    const C_PE_KE = trapInP(cPEKE);
+    const C_PM_PE = trapInP(cPMPE_y, P) + trapInP(cPMPE_p, P);
+    const C_PE_KE = trapInP(cPEKE, P);
     // K_E → K_M: positive when stationary eddies surrender momentum to the
     // zonal-mean flow (eddies decaying into the jet). The integrand
     // ⟨u*v*⟩ cosφ ∂([u]/cosφ)/∂y already carries the right sign.
-    const C_KE_KM = trapInP(cKMKE_y) + trapInP(cKMKE_p);
-    const C_PM_KM = trapInP(cPMKM);
+    const C_KE_KM = trapInP(cKMKE_y, P) + trapInP(cKMKE_p, P);
+    const C_PM_KM = trapInP(cPMKM, P);
 
     return {
         refType,
-        Tref,                                                 // K, at each LEVELS[k]
+        levels: P,                                            // hPa
+        Tref,                                                 // K, at each levels[k]
         reservoirs: { PM, PE, KM, KE },                       // J/m²
         conversions: { C_PM_PE, C_PE_KE, C_KE_KM, C_PM_KM },  // W/m²
     };

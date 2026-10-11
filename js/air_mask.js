@@ -102,20 +102,21 @@ export function airZonalCov(tA, tB, mA, mB, sp, p) {
  *  column the deepest level above the surface reaches down to p_s (below
  *  1000 hPa where p_s > 1000) and the levels under it get none — the
  *  transport panel's convention. Σ_k X·layers·100/g = ∫X dp/g over the air,
- *  and Σ_k layers = [p_s]. */
-export function airLayers(sp) {
+ *  and Σ_k layers = [p_s]. `levels` (hPa): LEVELS unless the diagnostic
+ *  reads more (diag_source.js sourceLevels). */
+export function airLayers(sp, levels = LEVELS) {
     const { nlat, nlon } = GRID;
-    const N = LEVELS.length;
+    const N = levels.length;
     const out = new Float32Array(N * nlat);
     for (let i = 0; i < nlat; i++) {
         const row = i * nlon;
         for (let j = 0; j < nlon; j++) {
             const ps = sp[row + j];
-            const air = Number.isFinite(ps) ? ps : LEVELS[N - 1];
-            for (let k = 0; k < N && !(LEVELS[k] > air); k++) {
-                const top = k === 0 ? 0 : 0.5 * (LEVELS[k - 1] + LEVELS[k]);
-                const deeper = k + 1 < N && !(LEVELS[k + 1] > air);
-                const bot = deeper ? 0.5 * (LEVELS[k] + LEVELS[k + 1]) : air;
+            const air = Number.isFinite(ps) ? ps : levels[N - 1];
+            for (let k = 0; k < N && !(levels[k] > air); k++) {
+                const top = k === 0 ? 0 : 0.5 * (levels[k - 1] + levels[k]);
+                const deeper = k + 1 < N && !(levels[k + 1] > air);
+                const bot = deeper ? 0.5 * (levels[k] + levels[k + 1]) : air;
                 out[k * nlat + i] += (bot - top) / nlon;
             }
         }
@@ -128,7 +129,7 @@ export function airLayers(sp) {
  *  × 100/g gives ∫X dp/g; ÷ columnMass the mass-weighted column mean. */
 export function columnSum(X, layers) {
     const { nlat } = GRID;
-    const N = LEVELS.length;
+    const N = layers.length / nlat;
     const out = new Float32Array(nlat);
     for (let i = 0; i < nlat; i++) {
         let s = 0;
@@ -145,7 +146,7 @@ export function columnSum(X, layers) {
  *  Float32Array(nlat). */
 export function columnMass(layers) {
     const { nlat } = GRID;
-    const N = LEVELS.length;
+    const N = layers.length / nlat;
     const out = new Float32Array(nlat);
     for (let i = 0; i < nlat; i++) {
         let s = 0;
@@ -169,18 +170,72 @@ export function ddy(arr, k, i) {
     return (arr[off + iN] - arr[off + iS]) / (A_EARTH * (iS - iN) * D2R);
 }
 
-/** ∂X/∂p (per Pa) of a [k * nlat + i] array at (k, i): centred; one-sided
- *  at the top and bottom levels and next to a level with no value (NaN);
- *  NaN with neither neighbour. */
-export function ddp(arr, k, i) {
+/** ∂X/∂p (per Pa) of a [k * nlat + i] array on `levels` (hPa) at (k, i):
+ *  centred; one-sided at the top and bottom levels and next to a level with
+ *  no value (NaN); NaN with neither neighbour. */
+export function ddp(arr, k, i, levels = LEVELS) {
     const { nlat } = GRID;
-    const N = LEVELS.length;
+    const N = levels.length;
     let kUp = Math.max(0, k - 1);
     let kDn = Math.min(N - 1, k + 1);
     if (!Number.isFinite(arr[kUp * nlat + i])) kUp = k;
     if (!Number.isFinite(arr[kDn * nlat + i])) kDn = k;
     if (kUp === kDn) return NaN;
-    return (arr[kDn * nlat + i] - arr[kUp * nlat + i]) / ((LEVELS[kDn] - LEVELS[kUp]) * 100);
+    return (arr[kDn * nlat + i] - arr[kUp * nlat + i]) / ((levels[kDn] - levels[kUp]) * 100);
+}
+
+/** Static stability ∂θ/∂p (K / Pa) at level m of `levels` (hPa) in each
+ *  column, = (θ/p) ∂ln θ/∂ln p: the three-point second-order derivative in
+ *  ln p at the level; the two-point secant at the top and where the level
+ *  below is underground in that column (either is exact for an isothermal
+ *  layer, θ ∝ p^−κ); NaN where level m is. TH, LNTH: θ and ln θ tiles per
+ *  level. Float32Array(nlat × nlon). θ curves so much in p between these
+ *  levels that a secant in p misses the stratification at the level (EP
+ *  flux, N²): across 10–50 hPa it was 3½× too small, and at 300 hPa it
+ *  spanned 250–500 hPa. */
+export function columnStability(TH, LNTH, sp, levels, m) {
+    const nlev = levels.length;
+    const out = new Float32Array(sp.length);
+    const x = levels.map(Math.log);
+    let w0 = 0, w1 = 0, w2 = 0;
+    if (m > 0 && m + 1 < nlev) {
+        const h1 = x[m] - x[m - 1], h2 = x[m + 1] - x[m];
+        w0 = -h2 / (h1 * (h1 + h2));
+        w1 = (h2 - h1) / (h1 * h2);
+        w2 = h1 / (h2 * (h1 + h2));
+    }
+    const pm = levels[m] * 100;
+    for (let idx = 0; idx < sp.length; idx++) {
+        const ps = sp[idx];
+        if (levels[m] > ps) { out[idx] = NaN; continue; }
+        const below = m + 1 < nlev && !(levels[m + 1] > ps);
+        let dl;
+        if (m > 0 && below) {
+            dl = w0 * LNTH[m - 1][idx] + w1 * LNTH[m][idx] + w2 * LNTH[m + 1][idx];
+        } else {
+            const kUp = m > 0 ? m - 1 : m;
+            const kDn = below ? m + 1 : m;
+            dl = kUp === kDn ? NaN : (LNTH[kDn][idx] - LNTH[kUp][idx]) / (x[kDn] - x[kUp]);
+        }
+        out[idx] = TH[m][idx] / pm * dl;
+    }
+    return out;
+}
+
+/** θ and ln θ tiles (θ = T (1000/p)^κ) for the T tiles `T` on `levels`. */
+export function thetaTiles(T, levels, kappa) {
+    const TH = [], LNTH = [];
+    for (let k = 0; k < levels.length; k++) {
+        const f = Math.pow(1000 / levels[k], kappa);
+        const t = T[k];
+        const th = new Float32Array(t.length), ln = new Float32Array(t.length);
+        for (let i = 0; i < t.length; i++) {
+            th[i] = Number.isFinite(t[i]) ? t[i] * f : NaN;
+            ln[i] = Math.log(th[i]);
+        }
+        TH.push(th); LNTH.push(ln);
+    }
+    return { TH, LNTH };
 }
 
 /** In-place 5-point binomial smoother across latitude on a (N × nlat) grid,
@@ -232,14 +287,15 @@ export function smoothLev(arr, N, nlat) {
 }
 
 /** 1 where less than MIN_AIR_SHARE of the latitude circle is above ground
- *  at the level, else 0: Uint8Array(nlev × nlat), [k * nlat + i]. These
- *  cells take no part in the sections, which hatch them as ground. */
-export function groundCells(sp) {
+ *  at the level, else 0: Uint8Array(nlev × nlat), [k * nlat + i], for
+ *  `levels` (hPa; LEVELS unless a diagnostic reads more). These cells take
+ *  no part in the sections, which hatch them as ground. */
+export function groundCells(sp, levels = LEVELS) {
     const { nlat } = GRID;
-    const N = LEVELS.length;
+    const N = levels.length;
     const out = new Uint8Array(N * nlat);
     for (let k = 0; k < N; k++) {
-        const sh = airShare(sp, LEVELS[k]);
+        const sh = airShare(sp, levels[k]);
         for (let i = 0; i < nlat; i++) out[k * nlat + i] = sh[i] >= MIN_AIR_SHARE ? 0 : 1;
     }
     return out;
