@@ -18,8 +18,33 @@
 // computed from the climatological-mean fields — the "stationary" eddies are
 // departures of the composite-mean flow from its zonal mean.
 
-import { cachedMonth, perYearHasMonth, windowSlots, windowMean, rememberWindowMean } from './era5.js';
-import { customRangeYears } from './data.js';
+import { cachedMonth, perYearHasMonth, windowSlots, windowMean, rememberWindowMean,
+         getManifest, getActivePeriod } from './era5.js';
+import { customRangeYears, LEVELS } from './data.js';
+
+/** Pressure levels between LEVELS that a tile tree may also hold
+ *  (pipeline/add_pressure_levels.py): the 1991–2020 climatology has them,
+ *  the other climatologies and the per-year tree don't yet. */
+export const EXTRA_LEVELS = [400, 600];
+
+/** Levels the tree `src` reads from (the active climatology for null, else
+ *  the per-year tree) lists for field `name`; null before its manifest. */
+function treeLevels(src, name) {
+    const m = getManifest(src ? 'per_year' : getActivePeriod());
+    if (!m) return null;
+    for (const vars of Object.values(m.groups)) if (vars[name]) return vars[name].levels || null;
+    return null;
+}
+
+/** Pressure levels (hPa, ascending) for a (lat, p) diagnostic that reads the
+ *  pressure-level fields `names` from every source in `srcs`: LEVELS, plus
+ *  each of EXTRA_LEVELS that all of those trees list for every name. One set
+ *  for all the sources, so an anomaly (selection − climatology) compares two
+ *  fields computed alike. */
+export function sourceLevels(srcs, names) {
+    const extra = EXTRA_LEVELS.filter(L => srcs.every(src => names.every(n => treeLevels(src, n)?.includes(L))));
+    return extra.length ? [...LEVELS, ...extra].sort((a, b) => a - b) : LEVELS;
+}
 
 /** Source descriptor for the globe's current time selection. */
 export function sourceFromState(s) {

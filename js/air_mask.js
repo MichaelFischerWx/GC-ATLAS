@@ -232,14 +232,15 @@ export function smoothLev(arr, N, nlat) {
 }
 
 /** 1 where less than MIN_AIR_SHARE of the latitude circle is above ground
- *  at the level, else 0: Uint8Array(nlev × nlat), [k * nlat + i]. These
- *  cells take no part in the sections, which hatch them as ground. */
-export function groundCells(sp) {
+ *  at the level, else 0: Uint8Array(nlev × nlat), [k * nlat + i], for
+ *  `levels` (hPa; LEVELS unless a diagnostic reads more). These cells take
+ *  no part in the sections, which hatch them as ground. */
+export function groundCells(sp, levels = LEVELS) {
     const { nlat } = GRID;
-    const N = LEVELS.length;
+    const N = levels.length;
     const out = new Uint8Array(N * nlat);
     for (let k = 0; k < N; k++) {
-        const sh = airShare(sp, LEVELS[k]);
+        const sh = airShare(sp, levels[k]);
         for (let i = 0; i < nlat; i++) out[k * nlat + i] = sh[i] >= MIN_AIR_SHARE ? 0 : 1;
     }
     return out;

@@ -393,14 +393,23 @@ async function fetchTile(name, group, meta, month, level, kind = 'mean', period 
             // per-tile vmin/vmax recorded in meta.tiles by compress_tiles.py.
             const decompressed = resp.body.pipeThrough(new DecompressionStream('gzip'));
             const buf = await new Response(decompressed).arrayBuffer();
-            const u16 = new Uint16Array(buf);
-            const tk = tileMetaKey(meta, level, month, kind, period, year);
-            const t = (await tilesMeta)?.[tk];
-            if (!t) throw new Error(`no per-tile metadata for ${tk}`);
-            const range = (t.vmax - t.vmin) / 65534;
-            values = new Float32Array(u16.length);
-            for (let i = 0; i < u16.length; i++) {
-                values[i] = u16[i] === 0xFFFF ? NaN : t.vmin + u16[i] * range;
+            const nCells = meta.shape ? meta.shape[0] * meta.shape[1] : 0;
+            if (nCells && buf.byteLength === 4 * nCells) {
+                // A float32 payload: the 400 / 600 hPa tiles that
+                // add_pressure_levels.py gzipped before it encoded through
+                // compress_tiles.py, which have no per-tile metadata
+                // (compress_tiles.py --force re-encodes them).
+                values = new Float32Array(buf);
+            } else {
+                const u16 = new Uint16Array(buf);
+                const tk = tileMetaKey(meta, level, month, kind, period, year);
+                const t = (await tilesMeta)?.[tk];
+                if (!t) throw new Error(`no per-tile metadata for ${tk}`);
+                const range = (t.vmax - t.vmin) / 65534;
+                values = new Float32Array(u16.length);
+                for (let i = 0; i < u16.length; i++) {
+                    values[i] = u16[i] === 0xFFFF ? NaN : t.vmin + u16[i] * range;
+                }
             }
         } else {
             const buf = await resp.arrayBuffer();

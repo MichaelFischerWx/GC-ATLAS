@@ -22,13 +22,13 @@ import { loadManifest, onFieldLoaded, onTileProgress, isReady as era5Ready, pref
 import { decompose, annualMeanFrom, aggregatedDecompositionRange } from './decompose.js';
 import { HoverProbe } from './hover.js';
 import { computeMassStreamfunction, computeAngularMomentum, computeBruntVaisala, computeGeostrophicWind } from './diagnostics.js';
-import { computeEPFlux } from './ep_flux.js';
+import { computeEPFlux, EP_FLUX_INGREDIENTS } from './ep_flux.js';
 import { computeLorenzCycle, LORENZ_INGREDIENTS } from './lorenz.js';
 import { buildMBudgetView } from './m_budget.js';
 import { buildQBudgetView } from './q_budget.js';
 import { buildHBudgetView } from './h_budget.js';
 import { buildTransportView, transportSlots, transportTilesMissing, TRANSPORT_INGREDIENTS } from './transport.js';
-import { sourceFromState, sourceKey, sourceYears, sourceMonth, shiftSource, sourceWindow } from './diag_source.js';
+import { sourceFromState, sourceKey, sourceYears, sourceMonth, shiftSource, sourceWindow, sourceLevels } from './diag_source.js';
 import { ParcelField } from './parcels.js';
 import { GifExporter, downloadBlob } from './gif_export.js';
 import { encodeStateToHash, decodeHashToPatch, writeHashDebounced } from './url_state.js';
@@ -62,17 +62,18 @@ const MAP_W = 4;
 const MAP_H = 2;
 
 // Tiles each cross-section diagnostic reads: pressure-level fields sampled
-// at every level in LEVELS, plus single-level fields: the surface pressure
-// that says which levels are underground (air_mask.js; required), and the
-// optional overlays (surface fluxes, friction / mountain torque). One table
-// drives both the prefetch and the "re-render when an ingredient lands"
-// check.
+// at every level in LEVELS (`extraLevels`: also 400 and 600 hPa where the
+// tree has them, diag_source.js sourceLevels), plus single-level fields: the
+// surface pressure that says which levels are underground (air_mask.js;
+// required), and the optional overlays (surface fluxes, friction / mountain
+// torque). One table drives both the prefetch and the "re-render when an
+// ingredient lands" check.
 const XS_DIAG_INGREDIENTS = {
     psi:     { pl: ['v'],                          sl: ['sp'] },
     M:       { pl: ['u'],                          sl: ['sp'] },
     ug:      { pl: ['z'],                          sl: ['sp'] },
     N2:      { pl: ['t'],                          sl: ['sp'] },
-    epflux:  { pl: ['u', 'v', 'w', 't'],           sl: ['sp'] },
+    epflux:  EP_FLUX_INGREDIENTS,
     mbudget: { pl: ['u', 'v', 'w'],                sl: ['sp', 'ews', 'oro'] },
     qbudget: { pl: ['v', 'w', 'q'],                sl: ['sp', 'slhf', 'tp'] },
     hbudget: { pl: ['v', 'w', 't', 'z', 'q'],      sl: ['sp', 'slhf', 'sshf', 'ssr', 'str', 'tsr', 'ttr'] },
@@ -1881,6 +1882,8 @@ class GlobeApp {
         const surface = Number.isFinite(sample.ps) ? ` (surface ${Math.round(sample.ps)} hPa)` : '';
         const valHtml = sample.ground
             ? `<span class="hv-unit">below ground${surface}</span>`
+            : sample.edge
+            ? '<span class="hv-unit">top of the grid: not computed (ⓘ)</span>'
             : `<span class="hv-value">${fmt(sample.value, 2)}</span>` +
               `<span class="hv-unit">${zm.units || ''}</span>`;
         return parts.join('<span class="hv-sep">·</span>') +
@@ -2696,13 +2699,14 @@ class GlobeApp {
      *  windowSlots does. `withClimo` adds the climatology for those months
      *  (the ψ / EP-flux anomaly baseline). */
     _prefetchIngredients(ing, withClimo = false, slotsFn = () => this._diagSlots()) {
+        const src = this._diagSource();
+        const levels = this._ingLevels(ing, withClimo && src ? [src, null] : [src]);
         // An annual mean over too many years shows a notice instead; don't
         // pull its tiles behind it.
-        if (this._annualBudgetNotice((ing.pl || []).length * LEVELS.length + (ing.sl || []).length)) return;
-        const src = this._diagSource();
+        if (this._annualBudgetNotice((ing.pl || []).length * levels.length + (ing.sl || []).length)) return;
         const monthsOf = () => slotsFn().map(s => s.month);
-        if (!src) { this._prefetchClimoIngredients(ing, true, monthsOf()); return; }
-        if (withClimo) this._prefetchClimoIngredients(ing, false, monthsOf());
+        if (!src) { this._prefetchClimoIngredients(ing, true, monthsOf(), levels); return; }
+        if (withClimo) this._prefetchClimoIngredients(ing, false, monthsOf(), levels);
         // Per-year fan-out is debounced on the slice: the year slider fires
         // on every step of a drag, and only the year it stops on should
         // pull a full level stack. Repeat requests for the same slice (tile
@@ -2716,20 +2720,28 @@ class GlobeApp {
         // month) must not cancel each other's batches. A superseded slice
         // needs no cancelling — its batch sees the moved-on key and skips.
         const pending = (this._diagPrefetches ??= new Map());
+        // Pressure-level names → the levels each is read on.
+        const addPl = (b) => {
+            for (const n of ing.pl || []) {
+                if (!b.pl.has(n)) b.pl.set(n, new Set());
+                for (const L of levels) b.pl.get(n).add(L);
+            }
+        };
         const pend = pending.get(key);
         if (pend) {
-            for (const n of ing.pl || []) pend.pl.add(n);
+            addPl(pend);
             for (const n of ing.sl || []) pend.sl.add(n);
             return;
         }
-        const batch = { key, pl: new Set(ing.pl || []), sl: new Set(ing.sl || []) };
+        const batch = { key, pl: new Map(), sl: new Set(ing.sl || []) };
+        addPl(batch);
         batch.timer = setTimeout(() => {
             pending.delete(key);
             if (sliceKey() !== key) return;   // the user moved on
             for (const { month: m, offset } of slots) {
                 for (const year of sourceYears(shiftSource(src, offset), m)) {
-                    for (const L of LEVELS) {
-                        for (const name of batch.pl) {
+                    for (const [name, lv] of batch.pl) {
+                        for (const L of lv) {
                             prefetchField(name, { level: L, months: [m], period: 'per_year', year });
                         }
                     }
@@ -2742,15 +2754,23 @@ class GlobeApp {
         pending.set(key, batch);
     }
 
-    /** Active-climatology ingredient tiles: the displayed month(s), then
-     *  (allMonths) the rest of the year. */
-    _prefetchClimoIngredients(ing, allMonths, first = this._diagMonths()) {
+    /** Active-climatology ingredient tiles on `levels`: the displayed
+     *  month(s), then (allMonths) the rest of the year. */
+    _prefetchClimoIngredients(ing, allMonths, first = this._diagMonths(), levels = LEVELS) {
         for (const months of (allMonths && first.length < 12 ? [first, undefined] : [first])) {
-            for (const L of LEVELS) {
+            for (const L of levels) {
                 for (const name of ing.pl || []) prefetchField(name, { level: L, months });
             }
             for (const name of ing.sl || []) prefetchField(name, { months });
         }
+    }
+
+    /** Pressure levels a diagnostic's ingredients are read on when it
+     *  computes from `srcs` (the globe's slice; with the climatology too
+     *  for an anomaly): LEVELS, or diag_source.js sourceLevels for one that
+     *  takes 400 and 600 hPa where the trees have them (extraLevels). */
+    _ingLevels(ing, srcs) {
+        return ing.extraLevels ? sourceLevels(srcs, ing.pl || []) : LEVELS;
     }
 
     /** True when every pressure-level tile the diagnostic needs for this
@@ -2765,7 +2785,8 @@ class GlobeApp {
         const sources = [this._diagSource()];
         if (this._xsAnomActive()) sources.push(null);
         const masked = (ing.sl || []).includes('sp');
-        return sources.every(src => LEVELS.every(L => (ing.pl || []).every(name =>
+        const levels = this._ingLevels(ing, sources);
+        return sources.every(src => levels.every(L => (ing.pl || []).every(name =>
             sourceMonth(name, month, L, src, seasonal)))
             && (!masked || sourceMonth('sp', month, null, src, seasonal)));
     }
@@ -3011,9 +3032,11 @@ class GlobeApp {
                     M:   'M = (Ω a cos φ + [u]) · a cos φ · [u] over the air · hatched: below ground',
                     ug:  '[u_g] = -(g/f) · [∂z/∂y] over the air · masked |φ| < 5° (f → 0) · hatched: below ground',
                     N2:  'N² = -(g²p / R T θ) · [∂θ/∂p] over the air · static stability · hatched: below ground',
-                    epflux: anomaly
+                    epflux: (anomaly
                         ? `ΔF = F(selection) − F(${ref}) — stationary eddies; shading: ∇·ΔF (m s⁻¹ day⁻¹)`
-                        : 'F = (-a cos φ [u′v′], a cos φ f [v′θ′] / ∂[θ]/∂p) — stationary eddies; shading: ∇·F (m s⁻¹ day⁻¹)',
+                        : 'F = (-a cos φ [u′v′], a cos φ f [v′θ′] / ∂[θ]/∂p) — stationary eddies; shading: ∇·F (m s⁻¹ day⁻¹)')
+                        + ` · ∂/∂p in ln p${zm.levels.length > LEVELS.length ? ', with 400 and 600 hPa' : ''}`
+                        + ' · hatched: grid top (10 hPa), below ground',
                     mbudget: '∂[M]/∂t = -∇·([v][M]) - ∇·([v*M*]) + torque · stationary eddies only · 1° monthly means',
                     transport: this.state.trQty === 'moisture'
                         ? 'atmosphere = ∮∫ q v dp/g (ERA5 hourly) · E − P implied = ∫∫ (E − P − ∂W/∂t) dA · ×L_v'
