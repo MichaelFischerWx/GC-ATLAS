@@ -6,6 +6,7 @@
 // comfortable at 60fps on a modern laptop.
 
 import * as THREE from 'three';
+import { INK_DARK, INK_LIGHT } from './colormap.js';
 
 const N           = 12000;   // particle count — dense cover (≈ nullschool feel)
 const TRAIL       = 12;      // trail length (positions per particle)
@@ -23,8 +24,14 @@ const ALPHA_FLOOR = 0.55;    // minimum head opacity so calm flow is clearly vis
 const ALPHA_PEAK  = 1.00;    // head opacity at jet-stream speeds
 
 export class ParticleField {
-    constructor(getUV, projectFn) {
+    constructor(getUV, projectFn, inkFn = null) {
         this.getUV = getUV;
+        // Local ink: inkFn(lat, lon) → 0 (light ink) … 1 (dark ink) for the
+        // shading under the particle, or null before the field is painted
+        // (then fallbackInk applies). Particles crossing from a dark to a
+        // light part of the field change ink as they go.
+        this.inkFn = inkFn;
+        this.fallbackInk = 0;
         // Injected projection (globe sphere or equirectangular plane). Must
         // return a THREE.Vector3 when given (lat, lon, radius-or-layer).
         this.project = projectFn || ((lat, lon, r) => {
@@ -45,30 +52,39 @@ export class ParticleField {
         const segs = N * (TRAIL - 1);
         this.positions = new Float32Array(segs * 2 * 3);
         this.alphas    = new Float32Array(segs * 2);
+        this.inks      = new Float32Array(segs * 2);
 
         this.geom = new THREE.BufferGeometry();
         this.geom.setAttribute('position',
             new THREE.BufferAttribute(this.positions, 3).setUsage(THREE.DynamicDrawUsage));
         this.geom.setAttribute('alpha',
             new THREE.BufferAttribute(this.alphas, 1).setUsage(THREE.DynamicDrawUsage));
+        this.geom.setAttribute('ink',
+            new THREE.BufferAttribute(this.inks, 1).setUsage(THREE.DynamicDrawUsage));
 
         const mat = new THREE.ShaderMaterial({
             transparent: true,
             depthWrite: false,
-            uniforms: { uColor: { value: new THREE.Color(0xFFFFFF) } },
+            uniforms: { uDark: { value: new THREE.Color(INK_DARK) },
+                        uLight: { value: new THREE.Color(INK_LIGHT) } },
             vertexShader: `
                 attribute float alpha;
+                attribute float ink;
                 varying float vAlpha;
+                varying float vInk;
                 void main() {
                     vAlpha = alpha;
+                    vInk = ink;
                     gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
                 }
             `,
             fragmentShader: `
-                uniform vec3 uColor;
+                uniform vec3 uDark;
+                uniform vec3 uLight;
                 varying float vAlpha;
+                varying float vInk;
                 void main() {
-                    gl_FragColor = vec4(uColor, vAlpha);
+                    gl_FragColor = vec4(mix(uLight, uDark, vInk), vAlpha);
                 }
             `,
         });
@@ -81,31 +97,40 @@ export class ParticleField {
         // a 2.5-px disk that always stays visible regardless of trail length.
         this.headPositions = new Float32Array(N * 3);
         this.headAlphas    = new Float32Array(N);
+        this.headInks      = new Float32Array(N);
         this.headGeom = new THREE.BufferGeometry();
         this.headGeom.setAttribute('position',
             new THREE.BufferAttribute(this.headPositions, 3).setUsage(THREE.DynamicDrawUsage));
         this.headGeom.setAttribute('alpha',
             new THREE.BufferAttribute(this.headAlphas, 1).setUsage(THREE.DynamicDrawUsage));
+        this.headGeom.setAttribute('ink',
+            new THREE.BufferAttribute(this.headInks, 1).setUsage(THREE.DynamicDrawUsage));
         const headMat = new THREE.ShaderMaterial({
             transparent: true,
             depthWrite: false,
-            uniforms: { uColor: { value: new THREE.Color(0xFFFFFF) } },
+            uniforms: { uDark: { value: new THREE.Color(INK_DARK) },
+                        uLight: { value: new THREE.Color(INK_LIGHT) } },
             vertexShader: `
                 attribute float alpha;
+                attribute float ink;
                 varying float vAlpha;
+                varying float vInk;
                 void main() {
                     vAlpha = alpha;
+                    vInk = ink;
                     gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
                     gl_PointSize = 2.5;
                 }
             `,
             fragmentShader: `
-                uniform vec3 uColor;
+                uniform vec3 uDark;
+                uniform vec3 uLight;
                 varying float vAlpha;
+                varying float vInk;
                 void main() {
                     vec2 c = gl_PointCoord - 0.5;
                     if (dot(c, c) > 0.25) discard;   // circular dot
-                    gl_FragColor = vec4(uColor, vAlpha);
+                    gl_FragColor = vec4(mix(uLight, uDark, vInk), vAlpha);
                 }
             `,
         });
@@ -234,8 +259,13 @@ export class ParticleField {
     updateGeometry() {
         const pos = this.positions, al = this.alphas;
         const hpos = this.headPositions, hal = this.headAlphas;
+        const inks = this.inks, hink = this.headInks;
+        const inkFn = this.inkFn, fallbackInk = this.fallbackInk;
         const tailMax = TRAIL - 1;
         for (let i = 0; i < N; i++) {
+            // One ink per particle, from the shading under its head.
+            let ink = inkFn ? inkFn(this.state[i * 3], this.state[i * 3 + 1]) : null;
+            if (ink == null) ink = fallbackInk;
             // Head opacity = speed ramp × age envelope. The age envelope
             // fades each particle in over FADE_IN frames and out over
             // FADE_OUT frames before respawn, so births and deaths don't
@@ -265,6 +295,7 @@ export class ParticleField {
                 pos[k + 5] = this.trail[tx + (t + 1) * 3 + 2];
                 al[ak]     = headAlpha * (1 - t / tailMax);
                 al[ak + 1] = headAlpha * (1 - (t + 1) / tailMax);
+                inks[ak] = inks[ak + 1] = ink;
             }
             // Head dot at trail[0] (newest position). Alpha a bit brighter
             // than the segment head so the dot is the clear focal point.
@@ -272,17 +303,19 @@ export class ParticleField {
             hpos[i * 3 + 1] = this.trail[tx + 1];
             hpos[i * 3 + 2] = this.trail[tx + 2];
             hal[i] = Math.min(1, headAlpha * 1.15);
+            hink[i] = ink;
         }
         this.geom.attributes.position.needsUpdate = true;
         this.geom.attributes.alpha.needsUpdate = true;
+        this.geom.attributes.ink.needsUpdate = true;
         this.headGeom.attributes.position.needsUpdate = true;
         this.headGeom.attributes.alpha.needsUpdate = true;
+        this.headGeom.attributes.ink.needsUpdate = true;
     }
 
     setVisible(v) { this.object.visible = v; }
 
-    setColor(hex) {
-        this.trailMesh.material.uniforms.uColor.value.setHex(hex);
-        this.headMesh.material.uniforms.uColor.value.setHex(hex);
-    }
+    /** Ink used where inkFn has nothing to say (before the first paint):
+     *  0 = light, 1 = dark. */
+    setFallbackInk(w) { this.fallbackInk = w; }
 }

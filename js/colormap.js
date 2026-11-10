@@ -68,6 +68,33 @@ export function meanLuminance(name) {
     return sum / lut.length;
 }
 
+// ── Local overlay ink ─────────────────────────────────────────────
+// Overlays (coastlines, wind particles, contours) pick their ink from the
+// shading directly beneath them rather than from the colormap as a whole:
+// a single ink per colormap fails whenever the painted field sits at one end
+// of the ramp (500 hPa T in the tropics is all plasma-yellow, so the white
+// ink chosen for "plasma" vanished). Dark ink on light cells, light ink on
+// dark cells, switching where the two contrast ratios cross (relative
+// luminance ≈ 0.18) over a narrow band (grey ink in between contrasts with neither) so moving
+// particles don't flicker.
+export const INK_DARK  = 0x0a1712;
+export const INK_LIGHT = 0xf4faf7;
+export const INK_LUM_LO = 0.165;
+export const INK_LUM_HI = 0.195;
+
+/** sRGB byte → linear-light value. */
+export const SRGB_TO_LINEAR = new Float32Array(256);
+for (let i = 0; i < 256; i++) {
+    const c = i / 255;
+    SRGB_TO_LINEAR[i] = c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+}
+
+/** Relative luminance (linear light) → ink weight: 0 = light ink, 1 = dark ink. */
+export function inkWeight(lum) {
+    const t = Math.min(1, Math.max(0, (lum - INK_LUM_LO) / (INK_LUM_HI - INK_LUM_LO)));
+    return t * t * (3 - 2 * t);
+}
+
 /** Sample a colormap. t ∈ [0,1]. Returns [r,g,b] in [0,1]. */
 export function sample(name, t) {
     const lut = LUT[name] ?? LUT.viridis;

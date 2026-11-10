@@ -8,6 +8,7 @@
 // setData; change interval / emphasis level via setInterval.
 
 import * as THREE from 'three';
+import { INK_DARK, INK_LIGHT, INK_LUM_LO, INK_LUM_HI } from './colormap.js';
 
 const SPHERE_R = 1.0015;  // lifted slightly above the shaded globe
 
@@ -32,6 +33,13 @@ const FRAG = /* glsl */`
     uniform float uUOffset;
     uniform vec3  uInk;
     uniform float uOpacity;
+    // Local ink: when the shaded field's colour texture is bound, each
+    // contour fragment takes dark ink over light shading and light ink over
+    // dark shading (thresholds shared with colormap.js#inkWeight).
+    uniform sampler2D tShade;
+    uniform float uShadeOn;
+    uniform vec3  uInkDark;
+    uniform vec3  uInkLight;
     varying vec2 vUv;
 
     void main() {
@@ -56,7 +64,13 @@ const FRAG = /* glsl */`
 
         float alpha = max(aa * uOpacity, emph * min(uOpacity * 1.6, 1.0));
         if (alpha < 0.01) discard;
-        gl_FragColor = vec4(uInk, alpha);
+        vec3 ink = uInk;
+        if (uShadeOn > 0.5) {
+            vec3 bg = texture2D(tShade, uv).rgb;   // linear (sRGB texture)
+            float lum = dot(bg, vec3(0.2126, 0.7152, 0.0722));
+            ink = mix(uInkLight, uInkDark, smoothstep(${INK_LUM_LO.toFixed(3)}, ${INK_LUM_HI.toFixed(3)}, lum));
+        }
+        gl_FragColor = vec4(ink, alpha);
     }
 `;
 
@@ -88,6 +102,10 @@ export class ContourField {
                 uUOffset:    { value: 0.25 },
                 uInk:        { value: new THREE.Color(0x0a1712) },
                 uOpacity:    { value: 0.85 },
+                tShade:      { value: null },
+                uShadeOn:    { value: 0.0 },
+                uInkDark:    { value: new THREE.Color(INK_DARK) },
+                uInkLight:   { value: new THREE.Color(INK_LIGHT) },
             },
         });
 
@@ -105,6 +123,10 @@ export class ContourField {
         this.planeMaterial.uniforms.uEmphasisOn = this.material.uniforms.uEmphasisOn;
         this.planeMaterial.uniforms.uInk        = this.material.uniforms.uInk;
         this.planeMaterial.uniforms.uOpacity    = this.material.uniforms.uOpacity;
+        this.planeMaterial.uniforms.tShade      = this.material.uniforms.tShade;
+        this.planeMaterial.uniforms.uShadeOn    = this.material.uniforms.uShadeOn;
+        this.planeMaterial.uniforms.uInkDark    = this.material.uniforms.uInkDark;
+        this.planeMaterial.uniforms.uInkLight   = this.material.uniforms.uInkLight;
         this.planeMaterial.uniforms.uUOffset    = { value: 0.0 };
 
         const planeGeom = new THREE.PlaneGeometry(mapW, mapH, nlon, nlat);
@@ -134,6 +156,13 @@ export class ContourField {
         this.material.uniforms.uEmphasisOn.value = enable ? 1.0 : 0.0;
     }
     setInk(hex)    { this.material.uniforms.uInk.value.setHex(hex); }
+    /** Bind the shaded field's colour texture (same lat/lon layout as the
+     *  scalar texture) so the ink follows the shading underneath; null
+     *  falls back to the single setInk() colour. */
+    setShadeTexture(tex) {
+        this.material.uniforms.tShade.value = tex;
+        this.material.uniforms.uShadeOn.value = tex ? 1.0 : 0.0;
+    }
     setOpacity(a)  { this.material.uniforms.uOpacity.value = a; }
     setVisible(v)  { this.sphereMesh.visible = this.planeMesh.visible = v; }
 }

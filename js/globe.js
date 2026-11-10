@@ -7,7 +7,8 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { Line2 } from 'three/addons/lines/Line2.js';
 import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
-import { fillRGBA, fillColorbar, COLORMAPS, meanLuminance } from './colormap.js';
+import { fillRGBA, fillColorbar, COLORMAPS, meanLuminance,
+         INK_DARK, INK_LIGHT, SRGB_TO_LINEAR, inkWeight } from './colormap.js';
 import { getField, FIELDS, LEVELS, THETA_LEVELS, MONTHS, GRID, invalidateIsentropicCache, isThetaOnly, customRangeYears, fieldHasStdTiles, expectedTilesForView, hasCachedIngredients, slDerivedIngredients, fieldIngredients, fieldTilesMissing } from './data.js';
 import { loadIndices, getIndex, eventYears, compositeLabel, lastIndexMonth } from './indices.js';
 import { ParticleField } from './particles.js';
@@ -53,9 +54,10 @@ const COASTLINE_URL = `${COASTLINE_BASE}/ne_50m_coastline.geojson`;
 const LAKES_URL     = `${COASTLINE_BASE}/ne_50m_lakes.geojson`;
 const AXIAL_TILT = 23.4 * Math.PI / 180;
 
-// Default globe viewpoint: centred on North America so the opening frame shows
-// continents and the mid-latitude jet, not empty ocean.
-const DEFAULT_VIEW = { lat: 35, lon: -95, distance: 3.35 };
+// Default globe viewpoint: over the western North Pacific, so the opening
+// frame (January 200 hPa |V|) has the East Asian jet core off Japan, the
+// strongest climatological jet on Earth, running across Asia and the Pacific.
+const DEFAULT_VIEW = { lat: 32, lon: 150, distance: 3.35 };
 
 // Equirectangular map dimensions (width 4, height 2 → lon spans [-2, 2], lat spans [-1, 1]).
 const MAP_W = 4;
@@ -130,12 +132,16 @@ class GlobeApp {
     constructor(mount) {
         this.mount = mount;
         this.state = {
-            field: 't',
-            level: 500,
+            // Opening view: the January 200 hPa jet streams, shaded |V| with
+            // the flow drawn by particles (the same u, v tiles feed both).
+            // Shared links always carry f / L / m, so changing these
+            // defaults never changes what an old link opens.
+            field: 'wspd',
+            level: 200,
             theta: 330,              // isentropic surface (K) when vCoord='theta'
             vCoord: 'pressure',      // 'pressure' | 'theta'
             month: 1,
-            cmap: FIELDS.t.cmap,
+            cmap: FIELDS.wspd.cmap,
             viewMode: 'globe',   // 'globe' | 'map'
             showCoastlines: true,
             showGraticule: true,
@@ -1164,6 +1170,9 @@ class GlobeApp {
         this.contours = new ContourField({
             nlon: GRID.nlon, nlat: GRID.nlat, mapW: MAP_W, mapH: MAP_H,
         });
+        // Contour ink follows the shading under each stroke (the canvas
+        // texture shares the scalar texture's lat/lon layout).
+        this.contours.setShadeTexture(this.texture);
         this.globeGroup.add(this.contours.sphereMesh);
         this.mapGroup.add(this.contours.planeMesh);
         this.contours.setVisible(this.state.showContours);
@@ -1384,9 +1393,10 @@ class GlobeApp {
         for (const child of this.coastGroup.children) child.geometry.dispose();
         this.coastGroup.clear();
 
-        // Single shared material so applyCoastlineContrast() can flip colour
-        // without rebuilding geometry on every cmap change.
-        this.coastMat = new THREE.LineBasicMaterial({ transparent: true });
+        // Single shared material; the ink is per vertex (local to the shading
+        // underneath, see applyCoastlineContrast) so recolouring on a repaint
+        // touches only the colour buffers, never the geometry.
+        this.coastMat = new THREE.LineBasicMaterial({ transparent: true, vertexColors: true, opacity: 0.85 });
         // R=1.005 → map-mode z = 0.00125, in front of the swipe-compare
         // reference plane (z=0.001) so coastlines stay visible on the right
         // half. Original 1.003 put them behind the overlay.
@@ -1394,7 +1404,11 @@ class GlobeApp {
         const seamJump = MAP_W / 2;  // flag if consecutive x-coords wrap the map
         const isMap = this.state.viewMode === 'map';
         for (const ring of this.coastFeatures) {
-            const pts = ring.map(([lon, lat]) => this.project(lat, lon, R));
+            const pts = ring.map(([lon, lat]) => {
+                const p = this.project(lat, lon, R);
+                p.lat = lat; p.lon = lon;   // carried through splitAtSeam for the ink lookup
+                return p;
+            });
             // In map mode the central-meridian shift can split continents across
             // the seam; drop adjacent points whose x jumps by more than half the
             // map width into separate Line objects so we don't draw a spurious
@@ -1403,6 +1417,10 @@ class GlobeApp {
             for (const seg of segments) {
                 if (seg.length < 2) continue;
                 const geom = new THREE.BufferGeometry().setFromPoints(seg);
+                const ll = new Float32Array(seg.length * 2);
+                seg.forEach((p, k) => { ll[2 * k] = p.lat; ll[2 * k + 1] = p.lon; });
+                geom.userData.ll = ll;
+                geom.setAttribute('color', new THREE.BufferAttribute(new Float32Array(seg.length * 3), 3));
                 this.coastGroup.add(new THREE.Line(geom, this.coastMat));
             }
         }
@@ -1417,11 +1435,49 @@ class GlobeApp {
         // pass nothing) reuse the last value updateField() handed us.
         if (effCmap) this._coastEffCmap = effCmap;
         const cmap = this._coastEffCmap || this.state.cmap;
-        // Match the contour-ink threshold (0.45) and palette so coastlines
-        // and contour strokes stay visually consistent on every cmap.
-        const darkBg = meanLuminance(cmap) < 0.45;
-        this.coastMat.color.setHex(darkBg ? 0xf4faf7 : 0x000000);
-        this.coastMat.opacity = darkBg ? 0.70 : 0.88;
+        // Each vertex takes the ink for the shading beneath it (inkAt); before
+        // the first paint, the colormap-wide fallback.
+        const fallback = meanLuminance(cmap) < 0.45 ? 0 : 1;
+        const dark = new THREE.Color(INK_DARK), light = new THREE.Color(INK_LIGHT);
+        for (const line of this.coastGroup.children) {
+            const g = line.geometry, ll = g.userData.ll, col = g.attributes.color;
+            if (!ll || !col) continue;
+            const a = col.array;
+            for (let k = 0, n = ll.length / 2; k < n; k++) {
+                let w = this.inkAt(ll[2 * k], ll[2 * k + 1]);
+                if (w == null) w = fallback;
+                a[3 * k]     = light.r + w * (dark.r - light.r);
+                a[3 * k + 1] = light.g + w * (dark.g - light.g);
+                a[3 * k + 2] = light.b + w * (dark.b - light.b);
+            }
+            col.needsUpdate = true;
+        }
+    }
+
+    // ── local overlay ink ────────────────────────────────────────────
+    // Relative luminance of every painted cell, refreshed on each repaint,
+    // so overlays can pick dark or light ink for the shading right under
+    // them (colormap.js#inkWeight). Coastlines and wind particles read it on
+    // the CPU; contours sample the colour texture in their shader.
+    _updateInkLum() {
+        const d = this.imageData.data, n = GRID.nlat * GRID.nlon;
+        if (!this.inkLum) this.inkLum = new Float32Array(n);
+        const L = this.inkLum, lin = SRGB_TO_LINEAR;
+        for (let i = 0, k = 0; i < n; i++, k += 4) {
+            L[i] = 0.2126 * lin[d[k]] + 0.7152 * lin[d[k + 1]] + 0.0722 * lin[d[k + 2]];
+        }
+    }
+
+    /** Ink weight (0 = light, 1 = dark) for the shading at (lat, lon);
+     *  null until the first field has been painted. Grid row 0 = +90°,
+     *  col 0 = −180°, 1° spacing. */
+    inkAt(lat, lon) {
+        const L = this.inkLum;
+        if (!L) return null;
+        const { nlat, nlon } = GRID;
+        const i = Math.min(nlat - 1, Math.max(0, Math.round(90 - lat)));
+        const j = ((Math.round(lon + 180) % nlon) + nlon) % nlon;
+        return inkWeight(L[i * nlon + j]);
     }
 
     // ── wind overlays (particles + barbs) ────────────────────────────
@@ -1429,7 +1485,7 @@ class GlobeApp {
         const getUV = (lat, lon) => this.sampleWind(lat, lon);
         const proj  = (lat, lon, r) => this.project(lat, lon, r);
 
-        this.particles = new ParticleField(getUV, proj);
+        this.particles = new ParticleField(getUV, proj, (lat, lon) => this.inkAt(lat, lon));
         this.barbs = new BarbField(getUV, proj);
 
         this.applyWindMode();
@@ -1902,15 +1958,13 @@ class GlobeApp {
 
     applyParticleContrast() {
         if (!this.particles) return;
-        // Ink a dark near-black on bright colormaps (turbo, wind, plasma end)
-        // and white on dark ones (viridis, magma). Threshold tuned so magma
-        // stays white and turbo flips to dark. In eddy/anomaly modes the
-        // effective cmap is forced to RdBu_r, so use that instead.
-        const darkInk = 0x0b1a14;
-        const lightInk = 0xffffff;
+        // Particles take their ink per particle from the shading under them
+        // (inkAt). This colormap-wide choice only covers the moments before
+        // the first field is painted. In eddy/anomaly modes the effective
+        // cmap is forced to RdBu_r, so use that instead.
         const sym = this.state.decompose === 'eddy' || this.state.decompose === 'anomaly';
         const cmap = sym ? 'RdBu_r' : this.state.cmap;
-        this.particles.setColor(meanLuminance(cmap) > 0.52 ? darkInk : lightInk);
+        this.particles.setFallbackInk(meanLuminance(cmap) > 0.52 ? 1 : 0);
     }
 
     applyWindMode() {
@@ -3381,6 +3435,7 @@ class GlobeApp {
             vmin: decomp.vmin, vmax: decomp.vmax, cmap: effCmapFinal,
         });
         this.ctx.putImageData(this.imageData, 0, 0);
+        this._updateInkLum();
         this.texture.needsUpdate = true;
         if (this.mapTexture) this.mapTexture.needsUpdate = true;
         if (this.earthTexture) this.earthTexture.needsUpdate = true;
@@ -4363,7 +4418,7 @@ class GlobeApp {
         const effCmap = f.effCmap || this.state.cmap;
         const darkBg = meanLuminance(effCmap) < 0.45;
         this.contours.setInk(darkBg ? 0xf4faf7 : 0x0a1712);
-        this.contours.setOpacity(darkBg ? 0.70 : 0.85);
+        this.contours.setOpacity(0.85);
         this.contours.setVisible(this.state.showContours);
 
         if (this.contourLabels) {
