@@ -228,20 +228,20 @@ export const FIELDS = {
     // ── Vertically integrated (column) fluxes. ERA5 integrates these on
     // model levels every hour, so their monthly means include the transient
     // eddies that the monthly-mean u, v, T, q tiles cannot carry.
-    vitoen: { type: 'sl', group: 'Column transports', name: 'Northward total-energy flux', units: '10⁹ W m⁻¹', cmap: 'RdBu_r', contour: 2,  symmetric: true, clamp: { lo: 0.005, hi: 0.995 }, note: VI_ENERGY_NOTE },
-    vitoee: { type: 'sl', group: 'Column transports', name: 'Eastward total-energy flux',  units: '10⁹ W m⁻¹', cmap: 'RdBu_r', contour: 5,  symmetric: true, clamp: { lo: 0.005, hi: 0.995 }, note: VI_ENERGY_NOTE },
-    vithen: { type: 'sl', group: 'Column transports', name: 'Northward enthalpy flux (c_pT·v)', units: '10⁹ W m⁻¹', cmap: 'RdBu_r', contour: 2, symmetric: true, clamp: { lo: 0.005, hi: 0.995 }, note: VI_ENERGY_NOTE },
-    vign:   { type: 'sl', group: 'Column transports', name: 'Northward geopotential flux (Φ·v)', units: '10⁹ W m⁻¹', cmap: 'RdBu_r', contour: 1, symmetric: true, clamp: { lo: 0.005, hi: 0.995 }, note: VI_ENERGY_NOTE },
-    viken:  { type: 'sl', group: 'Column transports', name: 'Northward kinetic-energy flux', units: '10⁹ W m⁻¹', cmap: 'RdBu_r', contour: 0.02, symmetric: true, clamp: { lo: 0.005, hi: 0.995 } },
-    viwvn:  { type: 'sl', group: 'Column transports', name: 'Northward water-vapour flux', units: 'kg m⁻¹ s⁻¹', cmap: 'RdBu_r', contour: 50,  symmetric: true },
-    viwve:  { type: 'sl', group: 'Column transports', name: 'Eastward water-vapour flux',  units: 'kg m⁻¹ s⁻¹', cmap: 'RdBu_r', contour: 100, symmetric: true },
-    ivt:    { type: 'sl', group: 'Column transports', name: 'Vapour transport |⟨Q⟩| (IVT)', units: 'kg m⁻¹ s⁻¹', cmap: 'thalo', contour: 50, derived: true, slDerived: true,
+    vitoen: { type: 'sl', group: 'Column energy transport', name: 'Northward total-energy flux', units: '10⁹ W m⁻¹', cmap: 'RdBu_r', contour: 2,  symmetric: true, clamp: { lo: 0.005, hi: 0.995 }, note: VI_ENERGY_NOTE },
+    vitoee: { type: 'sl', group: 'Column energy transport', name: 'Eastward total-energy flux',  units: '10⁹ W m⁻¹', cmap: 'RdBu_r', contour: 5,  symmetric: true, clamp: { lo: 0.005, hi: 0.995 }, note: VI_ENERGY_NOTE },
+    vithen: { type: 'sl', group: 'Column energy transport', name: 'Northward enthalpy flux (c_pT·v)', units: '10⁹ W m⁻¹', cmap: 'RdBu_r', contour: 2, symmetric: true, clamp: { lo: 0.005, hi: 0.995 }, note: VI_ENERGY_NOTE },
+    vign:   { type: 'sl', group: 'Column energy transport', name: 'Northward geopotential flux (Φ·v)', units: '10⁹ W m⁻¹', cmap: 'RdBu_r', contour: 1, symmetric: true, clamp: { lo: 0.005, hi: 0.995 }, note: VI_ENERGY_NOTE },
+    viken:  { type: 'sl', group: 'Column energy transport', name: 'Northward kinetic-energy flux', units: '10⁹ W m⁻¹', cmap: 'RdBu_r', contour: 0.02, symmetric: true, clamp: { lo: 0.005, hi: 0.995 } },
+    viwvn:  { type: 'sl', group: 'Column moisture & mass', name: 'Northward water-vapour flux', units: 'kg m⁻¹ s⁻¹', cmap: 'RdBu_r', contour: 50,  symmetric: true },
+    viwve:  { type: 'sl', group: 'Column moisture & mass', name: 'Eastward water-vapour flux',  units: 'kg m⁻¹ s⁻¹', cmap: 'RdBu_r', contour: 100, symmetric: true },
+    ivt:    { type: 'sl', group: 'Column moisture & mass', name: 'Vapour transport |⟨Q⟩| (IVT)', units: 'kg m⁻¹ s⁻¹', cmap: 'thalo', contour: 50, derived: true, slDerived: true,
             note: 'Magnitude of the monthly-mean vapour-flux vector. It is smaller than the mean of the hourly IVT magnitudes that atmospheric-river thresholds (≈250 kg m⁻¹ s⁻¹) refer to.' },
-    viman:  { type: 'sl', group: 'Column transports', name: 'Northward column mass flux', units: '10³ kg m⁻¹ s⁻¹', cmap: 'RdBu_r', contour: 5,  symmetric: true, clamp: { lo: 0.005, hi: 0.995 } },
-    vimae:  { type: 'sl', group: 'Column transports', name: 'Eastward column mass flux',  units: '10³ kg m⁻¹ s⁻¹', cmap: 'RdBu_r', contour: 20, symmetric: true, clamp: { lo: 0.005, hi: 0.995 } },
-    viwvd:  { type: 'sl', group: 'Column transports', name: 'Vapour-flux divergence', units: 'mm day⁻¹', cmap: 'RdBu_r', contour: 2, symmetric: true, clamp: { lo: 0.02, hi: 0.98 },
+    viman:  { type: 'sl', group: 'Column moisture & mass', name: 'Northward column mass flux', units: '10³ kg m⁻¹ s⁻¹', cmap: 'RdBu_r', contour: 5,  symmetric: true, clamp: { lo: 0.005, hi: 0.995 } },
+    vimae:  { type: 'sl', group: 'Column moisture & mass', name: 'Eastward column mass flux',  units: '10³ kg m⁻¹ s⁻¹', cmap: 'RdBu_r', contour: 20, symmetric: true, clamp: { lo: 0.005, hi: 0.995 } },
+    viwvd:  { type: 'sl', group: 'Column moisture & mass', name: 'Vapour-flux divergence', units: 'mm day⁻¹', cmap: 'RdBu_r', contour: 2, symmetric: true, clamp: { lo: 0.02, hi: 0.98 },
             note: '∇·∫q v dp/g ≈ E − P − ∂TCWV/∂t: positive where the column exports moisture (subtropical oceans), negative where it converges (ITCZ, monsoons, storm tracks). Hourly fluxes, not mass-corrected — noisy over steep terrain.' },
-    vitoed: { type: 'sl', group: 'Column transports', name: 'Total-energy-flux divergence', units: 'W m⁻²', cmap: 'RdBu_r', contour: 25, symmetric: true, clamp: { lo: 0.02, hi: 0.98 },
+    vitoed: { type: 'sl', group: 'Column energy transport', name: 'Total-energy-flux divergence', units: 'W m⁻²', cmap: 'RdBu_r', contour: 25, symmetric: true, clamp: { lo: 0.02, hi: 0.98 },
             note: '∇·∫(c_pT + Φ + L_v q + k) v dp/g ≈ net TOA − net surface flux − storage. Hourly fluxes, not mass-corrected — noisy over steep terrain.' },
     // 10-m winds — surface-level u/v used by the particle/barb overlay when
     // a single-level field is displayed. Hidden from the field dropdown

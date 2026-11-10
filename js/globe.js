@@ -32,6 +32,8 @@ import { buildTransportView, transportSlots, transportTilesMissing, TRANSPORT_IN
 import { sourceFromState, sourceKey, sourceYears, sourceMonth, shiftSource, sourceWindow, sourceLevels } from './diag_source.js';
 import { ParcelField } from './parcels.js';
 import { GifExporter, downloadBlob } from './gif_export.js';
+import { FieldPicker } from './field_picker.js';
+import { FIELD_HINTS } from './field_hints.js';
 import { encodeStateToHash, decodeHashToPatch, writeHashDebounced } from './url_state.js';
 import { computeSeries as tsComputeSeries, renderSeries as tsRenderSeries, hoverLookup as tsHoverLookup, bboxLabel as tsBboxLabel, seriesToCSV as tsSeriesToCSV, MONTH_NAMES as TS_MONTH_NAMES } from './timeseries.js';
 import { CLIMO_WINDOWS, bestClimoFor, groupEventsByClimo } from './climo_windows.js';
@@ -4477,6 +4479,35 @@ class GlobeApp {
     // ── UI wiring ────────────────────────────────────────────────────
     bindUI() {
         const fieldSel = document.getElementById('field-select');
+        // Searchable pickers layered over the field and contour-overlay
+        // selects (field_picker.js). The selects stay the source of truth:
+        // _refreshFieldPickers fills them, change listeners below read them.
+        const describeField = (key) => {
+            const meta = FIELDS[key];
+            if (!meta) return null;
+            const h = FIELD_HINTS[key] || {};
+            return {
+                units: meta.units,
+                badge: meta.type === 'pl' ? '3-D' : '2-D',
+                levels: meta.thetaOnly ? 'isentropic levels'
+                      : meta.type === 'pl' ? 'pressure levels' : 'single level',
+                hint: h.hint || meta.note,
+                aka: h.aka,
+            };
+        };
+        this.fieldPicker = new FieldPicker(fieldSel, {
+            describe: describeField,
+            recentKey: 'gc-atlas.recent-fields',
+            placeholder: 'Search fields: jet, ω, IVT, cloud…',
+        });
+        const contourSelEl = document.getElementById('contour-field-select');
+        if (contourSelEl) {
+            this.contourPicker = new FieldPicker(contourSelEl, {
+                describe: describeField,
+                placeholder: 'Search overlay fields…',
+                small: true,
+            });
+        }
         // Field + contour-overlay pickers (and the transport panel option);
         // rebuilt as manifests land — see _refreshFieldPickers.
         this._refreshFieldPickers();
@@ -5700,6 +5731,10 @@ class GlobeApp {
                 case 'a': case 'A':
                     cycleDecompose();
                     break;
+                case 'f': case 'F':
+                    e.preventDefault();
+                    this.fieldPicker?.open();
+                    break;
                 case '?':
                     e.preventDefault();
                     this._toggleShortcutHelp();
@@ -5725,6 +5760,7 @@ class GlobeApp {
                         <tr><td><kbd>←</kbd> <kbd>→</kbd></td><td>Previous / next month</td></tr>
                         <tr><td><kbd>↑</kbd> <kbd>↓</kbd></td><td>Up / down a vertical level (altitude direction)</td></tr>
                         <tr><td><kbd>G</kbd> <kbd>M</kbd> <kbd>O</kbd></td><td>Globe / Map / Orbit view</td></tr>
+                        <tr><td><kbd>F</kbd></td><td>Find a field (search the field list)</td></tr>
                         <tr><td><kbd>C</kbd></td><td>Toggle contours</td></tr>
                         <tr><td><kbd>A</kbd></td><td>Cycle decomposition (total → anomaly → zonal → eddy)</td></tr>
                         <tr><td><kbd>?</kbd></td><td>Toggle this help</td></tr>

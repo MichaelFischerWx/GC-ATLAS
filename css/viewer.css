@@ -1538,3 +1538,154 @@ select optgroup option {
     .share-btn span { display: none; }
     .view-toggle button { min-width: 0; padding: 0 10px; }
 }
+
+/* ── Field picker (js/field_picker.js) ───────────────────────────────
+   A button that replaces the field / contour-overlay <select>s, and a
+   searchable popover appended to <body> (fixed-positioned, so it can
+   spill out of the sidebar over the stage). */
+select.fp-native { display: none; }
+
+.fp-trigger {
+    width: 100%;
+    height: var(--ctl-h);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 32px 0 12px;
+    font-family: inherit;
+    font-size: var(--fs-md);
+    color: var(--text);
+    text-align: left;
+    background-color: var(--surface-2);
+    background-image: var(--chevron);
+    background-repeat: no-repeat;
+    background-position: right 11px center;
+    border: 1px solid var(--line-2);
+    border-radius: var(--r-md);
+    cursor: pointer;
+    transition: border-color 0.15s, box-shadow 0.15s;
+}
+.fp-trigger:hover { border-color: var(--line-3); }
+.fp-trigger:focus-visible,
+.fp-trigger.is-open { outline: none; border-color: var(--accent-text); box-shadow: 0 0 0 3px var(--accent-ring); }
+.fp-trigger:disabled { cursor: not-allowed; color: var(--text-3); }
+.fp-trigger.fp-sm { height: 32px; font-size: var(--fs-sm); padding: 0 28px 0 10px; }
+.fp-trigger-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fp-trigger-units {
+    flex: 0 0 auto;
+    font-family: var(--font-mono);
+    font-size: var(--fs-2xs);
+    color: var(--text-3);
+}
+
+.fp-pop {
+    position: fixed;
+    z-index: 1000;
+    display: flex;
+    flex-direction: column;
+    background: var(--surface);
+    border: 1px solid var(--line-2);
+    border-radius: var(--r-lg);
+    box-shadow: 0 18px 48px rgba(0, 0, 0, 0.55);
+    overflow: hidden;
+}
+.fp-search {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--line);
+    color: var(--text-3);
+}
+.fp-input {
+    flex: 1;
+    min-width: 0;
+    height: 30px;
+    padding: 0;
+    font-family: inherit;
+    font-size: var(--fs-base);
+    color: var(--text);
+    background: transparent;
+    border: none;
+    outline: none;
+}
+.fp-input::placeholder { color: var(--text-3); }
+.fp-esc {
+    font-family: var(--font-mono);
+    font-size: var(--fs-2xs);
+    color: var(--text-3);
+    border: 1px solid var(--line-2);
+    border-radius: var(--r-sm);
+    padding: 1px 5px;
+}
+
+.fp-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 6px 6px 8px;
+    scrollbar-width: thin;
+    scrollbar-color: var(--line-2) transparent;
+}
+.fp-cols { column-count: 2; column-gap: 6px; }
+.fp-narrow .fp-cols { column-count: 1; }
+.fp-group { break-inside: avoid; padding-bottom: 6px; }
+.fp-group-head {
+    padding: 8px 8px 4px;
+    font-size: var(--fs-2xs);
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-3);
+}
+.fp-loose { padding-bottom: 4px; margin-bottom: 4px; border-bottom: 1px solid var(--line); }
+.fp-recent { padding-bottom: 6px; margin-bottom: 4px; border-bottom: 1px solid var(--line); }
+.fp-chips { display: flex; flex-wrap: wrap; gap: 4px; padding: 0 4px; }
+.fp-chips .fp-item {
+    border: 1px solid var(--line-2);
+    border-radius: 999px;
+    padding: 3px 10px;
+}
+.fp-chips .fp-badge { display: none; }
+
+.fp-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 8px;
+    font-size: var(--fs-sm);
+    color: var(--text-2);
+    border-radius: var(--r-sm);
+    cursor: pointer;
+    user-select: none;
+}
+.fp-item.is-active { background: var(--surface-3); color: var(--text); }
+.fp-item.is-current { color: var(--accent-text); }
+.fp-item.is-current .fp-name::before { content: '● '; font-size: 0.7em; vertical-align: 1px; }
+.fp-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fp-chips .fp-name { flex: 0 1 auto; }
+.fp-group-tag { flex: 0 0 auto; font-size: var(--fs-2xs); color: var(--text-3); }
+.fp-badge {
+    flex: 0 0 auto;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    line-height: 1;
+    color: var(--text-3);
+    border: 1px solid var(--line-2);
+    border-radius: 4px;
+    padding: 2px 4px;
+}
+.fp-empty { padding: 18px 10px; font-size: var(--fs-sm); color: var(--text-3); }
+
+.fp-foot {
+    flex: 0 0 auto;
+    min-height: 54px;
+    padding: 8px 14px 10px;
+    border-top: 1px solid var(--line);
+    background: var(--surface-2);
+    font-size: var(--fs-sm);
+}
+.fp-foot-name { font-weight: 600; color: var(--text); margin-right: 8px; }
+.fp-foot-meta { font-family: var(--font-mono); font-size: var(--fs-2xs); color: var(--value); }
+.fp-foot-hint { margin-top: 2px; color: var(--text-2); }
