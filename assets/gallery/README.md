@@ -11,8 +11,12 @@ tile upgrades automatically.
    href from `index.html`).
 2. Let the data load. Optional: adjust the view a little (camera angle,
    month-within-season) if you want a more flattering framing.
-3. Capture the globe/map area — **macOS:** Cmd-Shift-4, then drag over
-   the canvas. Target ~1000-1600 px wide, 10:6.3 aspect.
+3. Capture with the app's own exporter (**Save view → Still image**, or
+   **Cross-section** for the ψ tile) so the caption ribbon and
+   attribution come with it. Tiles are 16:10 with `object-fit: cover`:
+   pad the capture top/bottom with the export background `#0a1a18` to
+   exactly 16:10 (don't crop — the caption sits at the left edge), then
+   resize to 1600×1000. The November 2026 set was made this way.
 4. Save as `<slug>.jpg` at ~80% quality into this directory. Slugs:
 
    | Slug                   | View                        |

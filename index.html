@@ -192,7 +192,7 @@
             </a>
 
             <!-- 5. Dynamic tropopause — PV on 330K -->
-            <a class="view-tile" href="globe.html#v=g&f=pv&vc=t&th=330&m=1"
+            <a class="view-tile" href="globe.html#v=g&f=pv&vc=t&th=330&m=1&cm=magma&cbmin=0&cbmax=8"
                style="--tile-a:#0E8C6E; --tile-b:#A98AC7">
                 <div class="view-thumb">
                     <img src="assets/gallery/pv-330k.jpg" alt=""
@@ -207,7 +207,7 @@
             </a>
 
             <!-- 6. Warming since 1961 -->
-            <a class="view-tile" href="globe.html#v=m&f=t2m&m=11&rp=1961-1990&d=anomaly"
+            <a class="view-tile" href="globe.html#v=m&f=t2m&m=11&rp=1961-1990&d=anomaly&cbmin=-3&cbmax=3"
                style="--tile-a:#0C2420; --tile-b:#A26A45">
                 <div class="view-thumb">
                     <img src="assets/gallery/warming-1961.jpg" alt=""
@@ -222,7 +222,7 @@
             </a>
 
             <!-- 7. El Niño January — RONI composite SST -->
-            <a class="view-tile" href="globe.html#v=m&f=sst&m=1&cr=c:roni:ge:1.0:1&d=anomaly"
+            <a class="view-tile" href="globe.html#v=m&f=sst&m=1&cr=c:roni:ge:1.0:1&d=anomaly&mc=-160"
                style="--tile-a:#123524; --tile-b:#A26A45">
                 <div class="view-thumb">
                     <img src="assets/gallery/elnino-roni.jpg" alt=""
@@ -236,21 +236,22 @@
                 </div>
             </a>
 
-            <!-- 8. Walker circulation — annual-cycle χ GIF (Pacific-centered map).
-                 mc= shifts the map's central meridian to ~150°W so the
-                 Indo-Pacific warm pool / cold-tongue dipole sits in the
-                 middle of the frame instead of being split across the
-                 seam. Same framing the GIF was captured with. -->
-            <a class="view-tile" href="globe.html#v=m&f=chi&L=200&m=12&cm=RdBu_r&mc=-149.55567535285138"
+            <!-- 8. Walker circulation — annual-cycle GIF: precipitation shaded,
+                 200 hPa χ contoured (cof=chi; the overlay is drawn at L=200).
+                 mc= puts the central meridian at 150°W so the Indo-Pacific
+                 warm pool / cold-tongue dipole sits mid-frame instead of
+                 being split across the seam. Same framing the GIF was
+                 captured with. -->
+            <a class="view-tile" href="globe.html#v=m&f=tp&L=200&m=12&cm=thalo&cbmin=0&cbmax=15&ctr=1&cof=chi&mc=-150"
                style="--tile-a:#0C2420; --tile-b:#E8C26A">
                 <div class="view-thumb">
                     <img src="assets/gallery/walker-chi.gif" alt=""
                          loading="lazy" onerror="this.style.display='none'">
                 </div>
                 <div class="view-meta">
-                    <div class="view-kicker">Annual cycle · 200 hPa χ</div>
+                    <div class="view-kicker">Annual cycle · precipitation + 200 hPa χ</div>
                     <div class="view-title">The Walker circulation</div>
-                    <div class="view-caption">200 hPa velocity potential χ through the year, Pacific-centered. Divergence (blue) anchors over the warm pool and migrates with the ITCZ; convergence (red) locks over the eastern-Pacific cold tongue and the African/Atlantic subsidence lobes.</div>
+                    <div class="view-caption">Precipitation with 200 hPa velocity potential χ contoured, Pacific-centered. The χ minimum (upper-level divergence) sits on the warm-pool rain and follows the monsoons through the year; χ maxima (convergence aloft) lock over the dry eastern Pacific and Atlantic.</div>
                     <div class="view-cta">Open this view <span>→</span></div>
                 </div>
             </a>
