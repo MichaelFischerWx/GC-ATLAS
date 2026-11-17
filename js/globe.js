@@ -19,7 +19,7 @@ import { SunLight } from './sun.js';
 import { OrbitScene, ORBIT_RADIUS } from './orbit.js';
 import { computeZonalMean, computeArcCrossSection, renderCrossSection, samplePanel, sampleSeries, niceTicks, cropSectionTop } from './cross_section.js';
 import { greatCircleArc, linearLatLonArc, latLonToVec3, gcDistanceKm, greatCircleMidpoint, linearLatLonMidpoint, threePointArc } from './arc.js';
-import { loadManifest, onFieldLoaded, onTileProgress, isReady as era5Ready, prefetchField, cachedMonth, registerClamps, setActivePeriod, getActivePeriod, getManifest, perYearHasMonth, latestPerYearMonth, activePeriodLabel, windowMonths, windowSlots, windowYearsLabel } from './era5.js';
+import { loadManifest, onFieldLoaded, onTileProgress, isReady as era5Ready, prefetchField, setPriorityMonths, cachedMonth, registerClamps, setActivePeriod, getActivePeriod, getManifest, perYearHasMonth, latestPerYearMonth, activePeriodLabel, windowMonths, windowSlots, windowYearsLabel } from './era5.js';
 import { decompose, annualMeanFrom, aggregatedDecompositionRange } from './decompose.js';
 import { HoverProbe } from './hover.js';
 import { computeMassStreamfunction, computeAngularMomentum, computeBruntVaisala, computeGeostrophicWind, N2_INGREDIENTS } from './diagnostics.js';
@@ -51,6 +51,8 @@ const ANNUAL_TILE_BUDGET = 1500;
 // Lakes, Caspian, Victoria, Baikal, Aral, …) draw alongside coastlines
 // using the same shared material — a single Coastlines toggle controls
 // both.
+// The files are slimmed (geometry only, 0.01° coordinates) by
+// pipeline/slim_coastlines.py — rerun it on a fresh Natural Earth export.
 const COASTLINE_BASE = 'assets/coastlines';
 const COASTLINE_URL = `${COASTLINE_BASE}/ne_50m_coastline.geojson`;
 const LAKES_URL     = `${COASTLINE_BASE}/ne_50m_lakes.geojson`;
@@ -222,6 +224,8 @@ class GlobeApp {
         delete urlPatch.viewMode;
         if (Object.keys(urlPatch).length) Object.assign(this.state, urlPatch);
 
+        // Tiles for the month(s) on screen load before the rest of the year.
+        setPriorityMonths(() => this._diagMonths());
         this.initScene();
         this.initGlobe();
         this.initGraticule();
@@ -1405,6 +1409,10 @@ class GlobeApp {
         const R = 1.005;
         const seamJump = MAP_W / 2;  // flag if consecutive x-coords wrap the map
         const isMap = this.state.viewMode === 'map';
+        // Every ring goes into ONE indexed LineSegments object — a single
+        // draw call. (One THREE.Line per ring was ~1,600 draw calls a frame.)
+        const strips = [];
+        let nVerts = 0, nSegs = 0;
         for (const ring of this.coastFeatures) {
             const pts = ring.map(([lon, lat]) => {
                 const p = this.project(lat, lon, R);
@@ -1412,19 +1420,36 @@ class GlobeApp {
                 return p;
             });
             // In map mode the central-meridian shift can split continents across
-            // the seam; drop adjacent points whose x jumps by more than half the
-            // map width into separate Line objects so we don't draw a spurious
-            // stroke across the whole globe.
+            // the seam; break the strip wherever consecutive x-coords jump by
+            // more than half the map width so we don't draw a spurious stroke
+            // across the whole globe.
             const segments = isMap ? splitAtSeam(pts, seamJump) : [pts];
             for (const seg of segments) {
                 if (seg.length < 2) continue;
-                const geom = new THREE.BufferGeometry().setFromPoints(seg);
-                const ll = new Float32Array(seg.length * 2);
-                seg.forEach((p, k) => { ll[2 * k] = p.lat; ll[2 * k + 1] = p.lon; });
-                geom.userData.ll = ll;
-                geom.setAttribute('color', new THREE.BufferAttribute(new Float32Array(seg.length * 3), 3));
-                this.coastGroup.add(new THREE.Line(geom, this.coastMat));
+                strips.push(seg);
+                nVerts += seg.length;
+                nSegs += seg.length - 1;
             }
+        }
+        if (nVerts) {
+            const pos = new Float32Array(nVerts * 3);
+            const ll = new Float32Array(nVerts * 2);
+            const index = new Uint32Array(nSegs * 2);
+            let v = 0, e = 0;
+            for (const seg of strips) {
+                for (let k = 0; k < seg.length; k++, v++) {
+                    const p = seg[k];
+                    pos[3 * v] = p.x; pos[3 * v + 1] = p.y; pos[3 * v + 2] = p.z;
+                    ll[2 * v] = p.lat; ll[2 * v + 1] = p.lon;
+                    if (k > 0) { index[e++] = v - 1; index[e++] = v; }
+                }
+            }
+            const geom = new THREE.BufferGeometry();
+            geom.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+            geom.setAttribute('color', new THREE.BufferAttribute(new Float32Array(nVerts * 3), 3));
+            geom.setIndex(new THREE.BufferAttribute(index, 1));
+            geom.userData.ll = ll;
+            this.coastGroup.add(new THREE.LineSegments(geom, this.coastMat));
         }
         this.currentGroup().add(this.coastGroup);
         this.coastGroup.visible = this.state.showCoastlines;

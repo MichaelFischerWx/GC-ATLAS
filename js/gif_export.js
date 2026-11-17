@@ -12,7 +12,20 @@
 //
 // Output is a Blob the caller downloads as a .gif.
 
-import { GIFEncoder, quantize, applyPalette } from 'https://unpkg.com/gifenc@1.0.3/dist/gifenc.esm.js';
+// Fetched on the first GIF capture rather than with the page: stills and
+// ordinary browsing never need the encoder, and the viewer shouldn't depend
+// on a second CDN request to start.
+const GIFENC_URL = 'https://unpkg.com/gifenc@1.0.3/dist/gifenc.esm.js';
+let gifencLoad = null;
+function loadGifenc() {
+    if (!gifencLoad) {
+        gifencLoad = import(GIFENC_URL).catch((err) => {
+            gifencLoad = null;   // let the next capture retry
+            throw err;
+        });
+    }
+    return gifencLoad;
+}
 import { FIELDS } from './data.js';
 import { windowYearsLabel } from './era5.js';
 
@@ -248,6 +261,7 @@ export class GifExporter {
 
     /** Capture mode = 'animated': N frames at `fps` over `durationMs`. */
     async captureAnimated({ durationMs = 5000, fps = DEFAULT_FPS, onProgress } = {}) {
+        await loadGifenc();   // fail before capturing, not after
         const nFrames = Math.max(2, Math.round(durationMs * fps / 1000));
         const perFrameMs = 1000 / fps;
         const imgs = [];
@@ -265,6 +279,7 @@ export class GifExporter {
      *  exposing more of the right-half (reference period / year) as it
      *  advances. Restores the original split at the end. */
     async captureSwipeSweep({ frameDelayMs = 120, nFrames = 36, onProgress } = {}) {
+        await loadGifenc();   // fail before capturing, not after
         const app = this.app;
         if (!app.state.compareMode || app.state.viewMode !== 'map') {
             throw new Error('Compare swipe sweep requires Map view with Compare enabled.');
@@ -303,6 +318,7 @@ export class GifExporter {
     /** Capture mode = 'annual': step months 1..12 and capture one frame per
      *  month. Waits up to 3 s per month for tiles to finish loading. */
     async captureAnnual({ frameDelayMs = 220, onProgress } = {}) {
+        await loadGifenc();   // fail before capturing, not after
         const priorMonth = this.app.state.month;
         const priorAnnual = !!this.app.state.annual;   // stepping months leaves it
         const imgs = [];
@@ -335,7 +351,8 @@ export class GifExporter {
      *  frames. One global palette keeps colors identical across the
      *  whole loop. Costs: a few hundred ms extra encode time and one
      *  combined buffer allocation (~50 MB for a 36-frame swipe). */
-    _encode(imgs, frameDelayMs) {
+    async _encode(imgs, frameDelayMs) {
+        const { GIFEncoder, quantize, applyPalette } = await loadGifenc();
         const gif = GIFEncoder();
         // Build a single concatenated RGBA sample to quantize from.
         // For a 36-frame × 900 × 400 × 4 sweep this is ~52 MB; modern

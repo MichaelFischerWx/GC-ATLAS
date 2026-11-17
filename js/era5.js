@@ -49,6 +49,58 @@ export function onTileProgress(fn) {
     return () => progressSubscribers.delete(fn);
 }
 
+// Fetch ordering. A view change asks for its whole year of tiles at once
+// (for the pooled colorbar and month scrubbing), but only the displayed
+// month(s) are needed for the first paint — and with every tile in flight
+// together those shared the connection with the other eleven. So tiles for
+// months off screen wait in `backlog` until no displayed-month tile is in
+// flight. Nothing is dropped: every prefetch still happens, one round later.
+const backlog = new Map();      // cache key → fetchTile args, in request order
+let urgentInFlight = 0;
+let pumpScheduled = false;
+let priorityMonths = null;      // () => months on screen, or null (no deferral)
+/** Tell the loader which months are on screen: `fn()` returns them. */
+export function setPriorityMonths(fn) { priorityMonths = fn; }
+function isPriorityMonth(month) {
+    if (!priorityMonths) return true;
+    const months = priorityMonths();
+    return !months || months.includes(month);
+}
+function startTile(args, urgent, counted = false) {
+    if (!urgent) { fetchTile(...args, counted); return; }
+    urgentInFlight += 1;
+    fetchTile(...args, counted).finally(() => {
+        urgentInFlight -= 1;
+        schedulePump();
+    });
+}
+function pumpBacklog() {
+    pumpScheduled = false;
+    if (!backlog.size) return;
+    // The displayed month may have changed since these were queued.
+    for (const [key, args] of [...backlog]) {
+        if (isPriorityMonth(args[3])) { backlog.delete(key); startTile(args, true, true); }
+    }
+    if (urgentInFlight > 0) return;
+    for (const args of backlog.values()) startTile(args, false, true);
+    backlog.clear();
+}
+// Deferred a tick so a burst of requests is seen whole before the backlog
+// moves (a prefetch walks Jan → Dec; the displayed month can come last).
+function schedulePump() {
+    if (pumpScheduled || !backlog.size) return;
+    pumpScheduled = true;
+    setTimeout(pumpBacklog, 0);
+}
+function enqueueTile(key, args) {
+    backlog.set(key, args);
+    if (tilesPending === 0) tilesInBatch = 0;
+    tilesPending += 1;
+    tilesInBatch += 1;
+    notifyProgress();
+    schedulePump();
+}
+
 // Back-compat: many callers still reference `manifest` as the default tree.
 // Keep a getter that returns the default-period manifest.
 let manifest = null;
@@ -342,7 +394,12 @@ export function requestField(name, { month, level, kind = 'mean', period = 'defa
             year,
         };
     }
-    if (!hit) fetchTile(name, r.group, r.meta, month, useLevel, kind, eff, year);
+    if (!hit) {
+        // On screen now: fetch at once, ahead of (or out of) the backlog.
+        const counted = backlog.delete(key);
+        startTile([name, r.group, r.meta, month, useLevel, kind, eff, year], true, counted);
+    }
+    schedulePump();
     return null;
 }
 
@@ -372,15 +429,18 @@ function ensureTileMeta(group, name, meta, period) {
     return tileMetaLoads.get(key);
 }
 
-async function fetchTile(name, group, meta, month, level, kind = 'mean', period = 'default', year = null) {
+async function fetchTile(name, group, meta, month, level, kind = 'mean', period = 'default', year = null, counted = false) {
     const key = keyOf(name, month, level, kind, period, year);
     cache.set(key, 'pending');
     const url = tilePathFor(meta, group, name, level, month, kind, period, year);
     // Progress: reset the batch total if we were idle, otherwise add to it.
-    if (tilesPending === 0) tilesInBatch = 0;
-    tilesPending += 1;
-    tilesInBatch += 1;
-    notifyProgress();
+    // (A tile that waited in the backlog was counted when it was queued.)
+    if (!counted) {
+        if (tilesPending === 0) tilesInBatch = 0;
+        tilesPending += 1;
+        tilesInBatch += 1;
+        notifyProgress();
+    }
     try {
         // Start the per-tile metadata load (a no-op with a fat manifest)
         // alongside the tile itself.
@@ -498,7 +558,9 @@ function aggregateStats(name, level, kind = 'mean', period = 'default', year = n
     return any ? { vmin, vmax } : null;
 }
 
-/** Kick off fetches for many months in parallel (for the "play" seasonal cycle). */
+/** Fetch many months of a field (pooled colorbar, month scrubbing, the "play"
+ *  seasonal cycle). Months on screen load at once; the rest follow from the
+ *  backlog once those have landed. */
 export function prefetchField(name, { level = null, months = [1,2,3,4,5,6,7,8,9,10,11,12], kind = 'mean', period = 'default', year = null } = {}) {
     const eff = resolvePeriod(period);
     const r = resolveField(name, eff);
@@ -512,7 +574,10 @@ export function prefetchField(name, { level = null, months = [1,2,3,4,5,6,7,8,9,
     for (const m of months) {
         if (eff === 'per_year' && year != null && !perYearHasMonth(year, m, name)) continue;
         const key = keyOf(name, m, useLevel, kind, eff, year);
-        if (!cache.has(key)) fetchTile(name, r.group, r.meta, m, useLevel, kind, eff, year);
+        if (cache.has(key) || backlog.has(key)) continue;
+        const args = [name, r.group, r.meta, m, useLevel, kind, eff, year];
+        if (isPriorityMonth(m)) startTile(args, true);
+        else enqueueTile(key, args);
     }
 }
 
